@@ -1,0 +1,157 @@
+from __future__ import annotations
+
+from unittest.mock import AsyncMock, MagicMock, patch
+
+import pytest
+
+from code_scalpel.llm.adapter import ChatResponse, LLMAdapter, OpenAICompatibleAdapter
+from tests.mocks import MockLLMAdapter
+
+
+def test_mock_satisfies_protocol() -> None:
+    mock = MockLLMAdapter()
+    assert isinstance(mock, LLMAdapter)
+
+
+@pytest.mark.asyncio
+async def test_mock_chat_basic() -> None:
+    mock = MockLLMAdapter(["Hello world"])
+    resp = await mock.chat([{"role": "user", "content": "hi"}])
+    assert isinstance(resp, ChatResponse)
+    assert resp.content == "Hello world"
+    assert len(mock.calls) == 1
+
+
+@pytest.mark.asyncio
+async def test_mock_stream_yields_chars() -> None:
+    mock = MockLLMAdapter(["abc"])
+    chunks = []
+    async for chunk in mock.stream([{"role": "user", "content": "hi"}]):
+        chunks.append(chunk)
+    assert chunks == ["a", "b", "c"]
+
+
+@pytest.mark.asyncio
+async def test_mock_multiple_responses_cycle() -> None:
+    mock = MockLLMAdapter(["first", "second"])
+    r1 = await mock.chat([{"role": "user", "content": "1"}])
+    r2 = await mock.chat([{"role": "user", "content": "2"}])
+    r3 = await mock.chat([{"role": "user", "content": "3"}])
+    assert r1.content == "first"
+    assert r2.content == "second"
+    assert r3.content == "second"  # clamps at last
+
+
+def test_chat_response_frozen() -> None:
+    resp = ChatResponse(content="x", prompt_tokens=1, completion_tokens=2, cost=None)
+    with pytest.raises(AttributeError):
+        resp.content = "y"  # type: ignore[misc]
+
+
+@pytest.mark.asyncio
+async def test_openai_adapter_chat() -> None:
+    mock_usage = MagicMock()
+    mock_usage.prompt_tokens = 10
+    mock_usage.completion_tokens = 5
+    mock_usage.cost = None
+
+    mock_message = MagicMock()
+    mock_message.content = "Test response"
+
+    mock_choice = MagicMock()
+    mock_choice.message = mock_message
+
+    mock_completion = MagicMock()
+    mock_completion.choices = [mock_choice]
+    mock_completion.usage = mock_usage
+
+    with patch("code_scalpel.llm.adapter.AsyncOpenAI") as mock_cls:
+        mock_client = MagicMock()
+        mock_client.chat.completions.create = AsyncMock(return_value=mock_completion)
+        mock_cls.return_value = mock_client
+
+        adapter = OpenAICompatibleAdapter(
+            base_url="http://localhost:1234/v1",
+            api_key="lm-studio",
+            model="qwen2.5-coder-14b-instruct",
+        )
+        resp = await adapter.chat([{"role": "user", "content": "hello"}])
+
+    assert resp.content == "Test response"
+    assert resp.prompt_tokens == 10
+    assert resp.completion_tokens == 5
+    assert resp.cost is None
+
+
+@pytest.mark.asyncio
+async def test_openai_adapter_stream() -> None:
+    def make_chunk(content: str | None) -> MagicMock:
+        chunk = MagicMock()
+        chunk.choices = [MagicMock()]
+        chunk.choices[0].delta.content = content
+        return chunk
+
+    raw_chunks = [make_chunk("He"), make_chunk("llo"), make_chunk(None)]
+
+    async def fake_aiter(*args: object, **kwargs: object) -> object:
+        return _AsyncIter(raw_chunks)
+
+    class _AsyncIter:
+        def __init__(self, items: list[MagicMock]) -> None:
+            self._items = iter(items)
+
+        def __aiter__(self) -> _AsyncIter:
+            return self
+
+        async def __anext__(self) -> MagicMock:
+            try:
+                return next(self._items)
+            except StopIteration as exc:
+                raise StopAsyncIteration from exc
+
+    with patch("code_scalpel.llm.adapter.AsyncOpenAI") as mock_cls:
+        mock_client = MagicMock()
+        mock_client.chat.completions.create = AsyncMock(return_value=_AsyncIter(raw_chunks))
+        mock_cls.return_value = mock_client
+
+        adapter = OpenAICompatibleAdapter(
+            base_url="http://localhost:1234/v1",
+            api_key="lm-studio",
+            model="qwen2.5-coder-14b-instruct",
+        )
+        result = []
+        async for text in adapter.stream([{"role": "user", "content": "hi"}]):
+            result.append(text)
+
+    assert result == ["He", "llo"]
+
+
+@pytest.mark.asyncio
+async def test_openai_adapter_cost_per_1k() -> None:
+    mock_usage = MagicMock()
+    mock_usage.prompt_tokens = 1000
+    mock_usage.completion_tokens = 500
+    mock_usage.cost = None
+
+    mock_message = MagicMock()
+    mock_message.content = "x"
+    mock_choice = MagicMock()
+    mock_choice.message = mock_message
+    mock_completion = MagicMock()
+    mock_completion.choices = [mock_choice]
+    mock_completion.usage = mock_usage
+
+    with patch("code_scalpel.llm.adapter.AsyncOpenAI") as mock_cls:
+        mock_client = MagicMock()
+        mock_client.chat.completions.create = AsyncMock(return_value=mock_completion)
+        mock_cls.return_value = mock_client
+
+        adapter = OpenAICompatibleAdapter(
+            base_url="http://localhost:1234/v1",
+            api_key="lm-studio",
+            model="qwen",
+            cost_per_1k={"input": 0.1, "output": 0.2},
+        )
+        resp = await adapter.chat([{"role": "user", "content": "hi"}])
+
+    assert resp.cost == pytest.approx(0.1 * 1 + 0.2 * 0.5)
