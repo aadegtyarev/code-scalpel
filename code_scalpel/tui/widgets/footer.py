@@ -12,8 +12,8 @@ class StatusFooter(Widget):
     DEFAULT_CSS = """
     StatusFooter {
         height: 1;
-        background: $bg-panel;
-        color: $fg-dim;
+        background: #1c1c1c;
+        color: #585858;
         padding: 0 1;
     }
     """

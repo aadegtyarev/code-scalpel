@@ -10,10 +10,10 @@ class OutputLog(RichLog):
     OutputLog {
         width: 1fr;
         height: 1fr;
-        background: $bg;
+        background: #0f0f0f;
         border: none;
-        scrollbar-color: $fg-muted;
-        scrollbar-background: $bg;
+        scrollbar-color: #3a3a3a;
+        scrollbar-background: #0f0f0f;
         padding: 0 1;
     }
     """

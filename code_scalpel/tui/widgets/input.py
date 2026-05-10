@@ -20,9 +20,9 @@ class ModeInput(Widget):
     ModeInput {
         height: auto;
         min-height: 3;
-        background: $bg-panel;
-        border-top: solid $border;
-        border-bottom: solid $border;
+        background: #1c1c1c;
+        border-top: solid #2a2a2a;
+        border-bottom: solid #2a2a2a;
         padding: 0 1;
     }
     """
