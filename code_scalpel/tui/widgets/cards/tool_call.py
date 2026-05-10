@@ -20,9 +20,9 @@ def _colorize_diff(diff: str) -> str:
         if line.startswith("+++") or line.startswith("---"):
             lines.append(f"[dim]{line}[/dim]")
         elif line.startswith("+"):
-            lines.append(f"[#9fc99f]{line}[/#9fc99f]")
+            lines.append(f"[#7fc090]{line}[/#7fc090]")
         elif line.startswith("-"):
-            lines.append(f"[#bf6060]{line}[/#bf6060]")
+            lines.append(f"[#d97b6c]{line}[/#d97b6c]")
         elif line.startswith("@@"):
             lines.append(f"[#3a3a3a]{line}[/#3a3a3a]")
         else:
@@ -115,7 +115,7 @@ class ToolCallCard(Widget):
             return f"[dim]{_RUNNING} {label}[/dim]"
         if state == "reviewing":
             return f"[bold #3d6b72]{_RUNNING} {label}[/bold #3d6b72]"
-        dot_color = "#bf6060" if self._error else "#7fb87f"
+        dot_color = "#d97b6c" if self._error else "#7fc090"
         return f"[{dot_color}]{_DONE}[/{dot_color}] {label}"
 
     def _body_markup(self) -> str:
@@ -124,17 +124,17 @@ class ToolCallCard(Widget):
             return ""
         if state == "reviewing":
             return _colorize_diff(self._diff)
-        prefix = "[#bf6060]└ Error:[/#bf6060]" if self._error else "[dim]└[/dim]"
+        prefix = "[#d97b6c]└ Error:[/#d97b6c]" if self._error else "[dim]└[/dim]"
         return f"{prefix} {self._summary}"
 
     def _hint_markup(self) -> str:
         if self._state == "reviewing":
             return (
-                "  [bold #7fb87f][[a]] apply[/bold #7fb87f]"
+                "  [bold #7fc090][[a]] apply[/bold #7fc090]"
                 " [#585858]·[/#585858] "
-                "[bold #bf6060][[r]] reject[/bold #bf6060]"
+                "[bold #d97b6c][[r]] reject[/bold #d97b6c]"
                 " [#585858]·[/#585858] "
-                "[bold #d4a070][[g]] regen[/bold #d4a070]"
+                "[bold #d4a050][[g]] regen[/bold #d4a050]"
             )
         return ""
 

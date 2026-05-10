@@ -54,7 +54,7 @@ class ScalpelApp(App[None]):
 
     BINDINGS = [
         Binding("ctrl+q", "quit", "Quit"),
-        Binding("tab", "cycle_mode", "Mode", show=False),
+        Binding("shift+tab", "cycle_mode", "Mode", show=False),
         Binding("escape", "cancel_step", "Cancel", show=False),
     ]
 
@@ -308,7 +308,7 @@ class ScalpelApp(App[None]):
     def _update_footer(self) -> None:
         footer = self.query_one(StatusFooter)
         limit = self.state.context_limit
-        footer.hints = r"\[tab] cycle mode · \[ctrl+q] quit"
+        footer.hints = r"\[shift+tab] cycle mode · \[ctrl+q] quit"
         footer.ctx = f"0k/{limit // 1000}k"
 
     def _update_ctx(self) -> None:
