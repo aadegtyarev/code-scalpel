@@ -49,6 +49,12 @@ class OutputLog(VerticalScroll):
         color: #bf6060;
         background: #0f0f0f;
     }
+    OutputLog Static.msg-stream {
+        height: auto;
+        margin: 1 0 0 0;
+        color: #808080;
+        background: #0f0f0f;
+    }
     OutputLog Markdown {
         height: auto;
         margin: 1 0 0 0;
@@ -75,6 +81,24 @@ class OutputLog(VerticalScroll):
         widget = Markdown(text)
         self.run_worker(self._append(widget), exclusive=False)
         return widget
+
+    def start_streaming(self) -> Static:
+        """A fast Static widget for stream-in-progress text. Use this during the
+        stream, then call finalize_streaming() to swap to a Markdown widget."""
+        s = Static("", classes="msg-stream", markup=False)
+        self.run_worker(self._append(s), exclusive=False)
+        return s
+
+    async def finalize_streaming(self, placeholder: Static, final_text: str) -> Markdown:
+        """Replace the live Static with a rendered Markdown widget."""
+        md = Markdown(final_text)
+        try:
+            await self.mount(md, after=placeholder)
+            await placeholder.remove()
+        except Exception:
+            pass
+        self.call_after_refresh(self.scroll_end, animate=False)
+        return md
 
     def print_status(self, text: str) -> None:
         self.run_worker(self._append(Static(text, classes="msg-status")), exclusive=False)

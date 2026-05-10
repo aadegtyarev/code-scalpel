@@ -3,10 +3,12 @@ from __future__ import annotations
 import asyncio
 from pathlib import Path
 
+from textual import events
 from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.geometry import Offset, Region, Spacing
-from textual.widgets import Markdown, Rule
+from textual.widget import Widget
+from textual.widgets import Rule
 from textual_autocomplete import AutoComplete, DropdownItem
 
 from code_scalpel.agent import StepAgent, TextDelta, ToolExecuted
@@ -145,10 +147,33 @@ class ScalpelApp(App[None]):
             )
         )
 
+    async def _do_compact(self) -> None:
+        output = self.query_one(OutputLog)
+        footer = self.query_one(StatusFooter)
+        assert self._agent is not None
+        footer.status = "◌ compacting…"
+        try:
+            summary = await self._agent.compact()
+        except Exception as e:
+            output.print_error(f"Compact failed: {e}")
+            footer.status = "● error"
+            return
+        if summary is None:
+            output.print_status("Nothing to compact.")
+        else:
+            output.print_status(f"● Compacted. Summary:\n{summary}")
+        footer.status = "● idle"
+
     def action_cancel_step(self) -> None:
         w = getattr(self, "_step_worker", None)
         if w is not None and not w.is_finished:
             w.cancel()
+
+    def on_key(self, event: events.Key) -> None:
+        """textual-autocomplete sometimes swallows Escape even when its
+        dropdown is hidden. Catch it at the App level as a fallback."""
+        if event.key == "escape":
+            self.action_cancel_step()
 
     def _handle_slash(self, cmd: str) -> None:
         output = self.query_one(OutputLog)
@@ -159,10 +184,18 @@ class ScalpelApp(App[None]):
             self.session = Session()
             AgentState.reset(self.cwd)
             self.state = AgentState.load(self.cwd)
+            if self._agent is not None:
+                self._agent.clear_history()
             self._update_ctx()
             return
         if cmd == "/compact":
-            output.print_status("● /compact: not implemented in v0.1.")
+            if self._agent is None:
+                output.print_error("No LLM configured.")
+                return
+            if not self._agent.history:
+                output.print_status("Nothing to compact yet.")
+                return
+            self.run_worker(self._do_compact(), exclusive=True, group="step")
             return
         if cmd == "/help":
             lines = "Commands:\n" + "\n".join(f"  {c}  — {d}" for c, d in _SLASH_COMMANDS)
@@ -184,9 +217,9 @@ class ScalpelApp(App[None]):
         footer = self.query_one(StatusFooter)
         assert self._agent is not None
 
-        md = output.print_assistant("")
+        placeholder = output.start_streaming()
         try:
-            await self._wait_mounted(md)
+            await self._wait_mounted(placeholder)
 
             full = ""
             chunks = 0
@@ -196,7 +229,7 @@ class ScalpelApp(App[None]):
                 if isinstance(item, TextDelta):
                     full += item.text
                     chunks += 1
-                    md.update(full)
+                    placeholder.update(full)
                     output.scroll_end(animate=False)
                     now = time.monotonic()
                     if now - last_tick > 0.25:
@@ -206,13 +239,15 @@ class ScalpelApp(App[None]):
                             footer.status = f"◌ streaming · {rate:.0f} tok/s"
                         last_tick = now
                 elif isinstance(item, ToolExecuted):
-                    # Hide the empty Markdown widget that wrapped the tool-call
-                    # text (model wrote <TOOL: ...> only) — replace with a card.
-                    await md.remove()
+                    placeholder.update(full)
+                    await output.finalize_streaming(placeholder, full)
                     output.add_tool_use(item.call, item.result)
                     full = ""
-                    md = output.print_assistant("")
-                    await self._wait_mounted(md)
+                    placeholder = output.start_streaming()
+                    await self._wait_mounted(placeholder)
+            # Final render: swap the streaming Static for a Markdown widget so
+            # code fences and lists render properly.
+            md = await output.finalize_streaming(placeholder, full)
 
             total_elapsed = time.monotonic() - start
             self._last_stream_rate = chunks / total_elapsed if total_elapsed > 0 else 0.0
@@ -247,7 +282,7 @@ class ScalpelApp(App[None]):
             output.print_error(f"Error: {e}")
             footer.status = "● error"
 
-    async def _wait_mounted(self, widget: Markdown) -> None:
+    async def _wait_mounted(self, widget: Widget) -> None:
         # widget.mount is dispatched via a worker in OutputLog._append.
         # Wait a short tick so update() doesn't race the mount.
         from asyncio import sleep

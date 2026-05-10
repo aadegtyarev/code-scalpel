@@ -181,14 +181,64 @@ async def test_stream_ask_yields_chunks(project: Path) -> None:
 
 @pytest.mark.asyncio
 async def test_stream_ask_builds_same_messages_as_ask(project: Path) -> None:
+    """Both code paths should construct identical initial messages for the
+    same task — history shouldn't sneak into one but not the other."""
     llm = MockLLMAdapter(["X", "X"])
     agent = StepAgent(llm=llm, cwd=project, config=_CONFIG)
 
     await agent.ask("first")
+    agent.clear_history()  # start fresh so stream_ask sees the same initial state
     async for _ in agent.stream_ask("first"):
         pass
 
     assert llm.calls[0] == llm.calls[1]
+
+
+@pytest.mark.asyncio
+async def test_history_carries_between_turns(project: Path) -> None:
+    """Second ask() sees the first exchange in messages."""
+    llm = MockLLMAdapter(["first reply", "second reply"])
+    agent = StepAgent(llm=llm, cwd=project, config=_CONFIG)
+
+    await agent.ask("first task")
+    await agent.ask("second task")
+
+    second_call = llm.calls[1]
+    contents = [m["content"] for m in second_call]
+    joined = "\n".join(contents)
+    assert "first task" in joined
+    assert "first reply" in joined
+
+
+@pytest.mark.asyncio
+async def test_clear_history_drops_past_turns(project: Path) -> None:
+    llm = MockLLMAdapter(["one", "two"])
+    agent = StepAgent(llm=llm, cwd=project, config=_CONFIG)
+
+    await agent.ask("first")
+    agent.clear_history()
+    await agent.ask("second")
+
+    second_call_contents = "\n".join(m["content"] for m in llm.calls[1])
+    assert "first" not in second_call_contents.replace("first task", "")  # nothing remains
+    assert "second" in second_call_contents
+
+
+@pytest.mark.asyncio
+async def test_compact_summarizes_and_replaces_history(project: Path) -> None:
+    llm = MockLLMAdapter(["reply A", "reply B", "- bullet point summary"])
+    agent = StepAgent(llm=llm, cwd=project, config=_CONFIG)
+
+    await agent.ask("first")
+    await agent.ask("second")
+    assert len(agent.history) == 4  # 2 user + 2 assistant
+
+    summary = await agent.compact()
+    assert summary is not None
+    assert "bullet point summary" in summary
+    # After compact, history has just the summary message
+    assert len(agent.history) == 1
+    assert "Summary of the earlier session" in agent.history[0]["content"]
 
 
 @pytest.mark.asyncio

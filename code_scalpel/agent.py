@@ -119,15 +119,29 @@ StreamItem = TextDelta | ToolExecuted
 
 
 class StepAgent:
-    """Multi-turn agent: model can call read_file, then produces SEARCH/REPLACE."""
+    """Multi-turn agent: model can call read_file, then produces SEARCH/REPLACE.
+
+    Keeps a `history` of (user_task, assistant_reply) pairs across turns so the
+    model can reference previous exchanges. Tool-call round-trips inside a single
+    ask() do NOT enter the history — they are internal to that turn.
+    """
 
     def __init__(self, llm: LLMAdapter, cwd: Path, config: AppConfig) -> None:
         self._llm = llm
         self._cwd = cwd
         self._config = config
+        self._history: list[dict[str, str]] = []
+
+    @property
+    def history(self) -> list[dict[str, str]]:
+        return list(self._history)
+
+    def clear_history(self) -> None:
+        self._history.clear()
 
     async def ask(self, task: str) -> StepResult:
-        messages = self._initial_messages(task)
+        user_msg = self._user_message(task)
+        messages = self._initial_messages(user_msg)
         profile = self._config.current_profile
 
         response: ChatResponse | None = None
@@ -138,6 +152,7 @@ class StepAgent:
             calls = parse_tool_calls(response.content)
             if not calls:
                 edits = extract_edits(response.content)
+                self._remember(user_msg, response.content)
                 return StepResult(reply=response.content, edits=edits, response=response)
 
             tool_msg = await self._run_tools(calls)
@@ -145,13 +160,50 @@ class StepAgent:
 
         assert response is not None
         edits = extract_edits(response.content)
+        self._remember(user_msg, response.content)
         return StepResult(reply=response.content, edits=edits, response=response)
+
+    def _remember(self, user_msg: str, assistant_msg: str) -> None:
+        self._history.append({"role": "user", "content": user_msg})
+        self._history.append({"role": "assistant", "content": assistant_msg})
+
+    async def compact(self) -> str | None:
+        """Summarize history into a short note and replace it. Returns summary
+        text, or None if history is empty."""
+        if not self._history:
+            return None
+        joined = "\n\n".join(
+            f"[{m['role']}]\n{m['content']}" for m in self._history
+        )
+        msgs = [
+            {
+                "role": "system",
+                "content": (
+                    "Summarize the following coding-assistant conversation in 5-10 short "
+                    "bullets. Focus on: what the user asked, what was decided, what files "
+                    "were touched. Do NOT add commentary. Output the bullets only."
+                ),
+            },
+            {"role": "user", "content": joined},
+        ]
+        profile = self._config.current_profile
+        response = await self._llm.chat(msgs, **profile.inference_kwargs())
+        summary = response.content.strip()
+        self._history = [
+            {
+                "role": "user",
+                "content": f"Summary of the earlier session:\n{summary}",
+            }
+        ]
+        return summary
 
     async def stream_ask(self, task: str) -> AsyncIterator[StreamItem]:
         """Yield typed events: TextDelta for model output chunks, ToolExecuted
         after each tool call resolves. The TUI dispatches per-type."""
-        messages = self._initial_messages(task)
+        user_msg = self._user_message(task)
+        messages = self._initial_messages(user_msg)
         profile = self._config.current_profile
+        final_assistant = ""
 
         for _ in range(_MAX_TOOL_ROUNDS):
             full = ""
@@ -162,7 +214,8 @@ class StepAgent:
 
             calls = parse_tool_calls(full)
             if not calls:
-                return
+                final_assistant = full
+                break
 
             results: list[ToolResult] = []
             for call in calls:
@@ -171,6 +224,9 @@ class StepAgent:
                 yield ToolExecuted(call, result)
             tool_msg = "\n\n".join(format_result(r) for r in results)
             messages.append({"role": "user", "content": tool_msg})
+            final_assistant = full
+
+        self._remember(user_msg, final_assistant)
 
     async def _run_tools(self, calls: list[ToolCall]) -> str:
         rendered: list[str] = []
@@ -179,14 +235,15 @@ class StepAgent:
             rendered.append(format_result(result))
         return "\n\n".join(rendered)
 
-    def _initial_messages(self, task: str) -> list[dict[str, str]]:
+    def _initial_messages(self, user_msg: str) -> list[dict[str, str]]:
         return [
             {"role": "system", "content": _SYSTEM_PROMPT},
             {"role": "user", "content": _FEW_SHOT_USER},
             {"role": "assistant", "content": _FEW_SHOT_ASSISTANT_1},
             {"role": "user", "content": _FEW_SHOT_USER_2},
             {"role": "assistant", "content": _FEW_SHOT_ASSISTANT_2},
-            {"role": "user", "content": self._user_message(task)},
+            *self._history,
+            {"role": "user", "content": user_msg},
         ]
 
     def _user_message(self, task: str) -> str:
