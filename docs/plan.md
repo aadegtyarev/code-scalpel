@@ -562,17 +562,23 @@ Input **никогда не блокируется** — можно набира
 
 ### 11.8. Plan — inline PlanCard
 
+Шаги отмечаются в реальном времени по мере выполнения — `[ ]` → `[✓]` прямо в карточке.
+Текущий шаг выделен цветом (`--accent`). Выполненные — dimmed.
+
 ```text
   ╭─ plan ──────────────────────────────────────╮   
-  │ [ ] T001 Add search_notes()                 │   
-  │ [ ] T002 Handle empty query                 │   
+  │ [✓] T001 Add search_notes()                 │   
+  │ [✓] T002 Handle empty query                 │   
   │ [ ] T003 Add tests                          │   
+  │ [ ] T004 Update README                      │   
   ╰─────────────────────────────────────────────╯   
 ──────────────────────────────────────────────────── 
  plan › _                                            
 ──────────────────────────────────────────────────── 
- [r] run selected · [a] run all · [e] edit · [esc] cancel
+ [r] run · [e] edit · [esc] back
 ```
+
+`[✓]` — зелёный, выполненные dimmed. Текущий шаг — строка подсвечена `--accent`. Три хоткея, не пять.
 
 ### 11.9. Tool calls — inline ToolCallCard
 
@@ -1583,8 +1589,8 @@ class Session:
 
 ```text
 TUI skeleton + цветовая схема (theme.tcss / styles.tcss)
-config loader (pydantic + YAML) + model profiles + автодетект context_tokens
-LLM adapter: chat() + stream()
+✓ config loader (pydantic + YAML) + model profiles + автодетект context_tokens
+✓ LLM adapter: chat() + stream()
 AsyncShellRunner + whitelist
 list_files, read_file (pathspec)
 ripgrep search
@@ -1594,7 +1600,7 @@ manual step: patch preview + apply
 run pytest
 STATE.json (атомарная запись + step_phase + dirty_patch)
 Session stats + context indicator (бар + %)
-tests/mocks.py + conftest.py
+✓ tests/mocks.py + conftest.py
 ```
 
 > UI язык: English only. i18n — см. v0.4.

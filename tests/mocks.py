@@ -4,6 +4,7 @@ from collections.abc import AsyncIterator
 from typing import Any
 
 from code_scalpel.llm.adapter import ChatResponse
+from code_scalpel.shell import ShellResult
 
 
 class MockLLMAdapter:
@@ -34,3 +35,18 @@ class MockLLMAdapter:
         content = self._next()
         for char in content:
             yield char
+
+
+class MockShellRunner:
+    """Deterministic shell runner for tests."""
+
+    def __init__(self, responses: list[ShellResult] | None = None) -> None:
+        self._responses = list(responses or [ShellResult("", 0)])
+        self._index = 0
+        self.calls: list[list[str]] = []
+
+    async def run(self, cmd: list[str], cwd: str | None = None, timeout: int = 30) -> ShellResult:
+        self.calls.append(cmd)
+        resp = self._responses[min(self._index, len(self._responses) - 1)]
+        self._index += 1
+        return resp
