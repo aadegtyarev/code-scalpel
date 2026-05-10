@@ -1634,6 +1634,7 @@ Q&A screen (design/plan mode) + [X] Compact
 compact (TUI-only, LAST_COMPACT.md)
 debug sub-mode (traceback → fix)
 resume screen + crash recovery UI
+! <cmd> в инпуте — выполнить bash-команду напрямую (без whitelist, вывод в поток)
 ```
 
 ### v0.3
