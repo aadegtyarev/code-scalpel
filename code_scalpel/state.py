@@ -20,7 +20,7 @@ class AgentState(BaseModel):
     dirty_patch: bool = False
     mode: str = "ask"
     profile: str = "local"
-    context_limit: int = 24000
+    context_limit: int = 16384
     max_files: int = 3
     max_file_lines: int = 400
     last_test_status: Literal["passed", "failed", "unknown"] = "unknown"

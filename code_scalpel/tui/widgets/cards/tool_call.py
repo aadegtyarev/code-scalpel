@@ -114,7 +114,7 @@ class ToolCallCard(Widget):
         if state == "running":
             return f"[dim]{_RUNNING} {label}[/dim]"
         if state == "reviewing":
-            return f"[bold #00d7ff]{_RUNNING} {label}[/bold #00d7ff]"
+            return f"[bold #3d6b72]{_RUNNING} {label}[/bold #3d6b72]"
         dot_color = "#ff5555" if self._error else "#00ff87"
         return f"[{dot_color}]{_DONE}[/{dot_color}] {label}"
 
@@ -129,7 +129,13 @@ class ToolCallCard(Widget):
 
     def _hint_markup(self) -> str:
         if self._state == "reviewing":
-            return "[dim]  [a] apply · [r] reject · [g] regen[/dim]"
+            return (
+                "  [bold #00ff87][[a]] apply[/bold #00ff87]"
+                " [#585858]·[/#585858] "
+                "[bold #ff5555][[r]] reject[/bold #ff5555]"
+                " [#585858]·[/#585858] "
+                "[bold #ffb86c][[g]] regen[/bold #ffb86c]"
+            )
         return ""
 
     def _refresh_all(self) -> None:

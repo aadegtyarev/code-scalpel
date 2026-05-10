@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import AsyncIterator
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -9,12 +10,12 @@ from code_scalpel.patch.parser import extract_patch
 from code_scalpel.tools.files import list_files, read_file
 
 _SYSTEM_PROMPT = """\
-You are a code editing assistant. Analyze the provided files and make the requested changes.
+You are a coding assistant.
 
-When modifying files, produce a unified diff inside a ```diff code block.
+When the task requires modifying files, output a unified diff in a ```diff block.
 Use standard git diff format: --- a/file and +++ b/file headers, @@ hunks.
 
-Output only the diff. No explanations, no prose around it."""
+For questions or conversation that require no file changes, respond with plain text — no diff."""
 
 
 @dataclass(frozen=True)
@@ -33,15 +34,25 @@ class StepAgent:
         self._config = config
 
     async def ask(self, task: str) -> StepResult:
-        context = self._build_context()
-        messages = [
-            {"role": "system", "content": _SYSTEM_PROMPT},
-            {"role": "user", "content": f"{context}\n\nTask: {task}"},
-        ]
+        messages = self._build_messages(task)
         profile = self._config.current_profile
         response = await self._llm.chat(messages, **profile.inference_kwargs())
         patch = extract_patch(response.content)
         return StepResult(reply=response.content, patch=patch, response=response)
+
+    async def stream_ask(self, task: str) -> AsyncIterator[str]:
+        """Yield content chunks as the model generates them."""
+        messages = self._build_messages(task)
+        profile = self._config.current_profile
+        async for chunk in self._llm.stream(messages, **profile.inference_kwargs()):
+            yield chunk
+
+    def _build_messages(self, task: str) -> list[dict[str, str]]:
+        context = self._build_context()
+        return [
+            {"role": "system", "content": _SYSTEM_PROMPT},
+            {"role": "user", "content": f"{context}\n\nTask: {task}"},
+        ]
 
     def _build_context(self) -> str:
         cfg = self._config.agent

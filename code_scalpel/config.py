@@ -122,16 +122,42 @@ def load_config() -> AppConfig:
     return AppConfig.model_validate(data)
 
 
+_CTX_FIELDS = ("loaded_context_length", "context_length", "max_context_length", "context_window")
+
+
+def _extract_ctx(model: dict[str, Any]) -> int | None:
+    for f in _CTX_FIELDS:
+        v = model.get(f)
+        if v:
+            return int(v)
+    return None
+
+
 async def autodetect_context_tokens(profile: ModelProfile) -> int | None:
-    url = f"{profile.provider_base_url()}/v1/models"
+    """Detect context window. Tries LM Studio's REST API first (richer info),
+    then falls back to OpenAI-compatible /v1/models. If no match by model id,
+    uses first model in list (LM Studio serves one model at a time)."""
+    base = profile.provider_base_url()
+    urls = [f"{base}/api/v0/models", f"{base}/v1/models"]
     try:
         async with httpx.AsyncClient(timeout=5.0) as client:
-            resp = await client.get(url)
-            resp.raise_for_status()
-            for m in resp.json().get("data", []):
-                if m.get("id") == profile.model:
-                    length: int | None = m.get("context_length")
-                    return length
+            for url in urls:
+                try:
+                    resp = await client.get(url)
+                    resp.raise_for_status()
+                except Exception:
+                    continue
+                models = resp.json().get("data", [])
+                first_ctx: int | None = None
+                for m in models:
+                    ctx = _extract_ctx(m)
+                    if ctx is not None:
+                        if first_ctx is None:
+                            first_ctx = ctx
+                        if m.get("id") == profile.model:
+                            return ctx
+                if first_ctx is not None:
+                    return first_ctx
     except Exception:
         pass
     return None

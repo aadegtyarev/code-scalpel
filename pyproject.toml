@@ -11,6 +11,7 @@ authors = [{ name = "Alexander Degtyarev" }]
 requires-python = ">=3.11"
 dependencies = [
     "textual>=0.80",
+    "textual-autocomplete>=4.0",
     "typer>=0.12",
     "pydantic>=2.7",
     "pyyaml>=6.0",

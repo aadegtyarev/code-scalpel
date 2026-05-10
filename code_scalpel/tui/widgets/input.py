@@ -1,11 +1,9 @@
 from __future__ import annotations
 
 from textual.app import ComposeResult
-from textual.binding import Binding
-from textual.events import Key
 from textual.message import Message
 from textual.widget import Widget
-from textual.widgets import TextArea
+from textual.widgets import Input, Static
 
 
 class UserMessage(Message):
@@ -14,83 +12,66 @@ class UserMessage(Message):
         self.text = text
 
 
-class InputArea(TextArea):
-    """TextArea: Enter submits, Ctrl+Enter inserts newline."""
+class ModeInput(Widget):
+    """Single-line input bar: '<mode> › <text>'. Enter submits."""
 
     DEFAULT_CSS = """
-    InputArea {
-        height: auto;
+    ModeInput {
+        height: 1;
+        background: #1a1a1a;
+        padding: 0;
+        layout: horizontal;
+    }
+    ModeInput #prompt {
+        width: auto;
+        height: 1;
+        color: #3d6b72;
+        padding: 0 0 0 1;
+        background: #1a1a1a;
+    }
+    ModeInput Input {
+        width: 1fr;
+        height: 1;
         min-height: 1;
         background: #1a1a1a;
         border: none;
         padding: 0;
         color: #d0d0d0;
     }
-    InputArea:focus {
-        height: auto;
+    ModeInput Input:focus {
+        background: #1a1a1a;
         border: none;
     }
-    """
-
-    def _on_key(self, event: Key) -> None:
-        if event.key == "enter":
-            event.prevent_default()
-            event.stop()
-            assert isinstance(self.parent, ModeInput)
-            self.parent.action_submit()
-        elif event.key == "ctrl+j":
-            event.prevent_default()
-            event.stop()
-            self.insert("\n")
-
-
-class ModeInput(Widget):
-    """Multiline input with mode prefix. Never blocks — queues messages."""
-
-    DEFAULT_CSS = """
-    ModeInput {
-        height: auto;
-        min-height: 3;
-        max-height: 12;
-        background: #1a1a1a;
-        border: tall #505050;
-        padding: 0 1;
-        color: #d0d0d0;
-    }
-    ModeInput:focus-within {
-        border: tall #3d6b72;
+    ModeInput Input > .input--cursor {
+        background: #3d6b72;
+        color: #ffffff;
     }
     """
-
-    BINDINGS = [
-        Binding("escape", "cancel", "Cancel", show=False),
-    ]
 
     def __init__(self, mode: str = "ask") -> None:
         super().__init__()
         self.mode = mode
 
+    def _prompt_str(self) -> str:
+        return f"{self.mode} › "
+
     def compose(self) -> ComposeResult:
-        ta = InputArea(id="textarea")
-        ta.show_line_numbers = False
-        yield ta
+        yield Static(self._prompt_str(), id="prompt")
+        yield Input(id="textarea", placeholder="")
 
-    def on_mount(self) -> None:
-        self.border_title = self.mode
-
-    def action_submit(self) -> None:
-        ta = self.query_one("#textarea", InputArea)
-        text = ta.text.strip()
+    def on_input_submitted(self, event: Input.Submitted) -> None:
+        event.stop()
+        text = event.value.strip()
         if text:
             self.post_message(UserMessage(text))
-            ta.clear()
-
-    def action_cancel(self) -> None:
-        self.app.exit()
+            event.input.value = ""
 
     def set_mode(self, mode: str) -> None:
         self.mode = mode
-        self.border_title = mode
+        self.query_one("#prompt", Static).update(self._prompt_str())
+
+    def focus_input(self) -> None:
+        self.query_one("#textarea", Input).focus()
 
     @property
     def prefix(self) -> str:

@@ -38,6 +38,14 @@ Screen {
     padding: 0 1;
 }
 
+Rule.input-rule {
+    height: 1;
+    margin: 0;
+    padding: 0;
+    color: #303030;
+    background: #0f0f0f;
+}
+
 .mode-prefix {
     color: $accent;
 }
