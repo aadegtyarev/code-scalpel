@@ -68,6 +68,7 @@ class ScalpelApp(App[None]):
         self.state = AgentState.load(cwd)
         self._mode_index = 0
         self._pending_edits: list[Edit] | None = None
+        self._last_stream_rate: float = 0.0
         self._runner = AsyncShellRunner()
         self._agent: StepAgent | None = None
 
@@ -174,6 +175,8 @@ class ScalpelApp(App[None]):
         output.print_status(f"Unknown command: {cmd}")
 
     async def _run_step(self, task: str) -> None:
+        import time
+
         output = self.query_one(OutputLog)
         footer = self.query_one(StatusFooter)
         assert self._agent is not None
@@ -183,10 +186,24 @@ class ScalpelApp(App[None]):
             await self._wait_mounted(md)
 
             full = ""
+            chunks = 0
+            start = time.monotonic()
+            last_tick = start
             async for chunk in self._agent.stream_ask(task):
                 full += chunk
+                chunks += 1
                 md.update(full)
                 output.scroll_end(animate=False)
+                now = time.monotonic()
+                if now - last_tick > 0.25:
+                    elapsed = now - start
+                    if elapsed > 0.1:
+                        rate = chunks / elapsed
+                        footer.status = f"◌ streaming · {rate:.0f} tok/s"
+                    last_tick = now
+
+            total_elapsed = time.monotonic() - start
+            self._last_stream_rate = chunks / total_elapsed if total_elapsed > 0 else 0.0
 
             # Track session usage (approximate — streaming has no usage payload).
             self.session.record(
@@ -208,7 +225,8 @@ class ScalpelApp(App[None]):
                 self._pending_edits = edits
                 footer.status = "● reviewing"
             else:
-                footer.status = "● idle"
+                rate = self._last_stream_rate
+                footer.status = f"● idle · {rate:.0f} tok/s" if rate else "● idle"
         except asyncio.CancelledError:
             output.print_status("● Cancelled.")
             footer.status = "● idle"

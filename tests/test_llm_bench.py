@@ -334,3 +334,45 @@ async def test_qwen_produces_applicable_patch(task: BenchTask, tmp_path: Path) -
     assert ok, f"apply_edits failed: {err}\n\n--- reply ---\n{result.reply[:800]}"
 
     task.check(tmp_path)
+
+
+# ── multi-file navigation ────────────────────────────────────────────────────
+
+
+@pytest.mark.llm
+async def test_qwen_navigates_multi_file_project(tmp_path: Path) -> None:
+    """v0.2 tool-loop check: 3-file project, agent sees only the map. Model
+    must (a) pick the right file from the map and (b) read it via tool call
+    before producing SEARCH/REPLACE."""
+    (tmp_path / "main.py").write_text("from helpers import add\nprint(add(1, 2))\n")
+    (tmp_path / "helpers.py").write_text("def add(a, b):\n    return a + b\n")
+    (tmp_path / "README.md").write_text("# Demo\n")
+
+    runner = AsyncShellRunner()
+    await runner.run(["git", "init", "-q"], cwd=str(tmp_path))
+    await runner.run(["git", "config", "user.email", "x@y"], cwd=str(tmp_path))
+    await runner.run(["git", "config", "user.name", "x"], cwd=str(tmp_path))
+    await runner.run(["git", "add", "."], cwd=str(tmp_path))
+    await runner.run(["git", "commit", "-q", "-m", "i"], cwd=str(tmp_path))
+
+    llm = OpenAICompatibleAdapter(
+        base_url=f"{_PROFILE.provider_base_url()}/v1",
+        api_key=_PROFILE.api_key(),
+        model=_PROFILE.model,
+    )
+    agent = StepAgent(llm=llm, cwd=tmp_path, config=_CONFIG)
+
+    result = await agent.ask(
+        "Add type hints to helpers.py: parameters and return type should be int."
+    )
+
+    assert result.edits, f"no edits, raw reply:\n{result.reply[:600]}"
+    assert all(e.path == "helpers.py" for e in result.edits), (
+        f"model edited wrong file(s): {[e.path for e in result.edits]}"
+    )
+
+    ok, err = apply_edits(result.edits, tmp_path)
+    assert ok, f"apply_edits failed: {err}"
+
+    out = (tmp_path / "helpers.py").read_text()
+    assert "int" in out and "->" in out
