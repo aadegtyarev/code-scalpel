@@ -27,7 +27,7 @@ class ModeInput(Widget):
         color: #d0d0d0;
     }
     ModeInput:focus-within {
-        border: tall #00d7ff;
+        border: tall #2a7a8a;
     }
     ModeInput TextArea {
         height: auto;
