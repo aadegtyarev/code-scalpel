@@ -1598,7 +1598,7 @@ class Session:
 
 ## 31. Роадмап
 
-### v0.1 — proof of concept
+### ~~v0.1 — proof of concept~~ ✓ закрыта 2026-05-11
 
 Цель: проверить, умеет ли qwen2.5-coder-14b стабильно выдавать применимый patch.
 
