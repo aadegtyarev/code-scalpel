@@ -166,7 +166,7 @@ class ScalpelApp(App[None]):
         footer = self.query_one(StatusFooter)
         mode = self._AGENT_MODES[self._mode_index]
         limit = self.state.context_limit
-        footer.hints = f"[tab] mode ({mode}) · [ctrl+q] quit"
+        footer.hints = "[tab] mode · [ctrl+q] quit"
         footer.ctx = f"0k/{limit // 1000}k"
 
     def _update_ctx(self) -> None:
