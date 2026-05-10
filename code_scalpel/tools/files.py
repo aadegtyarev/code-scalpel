@@ -28,14 +28,19 @@ def list_files(root: Path, max_files: int = 200) -> list[Path]:
     return result
 
 
-_TRUNCATED = "\n... ({remaining} more lines, showing first {shown})"
-
-
 def read_file(path: Path, max_lines: int = 400) -> str:
-    """Read file content, truncating at max_lines with a note."""
+    """Read file with line numbers for accurate patch generation.
+
+    Format matches what the model needs to produce unified diffs:
+        1  def hello():
+        2      pass
+    Truncates at max_lines with a note showing total line count.
+    """
     lines = path.read_text(errors="replace").splitlines()
-    if len(lines) <= max_lines:
-        return "\n".join(lines)
+    total = len(lines)
     shown = lines[:max_lines]
-    note = _TRUNCATED.format(remaining=len(lines) - max_lines, shown=max_lines)
-    return "\n".join(shown) + note
+    width = len(str(total))
+    numbered = "\n".join(f"{i + 1:{width}}  {line}" for i, line in enumerate(shown))
+    if total <= max_lines:
+        return numbered
+    return numbered + f"\n... ({total - max_lines} more lines, {total} total)"

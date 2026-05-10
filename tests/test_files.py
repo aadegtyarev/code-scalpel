@@ -51,13 +51,13 @@ def test_list_files_max_files(tmp_path: Path) -> None:
     assert len(files) == 3
 
 
-def test_read_file_under_limit(tmp_path: Path) -> None:
+def test_read_file_has_line_numbers(tmp_path: Path) -> None:
     f = tmp_path / "code.py"
-    f.write_text("\n".join(f"line {i}" for i in range(10)))
+    f.write_text("def hello():\n    pass\n")
 
     content = read_file(f, max_lines=400)
-    assert "line 0" in content
-    assert "line 9" in content
+    assert "1  def hello():" in content
+    assert "2      pass" in content
     assert "more lines" not in content
 
 
@@ -66,11 +66,11 @@ def test_read_file_truncates(tmp_path: Path) -> None:
     f.write_text("\n".join(f"line {i}" for i in range(100)))
 
     content = read_file(f, max_lines=10)
-    assert "line 0" in content
-    assert "line 9" in content
+    assert "1  line 0" in content
+    assert "10  line 9" in content
     assert "line 10" not in content
     assert "90 more lines" in content
-    assert "showing first 10" in content
+    assert "100 total" in content
 
 
 def test_read_file_exact_limit(tmp_path: Path) -> None:
@@ -79,3 +79,13 @@ def test_read_file_exact_limit(tmp_path: Path) -> None:
 
     content = read_file(f, max_lines=5)
     assert "more lines" not in content
+
+
+def test_read_file_line_number_width(tmp_path: Path) -> None:
+    f = tmp_path / "wide.py"
+    f.write_text("\n".join("x" for _ in range(100)))
+
+    content = read_file(f, max_lines=400)
+    # line numbers should be right-aligned with consistent width
+    assert "  1  x" in content
+    assert "100  x" in content
