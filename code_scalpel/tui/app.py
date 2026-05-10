@@ -5,7 +5,6 @@ from pathlib import Path
 
 from textual.app import App, ComposeResult
 from textual.binding import Binding
-from textual.content import Content
 from textual.geometry import Offset, Region, Spacing
 from textual.widgets import Markdown, Rule
 from textual_autocomplete import AutoComplete, DropdownItem
@@ -38,24 +37,6 @@ class _UpwardAutoComplete(AutoComplete):
             self.screen.scrollable_content_region,
         )
         self.absolute_offset = Offset(rx, ry)
-
-
-class _CommandItem(DropdownItem):
-    """Dropdown row: '/cmd   description'. Value is just the command."""
-
-    def __init__(self, command: str, description: str) -> None:
-        pad = max(1, 14 - len(command))
-        body = Content.assemble(
-            (command, "bold"),
-            " " * pad,
-            (description, "dim"),
-        )
-        super().__init__(body)
-        self._command = command
-
-    @property
-    def value(self) -> str:
-        return self._command
 
 
 _SLASH_COMMANDS: list[tuple[str, str]] = [
@@ -101,7 +82,8 @@ class ScalpelApp(App[None]):
         yield StatusFooter()
         yield _UpwardAutoComplete(
             target="#textarea",
-            candidates=[_CommandItem(cmd, desc) for cmd, desc in _SLASH_COMMANDS],
+            candidates=[DropdownItem(cmd) for cmd, _ in _SLASH_COMMANDS],
+            prevent_default_enter=False,
         )
 
     def on_mount(self) -> None:

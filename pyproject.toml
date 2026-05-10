@@ -54,6 +54,9 @@ ignore_missing_imports = true
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 testpaths = ["tests"]
+markers = [
+    "llm: hits a real local LLM via LM Studio; slow and non-deterministic. Run with --run-llm.",
+]
 
 [tool.coverage.run]
 source = ["code_scalpel"]
