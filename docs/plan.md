@@ -1289,6 +1289,22 @@ code-scalpel learn add_tests       # создать skill
 code-scalpel learn nginx --url https://nginx.org/en/docs/
 ```
 
+Flow: `recipe_creator.md` / `skill_creator.md` → LLM генерирует → preview → `[A]ccept [E]dit [R]eject` → сохранить.
+
+**Что можно писать в каждом типе** (промты `*_creator.md` это явно запрещают):
+
+| | Recipe | Skill |
+|---|---|---|
+| Команды запуска тестов/линтера | ✓ | — |
+| Конвенции технологии | ✓ | — |
+| Whitelist команд | ✓ | — |
+| Пошаговый подход к задаче | — | ✓ |
+| Как думает агент | — | — |
+| Формат патча | — | — |
+| Поведение агента | — | — |
+
+Последние три строки — зона `prompts/`. Ни recipe, ни skill туда не заходят.
+
 ### Интеграция с контекстом
 
 ```python
