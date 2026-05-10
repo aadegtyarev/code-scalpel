@@ -4,7 +4,7 @@ from collections.abc import AsyncIterator
 from typing import Any
 
 from code_scalpel.llm.adapter import ChatResponse
-from code_scalpel.shell import ShellResult
+from code_scalpel.tools.shell import ShellResult
 
 
 class MockLLMAdapter:

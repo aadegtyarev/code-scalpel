@@ -4,7 +4,7 @@ import asyncio
 
 import pytest
 
-from code_scalpel.shell import (
+from code_scalpel.tools.shell import (
     AsyncShellRunner,
     CommandNotAllowedError,
     ShellResult,
