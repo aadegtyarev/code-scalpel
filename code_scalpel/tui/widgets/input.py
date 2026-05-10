@@ -21,17 +21,21 @@ class ModeInput(Widget):
         height: auto;
         min-height: 3;
         max-height: 12;
-        background: #1c1c1c;
-        border-top: solid #2a2a2a;
-        border-bottom: solid #2a2a2a;
+        background: #1a1a1a;
+        border: tall #505050;
         padding: 0 1;
+        color: #d0d0d0;
+    }
+    ModeInput:focus-within {
+        border: tall #00d7ff;
     }
     ModeInput TextArea {
         height: auto;
         min-height: 1;
-        background: #1c1c1c;
+        background: #1a1a1a;
         border: none;
         padding: 0;
+        color: #d0d0d0;
     }
     """
 
@@ -49,6 +53,9 @@ class ModeInput(Widget):
         ta.show_line_numbers = False
         yield ta
 
+    def on_mount(self) -> None:
+        self.border_title = self.mode
+
     def action_submit(self) -> None:
         ta = self.query_one("#textarea", TextArea)
         text = ta.text.strip()
@@ -61,6 +68,7 @@ class ModeInput(Widget):
 
     def set_mode(self, mode: str) -> None:
         self.mode = mode
+        self.border_title = mode
 
     @property
     def prefix(self) -> str:

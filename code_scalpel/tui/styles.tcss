@@ -31,25 +31,10 @@ Screen {
     scrollbar-background: $bg;
 }
 
-#input-bar {
-    height: auto;
-    min-height: 3;
-    max-height: 12;
-    background: $bg-panel;
-    border-top: solid $border;
-    border-bottom: solid $border;
-    padding: 0 1;
-    color: $fg;
-}
-
-#input-bar:focus-within {
-    border-top: solid $accent;
-}
-
 #footer {
     height: 1;
-    background: $bg-panel;
-    color: $fg-dim;
+    background: #1c1c1c;
+    color: #909090;
     padding: 0 1;
 }
 
