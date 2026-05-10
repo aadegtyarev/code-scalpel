@@ -1603,18 +1603,18 @@ class Session:
 Цель: проверить, умеет ли qwen2.5-coder-14b стабильно выдавать применимый patch.
 
 ```text
-TUI skeleton + цветовая схема (theme.tcss / styles.tcss)
+✓ TUI skeleton + цветовая схема (theme.tcss / styles.tcss)
 ✓ config loader (pydantic + YAML) + model profiles + автодетект context_tokens
 ✓ LLM adapter: chat() + stream()
-AsyncShellRunner + whitelist
-list_files, read_file (pathspec)
-ripgrep search
-git diff, status, apply, rollback
-patch parser (unidiff) + validator + applier
-manual step: patch preview + apply
-run pytest
-STATE.json (атомарная запись + step_phase + dirty_patch)
-Session stats + context indicator (бар + %)
+✓ AsyncShellRunner + whitelist
+✓ list_files, read_file (pathspec + line numbers)
+✓ ripgrep search
+✓ git diff, status, apply, rollback
+✓ patch parser (unidiff) + validator + applier
+  manual step: patch preview + apply
+✓ run pytest
+✓ STATE.json (атомарная запись + step_phase + dirty_patch)
+✓ Session stats + context indicator (бар + %)
 ✓ tests/mocks.py + conftest.py
 ```
 
