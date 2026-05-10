@@ -81,30 +81,37 @@ async def test_ask_sends_system_prompt(project: Path) -> None:
 
 @pytest.mark.asyncio
 async def test_ask_includes_few_shot_examples(project: Path) -> None:
-    """Few-shot examples are load-bearing for weak models — verify they're sent."""
+    """Few-shot examples are load-bearing for weak models — verify they're sent.
+    With tool-use enabled the sequence is system + 2 (user,assistant) pairs +
+    real task = 6 messages."""
     llm = MockLLMAdapter(["OK"])
     agent = StepAgent(llm=llm, cwd=project, config=_CONFIG)
 
     await agent.ask("do something")
 
     messages = llm.calls[0]
-    # system + user(example) + assistant(example) + user(real task)
-    assert len(messages) == 4
-    assert messages[1]["role"] == "user"
-    assert messages[2]["role"] == "assistant"
-    assert "SEARCH" in messages[2]["content"]
+    assert len(messages) == 6
+    assert messages[0]["role"] == "system"
+    # The two demonstration pairs end with an assistant SEARCH/REPLACE.
+    assert "SEARCH" in messages[4]["content"]
+    # The last message must be the real task
+    assert messages[-1]["role"] == "user"
+    assert "do something" in messages[-1]["content"]
 
 
 @pytest.mark.asyncio
-async def test_ask_includes_file_content(project: Path) -> None:
+async def test_ask_includes_project_map_not_file_content(project: Path) -> None:
+    """v0.2: the user message carries a compact map, not full file bodies."""
     llm = MockLLMAdapter(["OK"])
     agent = StepAgent(llm=llm, cwd=project, config=_CONFIG)
 
     await agent.ask("do something")
 
     real_task_msg = llm.calls[0][-1]["content"]
-    assert "hello.py" in real_task_msg
-    assert "def hello" in real_task_msg
+    assert "Project map" in real_task_msg
+    assert "hello.py" in real_task_msg  # path appears in map
+    # Full file body should NOT be there
+    assert "def hello():\n    pass" not in real_task_msg
 
 
 @pytest.mark.asyncio
@@ -118,13 +125,13 @@ async def test_ask_records_response_stats(project: Path) -> None:
 
 
 @pytest.mark.asyncio
-async def test_context_lists_files_in_subdirs(tmp_path: Path) -> None:
-    """Subdirectory files must appear in the file listing — not only top-level."""
-    (tmp_path / "top.py").write_text("x")
+async def test_map_lists_files_in_subdirs(tmp_path: Path) -> None:
+    """Subdirectory files must appear in the project map — not only top-level."""
+    (tmp_path / "top.py").write_text("x = 1\n")
     (tmp_path / "pkg").mkdir()
-    (tmp_path / "pkg" / "deep.py").write_text("y")
+    (tmp_path / "pkg" / "deep.py").write_text("def f():\n    pass\n")
     (tmp_path / "pkg" / "sub").mkdir()
-    (tmp_path / "pkg" / "sub" / "deeper.py").write_text("z")
+    (tmp_path / "pkg" / "sub" / "deeper.py").write_text("def g():\n    pass\n")
 
     llm = MockLLMAdapter(["OK"])
     agent = StepAgent(llm=llm, cwd=tmp_path, config=_CONFIG)
@@ -135,6 +142,27 @@ async def test_context_lists_files_in_subdirs(tmp_path: Path) -> None:
     assert "top.py" in real_task_msg
     assert "pkg/deep.py" in real_task_msg
     assert "pkg/sub/deeper.py" in real_task_msg
+
+
+@pytest.mark.asyncio
+async def test_ask_handles_tool_call_loop(project: Path) -> None:
+    """If the model emits a read_file tool call, the agent executes it and
+    feeds the result back into the conversation."""
+    tool_response = "<TOOL: read_file>\nhello.py\n</TOOL>"
+    final_response = "Done."
+    llm = MockLLMAdapter([tool_response, final_response])
+    agent = StepAgent(llm=llm, cwd=project, config=_CONFIG)
+
+    result = await agent.ask("look")
+
+    assert result.reply == "Done."
+    # Two LLM calls: one with the tool call, one with the result fed back.
+    assert len(llm.calls) == 2
+    # The second call's last message should be a tool result containing hello.py content
+    second_call_last = llm.calls[1][-1]
+    assert second_call_last["role"] == "user"
+    assert "RESULT" in second_call_last["content"]
+    assert "def hello" in second_call_last["content"]
 
 
 @pytest.mark.asyncio

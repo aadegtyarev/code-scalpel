@@ -21,7 +21,8 @@ class MockLLMAdapter:
         return resp
 
     async def chat(self, messages: list[dict[str, str]], **kwargs: Any) -> ChatResponse:
-        self.calls.append(messages)
+        # Snapshot — the agent may append more messages to the same list after this call
+        self.calls.append([dict(m) for m in messages])
         content = self._next()
         return ChatResponse(
             content=content,
@@ -31,7 +32,7 @@ class MockLLMAdapter:
         )
 
     async def stream(self, messages: list[dict[str, str]], **kwargs: Any) -> AsyncIterator[str]:
-        self.calls.append(messages)
+        self.calls.append([dict(m) for m in messages])
         content = self._next()
         for char in content:
             yield char
