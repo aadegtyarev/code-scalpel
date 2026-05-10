@@ -4,26 +4,36 @@ import re
 
 import unidiff
 
+from code_scalpel.patch.normalizer import fix_hunk_headers
+
 _FENCE_RE = re.compile(r"```diff\n(.*?)```", re.DOTALL)
 _HEADER_RE = re.compile(r"(diff --git .+)", re.DOTALL)
 
 
 def extract_patch(text: str) -> str | None:
-    """Extract unified diff from LLM output. Returns raw patch string or None."""
-    # Prefer fenced code block
+    """Extract unified diff from LLM output. Returns normalized patch or None.
+
+    Normalizes hunk headers so git apply accepts patches where the LLM
+    miscounted context lines (common with blank lines between hunks).
+    """
+    candidate = _find_candidate(text)
+    if candidate is None:
+        return None
+    normalized = fix_hunk_headers(candidate)
+    if _is_valid(normalized):
+        return normalized
+    return None
+
+
+def _find_candidate(text: str) -> str | None:
     m = _FENCE_RE.search(text)
     if m:
         candidate = m.group(1)
-        if _is_valid(candidate):
+        if "---" in candidate and "+++" in candidate:
             return candidate
-
-    # Fall back to bare diff header
     m2 = _HEADER_RE.search(text)
     if m2:
-        candidate = text[m2.start() :]
-        if _is_valid(candidate):
-            return candidate
-
+        return text[m2.start() :]
     return None
 
 

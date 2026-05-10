@@ -72,11 +72,20 @@ class ModelProfile(BaseModel):
         return os.environ.get(var, "lm-studio")
 
 
+def _default_profiles() -> dict[str, ModelProfile]:
+    return {
+        "local": ModelProfile(
+            provider="lmstudio",
+            model="local-model",
+        )
+    }
+
+
 class AppConfig(BaseModel):
     language: str = "en"
     active_profile: str = "local"
     agent: AgentConfig = Field(default_factory=AgentConfig)
-    profiles: dict[str, ModelProfile] = Field(default_factory=dict)
+    profiles: dict[str, ModelProfile] = Field(default_factory=_default_profiles)
 
     @model_validator(mode="after")
     def _active_profile_exists(self) -> AppConfig:

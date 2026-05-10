@@ -25,7 +25,9 @@ async def git_apply_check(patch: str, runner: ShellRunner, cwd: Path) -> ShellRe
         f.write(patch)
         tmp = f.name
     try:
-        return await runner.run(["git", "apply", "--check", tmp], cwd=str(cwd))
+        return await runner.run(
+            ["git", "apply", "--check", "--ignore-whitespace", tmp], cwd=str(cwd)
+        )
     finally:
         Path(tmp).unlink(missing_ok=True)
 
@@ -36,7 +38,7 @@ async def git_apply(patch: str, runner: ShellRunner, cwd: Path) -> ShellResult:
         f.write(patch)
         tmp = f.name
     try:
-        return await runner.run(["git", "apply", tmp], cwd=str(cwd))
+        return await runner.run(["git", "apply", "--ignore-whitespace", tmp], cwd=str(cwd))
     finally:
         Path(tmp).unlink(missing_ok=True)
 

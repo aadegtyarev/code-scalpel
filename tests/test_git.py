@@ -45,7 +45,8 @@ async def test_git_apply_check_passes_patch(tmp_path: Path) -> None:
     assert result.ok
     cmd = runner.calls[0]
     assert cmd[:3] == ["git", "apply", "--check"]
-    assert cmd[3].endswith(".patch")
+    assert "--ignore-whitespace" in cmd
+    assert cmd[-1].endswith(".patch")
 
 
 @pytest.mark.asyncio

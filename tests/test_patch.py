@@ -5,6 +5,7 @@ from pathlib import Path
 import pytest
 
 from code_scalpel.patch.applier import apply_patch, rollback
+from code_scalpel.patch.normalizer import fix_hunk_headers
 from code_scalpel.patch.parser import extract_patch, parse_patch
 from code_scalpel.patch.validator import validate_patch
 from code_scalpel.tools.shell import ShellResult
@@ -21,6 +22,46 @@ index 1234567..abcdefg 100644
 -    pass
 +    return "hi"
 """
+
+
+# --- normalizer ---
+
+
+def test_fix_hunk_headers_corrects_undercount() -> None:
+    """LLM forgot blank context line — @@ -1,2 should be @@ -1,3."""
+    patch = (
+        "--- a/f.py\n+++ b/f.py\n"
+        "@@ -1,2 +1,2 @@\n"
+        "-def add(a, b):\n"
+        "+def add(a: int, b: int) -> int:\n"
+        "     return a + b\n"
+        " \n"
+    )
+    fixed = fix_hunk_headers(patch)
+    assert "@@ -1,3 +1,3 @@" in fixed
+
+
+def test_fix_hunk_headers_leaves_correct_untouched() -> None:
+    patch = "--- a/f.py\n+++ b/f.py\n@@ -1,2 +1,2 @@\n def hello():\n-    pass\n+    return 1\n"
+    fixed = fix_hunk_headers(patch)
+    assert "@@ -1,2 +1,2 @@" in fixed
+
+
+def test_extract_normalizes_bad_hunk_count() -> None:
+    """extract_patch must accept and fix LLM diffs with wrong hunk counts."""
+    bad = (
+        "```diff\n"
+        "--- a/f.py\n+++ b/f.py\n"
+        "@@ -1,2 +1,2 @@\n"
+        "-def add(a, b):\n"
+        "+def add(a: int, b: int) -> int:\n"
+        "     return a + b\n"
+        " \n"
+        "```"
+    )
+    result = extract_patch(bad)
+    assert result is not None
+    assert "@@ -1,3 +1,3 @@" in result
 
 
 # --- parser ---
