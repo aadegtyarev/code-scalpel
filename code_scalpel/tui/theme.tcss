@@ -1,0 +1,17 @@
+/* Inspired by Claude Code color scheme */
+$bg: #0f0f0f;
+$bg-panel: #1c1c1c;
+$fg: #d0d0d0;
+$fg-dim: #585858;
+$fg-muted: #3a3a3a;
+$border: #2a2a2a;
+$accent: #00d7ff;
+$thinking: #ff8700;
+$success: #00ff87;
+$error: #ff5555;
+$warning: #ffb86c;
+$diff-add: #50fa7b;
+$diff-add-bg: #0a2a0a;
+$diff-del: #ff5555;
+$diff-del-bg: #2a0a0a;
+$line-num: #3a3a3a;

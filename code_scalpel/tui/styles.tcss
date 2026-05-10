@@ -1,0 +1,58 @@
+@import "theme.tcss";
+
+Screen {
+    background: $bg;
+    color: $fg;
+    layers: base;
+}
+
+#output {
+    width: 1fr;
+    height: 1fr;
+    background: $bg;
+    border: none;
+    scrollbar-color: $fg-muted;
+    scrollbar-background: $bg;
+}
+
+#input-bar {
+    height: auto;
+    min-height: 3;
+    max-height: 12;
+    background: $bg-panel;
+    border-top: solid $border;
+    border-bottom: solid $border;
+    padding: 0 1;
+    color: $fg;
+}
+
+#input-bar:focus-within {
+    border-top: solid $accent;
+}
+
+#footer {
+    height: 1;
+    background: $bg-panel;
+    color: $fg-dim;
+    padding: 0 1;
+}
+
+.mode-prefix {
+    color: $accent;
+}
+
+.status-idle {
+    color: $fg-dim;
+}
+
+.status-thinking {
+    color: $thinking;
+}
+
+.status-ok {
+    color: $success;
+}
+
+.status-error {
+    color: $error;
+}
