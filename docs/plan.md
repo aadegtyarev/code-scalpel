@@ -1643,16 +1643,23 @@ class Session:
 ### v0.2
 
 ```text
-tool-calling loop: модель сама вызывает list_files / read_file / grep
-  вместо нашей eager-сборки контекста. Сейчас даже "привет" улетает
-  с 7k токенов (листинг + 3 файла целиком). Реальный проект = 5-8k
-  токенов на каждый turn без необходимости. Превращаем в proper
-  tool-use: assistant → tool_call → tool_result → assistant.
-  Tool-карточки в TUI (см. паттерн Claude Code: имя + результат).
+map-as-context + tool-calls-for-reads — ключевая архитектурная правка.
+  Сейчас агент eager-стафит контекст: список файлов + первые 3 файла
+  целиком, на КАЖДОМ turn. «Привет» = 7k токенов, реальный проект =
+  5-8k токенов на каждый запрос. Это потолок v0.1.
+  Архитектура v0.2:
+    • static map: INDEX.json с AST-символами (path → classes/funcs/
+      imports), плюс опциональные 1-2 строки LLM summary на файл.
+      Карта целиком влезает в ~1-2k токенов для среднего проекта.
+    • tool-calling loop: модель сама вызывает read_file / grep /
+      run_tests когда нужно. Не вшиваем содержимое заранее.
+    • протокол: assistant → tool_call → tool_result → assistant.
+      Tool-карточки в TUI (паттерн Claude Code: имя + результат).
+  Эффект: casual «привет» = ~200 токенов, реальная правка читает
+  МНОГО файлов, но только нужные.
 task classifier (local heuristic)
 planner (LLM → TASKS.md)
 context builder (stable + dynamic + компрессия)
-INDEX.json: build + AST symbols + LLM file summaries (--summarize)
 step summarizer (template + LLM)
 Q&A screen (design/plan mode) + [X] Compact
 compact (TUI-only, LAST_COMPACT.md)
