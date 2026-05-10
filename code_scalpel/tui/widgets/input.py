@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from textual.app import ComposeResult
 from textual.binding import Binding
+from textual.events import Key
 from textual.message import Message
 from textual.widget import Widget
 from textual.widgets import TextArea
@@ -11,6 +12,36 @@ class UserMessage(Message):
     def __init__(self, text: str) -> None:
         super().__init__()
         self.text = text
+
+
+class InputArea(TextArea):
+    """TextArea: Enter submits, Ctrl+Enter inserts newline."""
+
+    DEFAULT_CSS = """
+    InputArea {
+        height: auto;
+        min-height: 1;
+        background: #1a1a1a;
+        border: none;
+        padding: 0;
+        color: #d0d0d0;
+    }
+    InputArea:focus {
+        height: auto;
+        border: none;
+    }
+    """
+
+    def _on_key(self, event: Key) -> None:
+        if event.key == "enter":
+            event.prevent_default()
+            event.stop()
+            assert isinstance(self.parent, ModeInput)
+            self.parent.action_submit()
+        elif event.key == "ctrl+j":
+            event.prevent_default()
+            event.stop()
+            self.insert("\n")
 
 
 class ModeInput(Widget):
@@ -27,20 +58,11 @@ class ModeInput(Widget):
         color: #d0d0d0;
     }
     ModeInput:focus-within {
-        border: tall #2a7a8a;
-    }
-    ModeInput TextArea {
-        height: auto;
-        min-height: 1;
-        background: #1a1a1a;
-        border: none;
-        padding: 0;
-        color: #d0d0d0;
+        border: tall #3d6b72;
     }
     """
 
     BINDINGS = [
-        Binding("ctrl+j,enter", "submit", "Submit", show=False),
         Binding("escape", "cancel", "Cancel", show=False),
     ]
 
@@ -49,7 +71,7 @@ class ModeInput(Widget):
         self.mode = mode
 
     def compose(self) -> ComposeResult:
-        ta = TextArea(id="textarea")
+        ta = InputArea(id="textarea")
         ta.show_line_numbers = False
         yield ta
 
@@ -57,7 +79,7 @@ class ModeInput(Widget):
         self.border_title = self.mode
 
     def action_submit(self) -> None:
-        ta = self.query_one("#textarea", TextArea)
+        ta = self.query_one("#textarea", InputArea)
         text = ta.text.strip()
         if text:
             self.post_message(UserMessage(text))
