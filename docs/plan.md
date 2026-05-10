@@ -1643,6 +1643,12 @@ class Session:
 ### v0.2
 
 ```text
+tool-calling loop: модель сама вызывает list_files / read_file / grep
+  вместо нашей eager-сборки контекста. Сейчас даже "привет" улетает
+  с 7k токенов (листинг + 3 файла целиком). Реальный проект = 5-8k
+  токенов на каждый turn без необходимости. Превращаем в proper
+  tool-use: assistant → tool_call → tool_result → assistant.
+  Tool-карточки в TUI (см. паттерн Claude Code: имя + результат).
 task classifier (local heuristic)
 planner (LLM → TASKS.md)
 context builder (stable + dynamic + компрессия)
