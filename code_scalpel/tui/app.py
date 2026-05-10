@@ -19,7 +19,7 @@ from code_scalpel.tui.widgets.output import OutputLog
 
 
 class ScalpelApp(App[None]):
-    CSS_PATH = ["theme.tcss", "styles.tcss"]
+    CSS_PATH = ["styles.tcss"]
 
     BINDINGS = [
         Binding("ctrl+q", "quit", "Quit"),
