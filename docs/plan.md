@@ -1167,147 +1167,143 @@ def classify(task: str) -> TaskType:
 
 ---
 
-## 22. Skills и Tools — plugin-система
+## 22. Recipes и Skills — plugin-система
 
 ### Идея
 
-Добавление новых skills и tools — **без изменения кода приложения**.
-Приложение сканирует директории при старте.
+Без изменения кода приложения: добавил файл → агент умеет больше.
+Два типа, каждый решает разную задачу.
 
-**Два типа:**
+### Recipe — знание о технологии
+
+Что существует в проекте: язык, инструменты, компоненты.
+Содержит: команды запуска тестов/линтера, whitelist команд, snippets для контекста.
 
 ```text
-LanguageSkill  — Python, TypeScript, Go…  фокус: тесты, линтер, символы
-ComponentSkill — Docker, PostgreSQL, Redis… фокус: знания, команды изучения
+load: eager  → язык проекта (Python, TypeScript…) + core tools (ruff, pytest…)
+               загружается один раз в stable_context при старте сессии
+load: lazy   → компоненты (Docker, PostgreSQL, Redis…)
+               загружается в dynamic_context только для шагов плана,
+               где keywords совпадают с описанием шага
 ```
 
-Оба — Markdown с YAML frontmatter. Python только для сложной логики (ast).
+Пример: проект с Python + Docker. При старте → python.md в stable context.
+Шаг "deploy to docker" → docker.md добавляется только на этот шаг, потом выгружается.
 
-### Skill + Tool dataclasses
-
-```python
-@dataclass
-class ToolParam:
-    type: type
-    required: bool = False
-    default: Any = None
-
-@dataclass
-class Tool:
-    name: str
-    description: str
-    command: str                        # шаблон: "docker logs --tail {lines} {container}"
-    parameters: dict[str, ToolParam]
-    confirm: bool = False
-    timeout: int = 30
-
-@dataclass
-class Skill:
-    name: str
-    file_patterns: list[str]
-    # language
-    test_cmd: list[str] | None = None
-    lint_cmds: list[list[str]] = field(default_factory=list)
-    symbol_extractor: SymbolExtractor | None = None
-    symbol_pattern: str | None = None   # regex-альтернатива
-    # component
-    context_snippets: list[str] = field(default_factory=list)
-    # общие
-    allowed_commands: list[str] = field(default_factory=list)
-    tools: list[Tool] = field(default_factory=list)
-```
-
-### Форматы файлов
-
-**Language skill (Markdown):**
+**Recipe (Markdown):**
 
 ```markdown
 ---
-name: typescript
-type: language
-file_patterns: ["*.ts", "*.tsx", "tsconfig.json"]
-test_cmd: ["npx", "jest"]
-lint_cmds: [["npx", "tsc", "--noEmit"]]
-allowed_commands: ["jest", "tsc", "eslint", "npx"]
-symbol_pattern: "^(?:export\\s+)?(?:class|function|interface|type|const)\\s+(\\w+)"
+name: python
+load: eager
+file_patterns: ["*.py", "pyproject.toml"]
+test_cmd: ["pytest", "-x"]
+lint_cmds: [["ruff", "check", "."], ["mypy", "."]]
+allowed_commands: ["pytest", "ruff", "mypy", "python", "python3"]
+symbol_extractor: ast
 ---
 
-# TypeScript
-TypeScript добавляет статическую типизацию к JavaScript...
+# Python
+- Типизируй всё: аннотации на всех публичных функциях и методах
+- Запуск тестов: `pytest -x` (стоп на первом падении)
+- Линтер: `ruff check --fix . && ruff format .`
+- Никаких `# type: ignore` без крайней необходимости
 ```
-
-**Component skill (Markdown):**
 
 ```markdown
 ---
 name: docker
-type: component
+load: lazy
 file_patterns: ["Dockerfile", "docker-compose.yml", "compose.yml"]
-allowed_commands: ["docker ps", "docker logs", "docker compose ps"]
-tools:
-  - name: docker_logs
-    description: "Get recent logs from a container"
-    command: "docker logs --tail {lines} {container}"
-    parameters:
-      container: {type: string, required: true}
-      lines: {type: integer, default: 100}
-    confirm: false
+keywords: ["docker", "compose", "container", "image", "deploy"]
+allowed_commands: ["docker", "docker compose"]
 ---
 
 # Docker
-- Dockerfile: FROM, RUN, COPY, CMD — слои образа
-- docker-compose.yml: сервисы, сети, тома
-- Layer caching: порядок RUN важен
 - `docker compose up -d` / `docker compose logs -f`
+- Layer caching: COPY зависимости до COPY кода
+- `docker compose ps` — статус сервисов
 ```
 
-**Python skill (только сложная логика):**
+### Skill — инструкция к задаче
+
+Что делать сейчас: как добавить тест, как отладить патч, как рефакторить.
+Чистый Markdown, никаких команд. Загружается в dynamic_context на время задачи.
+
+```markdown
+---
+name: add_tests
+triggers: ["add test", "write test", "test coverage", "тест"]
+---
+
+# Добавление тестов
+1. Определи что тестируем: happy path, edge case, error path
+2. Используй MockLLMAdapter / MockShellRunner из tests/mocks.py
+3. Один assert на тест — понятные падения
+4. Имя теста = что должно произойти: `test_returns_none_when_empty`
+```
+
+### Dataclasses
 
 ```python
-class PythonSkill(Skill):
-    name = "python"
-    file_patterns = ["*.py"]
-    test_cmd = ["pytest"]
-    lint_cmds = [["ruff", "check", "."], ["mypy", "."]]
-    allowed_commands = ["pytest", "ruff", "mypy"]
-    symbol_extractor = AstSymbolExtractor()
+@dataclass
+class Recipe:
+    name: str
+    load: Literal["eager", "lazy"]
+    file_patterns: list[str]
+    keywords: list[str] = field(default_factory=list)   # для lazy-matching
+    test_cmd: list[str] | None = None
+    lint_cmds: list[list[str]] = field(default_factory=list)
+    allowed_commands: list[str] = field(default_factory=list)
+    symbol_extractor: str | None = None                 # "ast" | "regex:<pattern>"
+    body: str = ""                                      # текст после frontmatter
+
+@dataclass
+class Skill:
+    name: str
+    triggers: list[str]                                 # keywords для автоматической активации
+    body: str
 ```
 
 ### Директории discovery
 
 ```text
-code_scalpel/skills/lang/*.py     # встроенные language skills
-code_scalpel/skills/comp/*.md     # встроенные component skills
-~/.config/code-scalpel/skills/    # пользовательские (learn → сюда)
-.code-scalpel/skills/                    # project-local (приоритет выше)
+code_scalpel/recipes/*.md         # встроенные рецепты (python, git, pytest…)
+code_scalpel/skills/*.md          # встроенные скиллы (add_tests, debug_patch…)
+~/.config/code-scalpel/recipes/   # пользовательские рецепты
+~/.config/code-scalpel/skills/    # пользовательские скиллы
+.code-scalpel/recipes/            # project-local (приоритет выше)
+.code-scalpel/skills/
 ```
 
-`SkillRegistry.load_all()` сканирует все три при старте. project > user > builtin.
+Registry сканирует при старте. project > user > builtin.
 
 ### Команда learn
 
 ```bash
-code-scalpel learn redis
+code-scalpel learn redis           # создать recipe
+code-scalpel learn add_tests       # создать skill
 code-scalpel learn nginx --url https://nginx.org/en/docs/
-code-scalpel learn typescript --type language
 ```
 
-```text
-1. prompts/skill_creator.md
-2. если --url: httpx.get() → strip scripts/nav → чистый текст
-3. LLM генерирует Markdown-скилл (любой тип)
-4. preview → [A] Accept [E] Edit [R] Reject
-5. сохранить в ~/.config/code-scalpel/skills/<name>.md
-```
-
-### Интеграция
+### Интеграция с контекстом
 
 ```python
-active_skills = registry.detect(root)
-test_cmd   = next((s.test_cmd for s in active_skills if s.test_cmd), None)
-allowed    = GLOBAL_WHITELIST | {c for s in active_skills for c in s.allowed_commands}
-# stable_context получает context_snippets из component skills
-# INDEX получает символы через symbol_extractor или symbol_pattern
+# При старте сессии:
+eager_recipes = [r for r in registry.recipes if r.load == "eager" and matches_project(r)]
+stable_context += [r.body for r in eager_recipes]
+
+# При запуске шага плана:
+step_recipes = [r for r in registry.recipes
+                if r.load == "lazy" and any(kw in step.description for kw in r.keywords)]
+step_skills  = [s for s in registry.skills
+                if any(tr in task.description for tr in s.triggers)]
+dynamic_context += [r.body for r in step_recipes] + [s.body for s in step_skills]
+
+# Команды для whitelist:
+allowed = GLOBAL_WHITELIST | {c for r in active_recipes for c in r.allowed_commands}
+# Команды тестов:
+test_cmd = next((r.test_cmd for r in eager_recipes if r.test_cmd), None)
 ```
 
 ---
