@@ -13,7 +13,7 @@ class StatusFooter(Widget):
     StatusFooter {
         height: 1;
         background: #1c1c1c;
-        color: #585858;
+        color: #a0a0a0;
         padding: 0 1;
     }
     """

@@ -6,7 +6,7 @@ from textual.app import App, ComposeResult
 from textual.binding import Binding
 
 from code_scalpel.agent import StepAgent
-from code_scalpel.config import AppConfig
+from code_scalpel.config import AppConfig, autodetect_context_tokens
 from code_scalpel.llm.adapter import OpenAICompatibleAdapter
 from code_scalpel.patch.applier import apply_patch
 from code_scalpel.session import Session
@@ -50,6 +50,7 @@ class ScalpelApp(App[None]):
         self.query_one(ModeInput).focus()
         self._update_footer()
         self._init_agent()
+        self.run_worker(self._detect_context(), exclusive=False)
 
     def _init_agent(self) -> None:
         try:
@@ -64,6 +65,16 @@ class ScalpelApp(App[None]):
             self._agent = StepAgent(llm=llm, cwd=self.cwd, config=self.config)
         except (KeyError, ValueError) as e:
             self.query_one(OutputLog).print_error(f"Config error: {e}")
+
+    async def _detect_context(self) -> None:
+        try:
+            profile = self.config.current_profile
+            tokens = await autodetect_context_tokens(profile)
+            if tokens:
+                self.state.context_limit = tokens
+                self._update_footer()
+        except Exception:
+            pass
 
     # ── user message ──────────────────────────────────────────────────────────
 

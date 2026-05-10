@@ -20,10 +20,18 @@ class ModeInput(Widget):
     ModeInput {
         height: auto;
         min-height: 3;
+        max-height: 12;
         background: #1c1c1c;
         border-top: solid #2a2a2a;
         border-bottom: solid #2a2a2a;
         padding: 0 1;
+    }
+    ModeInput TextArea {
+        height: auto;
+        min-height: 1;
+        background: #1c1c1c;
+        border: none;
+        padding: 0;
     }
     """
 
