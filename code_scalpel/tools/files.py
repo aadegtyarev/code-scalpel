@@ -5,12 +5,12 @@ from pathlib import Path
 import pathspec
 
 
-def _load_gitignore(root: Path) -> pathspec.PathSpec:  # type: ignore[type-arg]
+def _load_gitignore(root: Path) -> pathspec.PathSpec:
     gitignore = root / ".gitignore"
     patterns = [".git/"]
     if gitignore.is_file():
         patterns += gitignore.read_text().splitlines()
-    return pathspec.PathSpec.from_lines("gitignore", patterns)
+    return pathspec.PathSpec.from_lines("gitwildmatch", patterns)
 
 
 def list_files(root: Path, max_files: int = 200) -> list[Path]:

@@ -55,10 +55,12 @@ async def test_git_apply_check_cleans_up_tempfile(tmp_path: Path) -> None:
 
     original_run = runner.run
 
-    async def capturing_run(cmd: list[str], **kwargs: object) -> ShellResult:
+    async def capturing_run(
+        cmd: list[str], cwd: str | None = None, timeout: int = 30
+    ) -> ShellResult:
         if "apply" in cmd:
             captured.extend(cmd)
-        return await original_run(cmd, **kwargs)
+        return await original_run(cmd, cwd, timeout)
 
     runner.run = capturing_run  # type: ignore[method-assign]
     await git_apply_check("patch content", runner, tmp_path)

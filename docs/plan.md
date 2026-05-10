@@ -1611,7 +1611,7 @@ class Session:
 ✓ ripgrep search
 ✓ git diff, status, apply, rollback
 ✓ patch parser (unidiff) + validator + applier
-  manual step: patch preview + apply
+✓ manual step: patch preview + apply (ToolCallCard: running/reviewing/done/error)
 ✓ run pytest
 ✓ STATE.json (атомарная запись + step_phase + dirty_patch)
 ✓ Session stats + context indicator (бар + %)
