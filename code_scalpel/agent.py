@@ -6,7 +6,7 @@ from pathlib import Path
 
 from code_scalpel.config import AppConfig
 from code_scalpel.llm.adapter import ChatResponse, LLMAdapter
-from code_scalpel.patch.parser import extract_patch
+from code_scalpel.patch.edit_block import Edit, extract_edits
 from code_scalpel.tools.files import list_files, read_file
 
 _SYSTEM_PROMPT = """\
@@ -14,23 +14,64 @@ You are code-scalpel, a local coding assistant powered by an open-source model.
 You are NOT Claude, ChatGPT, or any commercial AI assistant. Never claim to be made
 by Anthropic, OpenAI, or any other vendor.
 
-When the task requires modifying files, output a unified diff in a ```diff block.
-Use standard git diff format: --- a/file and +++ b/file headers, @@ hunks.
+Always reply in the same natural language the user used in their last message.
 
-For questions or conversation that require no file changes, respond with plain text — no diff.
+For questions or conversation that require no file changes, respond with plain text only.
 
-Always reply in the same natural language the user used in their last message."""
+To modify a file, output one or more SEARCH/REPLACE blocks. Format:
+
+    path/to/file.py
+    ```python
+    <<<<<<< SEARCH
+    <lines that currently exist in the file, EXACTLY>
+    =======
+    <lines that should replace them>
+    >>>>>>> REPLACE
+    ```
+
+Rules:
+- The SEARCH block must match the file content character-for-character.
+- To create a new file, leave SEARCH empty.
+- Make multiple smaller blocks rather than one big block.
+- Keep replies short. Only return blocks (or plain text for questions)."""
+
+_FEW_SHOT_USER = """\
+Files in project (1 total):
+- mathutil.py
+
+### mathutil.py
+1  def add(a, b):
+2      return a + b
+
+Task: add type hints — int parameters, int return."""
+
+_FEW_SHOT_ASSISTANT = """\
+mathutil.py
+```python
+<<<<<<< SEARCH
+def add(a, b):
+    return a + b
+=======
+def add(a: int, b: int) -> int:
+    return a + b
+>>>>>>> REPLACE
+```"""
 
 
 @dataclass(frozen=True)
 class StepResult:
     reply: str
-    patch: str | None
+    edits: list[Edit]
     response: ChatResponse
+
+    @property
+    def patch(self) -> list[Edit] | None:
+        """Back-compat alias used by some tests / the TUI flow."""
+        return self.edits if self.edits else None
 
 
 class StepAgent:
-    """Minimal single-step agent: build context → call LLM → extract patch."""
+    """Minimal single-step agent: build context → call LLM → extract edits."""
 
     def __init__(self, llm: LLMAdapter, cwd: Path, config: AppConfig) -> None:
         self._llm = llm
@@ -41,8 +82,8 @@ class StepAgent:
         messages = self._build_messages(task)
         profile = self._config.current_profile
         response = await self._llm.chat(messages, **profile.inference_kwargs())
-        patch = extract_patch(response.content)
-        return StepResult(reply=response.content, patch=patch, response=response)
+        edits = extract_edits(response.content)
+        return StepResult(reply=response.content, edits=edits, response=response)
 
     async def stream_ask(self, task: str) -> AsyncIterator[str]:
         """Yield content chunks as the model generates them."""
@@ -55,6 +96,8 @@ class StepAgent:
         context = self._build_context()
         return [
             {"role": "system", "content": _SYSTEM_PROMPT},
+            {"role": "user", "content": _FEW_SHOT_USER},
+            {"role": "assistant", "content": _FEW_SHOT_ASSISTANT},
             {"role": "user", "content": f"{context}\n\nTask: {task}"},
         ]
 

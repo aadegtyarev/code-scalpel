@@ -22,7 +22,7 @@ import pytest
 from code_scalpel.agent import StepAgent
 from code_scalpel.config import AgentConfig, AppConfig, ModelProfile
 from code_scalpel.llm.adapter import OpenAICompatibleAdapter
-from code_scalpel.patch.applier import apply_patch
+from code_scalpel.patch.edit_block import apply_edits
 from code_scalpel.tools.shell import AsyncShellRunner
 
 _PROFILE = ModelProfile(
@@ -326,11 +326,11 @@ async def test_qwen_produces_applicable_patch(task: BenchTask, tmp_path: Path) -
     agent = StepAgent(llm=llm, cwd=tmp_path, config=_CONFIG)
 
     result = await agent.ask(task.prompt)
-    assert result.patch is not None, f"model produced no diff. raw reply:\n{result.reply[:600]}"
-
-    apply_result = await apply_patch(result.patch, runner, tmp_path)
-    assert apply_result.ok, (
-        f"git apply failed:\n{apply_result.stdout}\n\n--- patch ---\n{result.patch}"
+    assert result.edits, (
+        f"model produced no edit blocks. raw reply:\n{result.reply[:600]}"
     )
+
+    ok, err = apply_edits(result.edits, tmp_path)
+    assert ok, f"apply_edits failed: {err}\n\n--- reply ---\n{result.reply[:800]}"
 
     task.check(tmp_path)

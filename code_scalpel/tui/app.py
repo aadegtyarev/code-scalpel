@@ -12,8 +12,7 @@ from textual_autocomplete import AutoComplete, DropdownItem
 from code_scalpel.agent import StepAgent
 from code_scalpel.config import AppConfig, autodetect_context_tokens
 from code_scalpel.llm.adapter import ChatResponse, OpenAICompatibleAdapter
-from code_scalpel.patch.applier import apply_patch
-from code_scalpel.patch.parser import extract_patch
+from code_scalpel.patch.edit_block import Edit, apply_edits, edits_to_diff, extract_edits
 from code_scalpel.session import Session
 from code_scalpel.state import AgentState
 from code_scalpel.tools.shell import AsyncShellRunner
@@ -68,7 +67,7 @@ class ScalpelApp(App[None]):
         self.session = Session()
         self.state = AgentState.load(cwd)
         self._mode_index = 0
-        self._pending_patch: str | None = None
+        self._pending_edits: list[Edit] | None = None
         self._runner = AsyncShellRunner()
         self._agent: StepAgent | None = None
 
@@ -200,14 +199,13 @@ class ScalpelApp(App[None]):
             )
             self._update_ctx()
 
-            patch = extract_patch(full)
-            if patch:
-                # Replace markdown body with the review card
+            edits = extract_edits(full)
+            if edits:
                 await md.remove()
                 card = ToolCallCard("Apply", "")
                 await self.mount(card, before=self.query_one(ModeInput))
-                card.set_reviewing(patch)
-                self._pending_patch = patch
+                card.set_reviewing(edits_to_diff(edits, self.cwd))
+                self._pending_edits = edits
                 footer.status = "● reviewing"
             else:
                 footer.status = "● idle"
@@ -244,25 +242,25 @@ class ScalpelApp(App[None]):
         except Exception:
             pass
 
-        if action == "apply" and self._pending_patch:
+        if action == "apply" and self._pending_edits:
             footer.status = "◌ applying…"
-            result = await apply_patch(self._pending_patch, self._runner, self.cwd)
-            self._pending_patch = None
-            if result.ok:
+            ok, err = apply_edits(self._pending_edits, self.cwd)
+            self._pending_edits = None
+            if ok:
                 output.print_status("● Patch applied.")
                 self.state.dirty_patch = True
                 self.state.save(self.cwd)
             else:
-                output.print_error(f"Apply failed:\n{result.stdout}")
+                output.print_error(f"Apply failed: {err}")
             footer.status = "● idle"
 
         elif action == "reject":
-            self._pending_patch = None
+            self._pending_edits = None
             output.print_status("Patch rejected.")
             footer.status = "● idle"
 
         elif action == "regen":
-            self._pending_patch = None
+            self._pending_edits = None
             output.print_status("Regen not implemented in v0.1.")
             footer.status = "● idle"
 
