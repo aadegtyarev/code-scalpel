@@ -146,6 +146,81 @@ async def test_autodetect_context_tokens_found() -> None:
 
 
 @pytest.mark.asyncio
+async def test_autodetect_prefers_loaded_context_length() -> None:
+    """LM Studio's /api/v0/models exposes loaded_context_length — use it over max."""
+    profile = ModelProfile(provider="lmstudio", model="qwen/qwen2.5-coder-14b")
+
+    api_v0 = MagicMock()
+    api_v0.raise_for_status = MagicMock()
+    api_v0.json.return_value = {
+        "data": [
+            {
+                "id": "qwen/qwen2.5-coder-14b",
+                "max_context_length": 32768,
+                "loaded_context_length": 16384,
+            }
+        ]
+    }
+
+    mock_client = AsyncMock()
+    mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+    mock_client.__aexit__ = AsyncMock(return_value=None)
+    mock_client.get = AsyncMock(return_value=api_v0)
+
+    with patch("code_scalpel.config.httpx.AsyncClient", return_value=mock_client):
+        result = await autodetect_context_tokens(profile)
+
+    assert result == 16384
+
+
+@pytest.mark.asyncio
+async def test_autodetect_falls_back_to_first_model() -> None:
+    """When no model id matches, use the first model's context length."""
+    profile = ModelProfile(provider="lmstudio", model="something-not-loaded")
+
+    resp = MagicMock()
+    resp.raise_for_status = MagicMock()
+    resp.json.return_value = {
+        "data": [
+            {"id": "actual-model", "loaded_context_length": 8192},
+            {"id": "other", "max_context_length": 4096},
+        ]
+    }
+
+    mock_client = AsyncMock()
+    mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+    mock_client.__aexit__ = AsyncMock(return_value=None)
+    mock_client.get = AsyncMock(return_value=resp)
+
+    with patch("code_scalpel.config.httpx.AsyncClient", return_value=mock_client):
+        result = await autodetect_context_tokens(profile)
+
+    assert result == 8192
+
+
+@pytest.mark.asyncio
+async def test_autodetect_falls_back_to_v1_when_v0_missing() -> None:
+    """If /api/v0/models 404s, try /v1/models (OpenAI compatible)."""
+    profile = ModelProfile(provider="lmstudio", model="x")
+
+    v0_resp = MagicMock()
+    v0_resp.raise_for_status = MagicMock(side_effect=Exception("404"))
+    v1_resp = MagicMock()
+    v1_resp.raise_for_status = MagicMock()
+    v1_resp.json.return_value = {"data": [{"id": "x", "context_length": 4096}]}
+
+    mock_client = AsyncMock()
+    mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+    mock_client.__aexit__ = AsyncMock(return_value=None)
+    mock_client.get = AsyncMock(side_effect=[v0_resp, v1_resp])
+
+    with patch("code_scalpel.config.httpx.AsyncClient", return_value=mock_client):
+        result = await autodetect_context_tokens(profile)
+
+    assert result == 4096
+
+
+@pytest.mark.asyncio
 async def test_autodetect_context_tokens_network_error() -> None:
     profile = ModelProfile(provider="lmstudio", model="qwen")
 

@@ -1605,17 +1605,33 @@ class Session:
 ```text
 ✓ TUI skeleton + цветовая схема (theme.tcss / styles.tcss)
 ✓ config loader (pydantic + YAML) + model profiles + автодетект context_tokens
-✓ LLM adapter: chat() + stream()
+  (LM Studio /api/v0/models → loaded_context_length, fallback на /v1/models)
+✓ LLM adapter: chat() + stream() — стрим токенов прокинут в TUI через Markdown.update()
 ✓ AsyncShellRunner + whitelist
-✓ list_files, read_file (pathspec + line numbers)
+✓ list_files (рекурсивно, исключает .gitignore + все скрытые .*/), read_file
 ✓ ripgrep search
-✓ git diff, status, apply, rollback
-✓ patch parser (unidiff) + validator + applier
+✓ git diff, status, apply, rollback (apply с --ignore-whitespace)
+✓ patch parser (unidiff) + validator + applier + hunk-header normalizer
+  (qwen2.5-coder часто врёт со счётчиками строк в @@ — нормализуем)
+✓ StepAgent.ask() + stream_ask() — стрим токенов
+  System prompt: identity (code-scalpel, не Claude/ChatGPT) +
+    разрешает текстовый ответ без diff + отвечает на языке юзера
+  Контекст: листинг ВСЕХ файлов (до 200), полное содержимое только первых N
 ✓ manual step: patch preview + apply (ToolCallCard: running/reviewing/done/error)
 ✓ run pytest
-✓ STATE.json (атомарная запись + step_phase + dirty_patch)
+✓ STATE.json (атомарная запись + step_phase + dirty_patch); дефолт context_limit = 16k
 ✓ Session stats + context indicator (бар + %)
-✓ tests/mocks.py + conftest.py
+✓ tests/mocks.py + conftest.py (включая stream())
+✓ TUI v0.1 finished:
+    • CLI принимает путь-песочницу: `code-scalpel tui /tmp/sandbox`
+    • OutputLog = VerticalScroll + spacer → чат растёт снизу вверх
+    • Markdown-рендер для ответов модели; margin между сообщениями
+    • ModeInput = `> ask` префикс + Input в одну строку, Rule сверху/снизу
+    • textual-autocomplete для слэш-команд (/new, /compact, /help, /mode *)
+      открывается вверх (_UpwardAutoComplete), описания в дропдауне
+    • ESC отменяет активный стриминг-воркер (без падений на CancelledError)
+✓ Тесты: stream_ask, autodetect (несколько эндпоинтов/полей),
+    list_files без .*, слэш-команды, ESC-отмена, focus, layout
 ```
 
 > UI язык: English only. i18n — см. v0.4.

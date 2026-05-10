@@ -103,3 +103,76 @@ async def test_ask_records_response_stats(project: Path) -> None:
     result = await agent.ask("do something")
 
     assert result.response.completion_tokens > 0
+
+
+@pytest.mark.asyncio
+async def test_context_lists_files_in_subdirs(tmp_path: Path) -> None:
+    """Subdirectory files must appear in the file listing — not only top-level."""
+    (tmp_path / "top.py").write_text("x")
+    (tmp_path / "pkg").mkdir()
+    (tmp_path / "pkg" / "deep.py").write_text("y")
+    (tmp_path / "pkg" / "sub").mkdir()
+    (tmp_path / "pkg" / "sub" / "deeper.py").write_text("z")
+
+    llm = MockLLMAdapter(["OK"])
+    agent = StepAgent(llm=llm, cwd=tmp_path, config=_CONFIG)
+
+    await agent.ask("do something")
+
+    user_content = llm.calls[0][1]["content"]
+    assert "top.py" in user_content
+    assert "pkg/deep.py" in user_content
+    assert "pkg/sub/deeper.py" in user_content
+
+
+@pytest.mark.asyncio
+async def test_stream_ask_yields_chunks(project: Path) -> None:
+    llm = MockLLMAdapter(["hello"])
+    agent = StepAgent(llm=llm, cwd=project, config=_CONFIG)
+
+    chunks = [c async for c in agent.stream_ask("greet me")]
+
+    assert "".join(chunks) == "hello"
+    # MockLLMAdapter.stream emits per-character, so we expect 5 chunks for "hello"
+    assert len(chunks) == 5
+
+
+@pytest.mark.asyncio
+async def test_stream_ask_builds_same_messages_as_ask(project: Path) -> None:
+    llm = MockLLMAdapter(["X", "X"])
+    agent = StepAgent(llm=llm, cwd=project, config=_CONFIG)
+
+    await agent.ask("first")
+    async for _ in agent.stream_ask("first"):
+        pass
+
+    # Both calls should produce identical message payloads
+    assert llm.calls[0] == llm.calls[1]
+
+
+@pytest.mark.asyncio
+async def test_system_prompt_allows_text_only_response() -> None:
+    """The v0.1 system prompt must permit plain-text replies (no forced diff)."""
+    from code_scalpel.agent import _SYSTEM_PROMPT
+
+    text = _SYSTEM_PROMPT.lower()
+    assert "plain text" in text or "no diff" in text
+
+
+@pytest.mark.asyncio
+async def test_system_prompt_mirrors_user_language() -> None:
+    """Model should reply in the user's language — important for weak local models."""
+    from code_scalpel.agent import _SYSTEM_PROMPT
+
+    text = _SYSTEM_PROMPT.lower()
+    assert "language" in text and ("same" in text or "user" in text)
+
+
+@pytest.mark.asyncio
+async def test_system_prompt_pins_identity() -> None:
+    """Prevent qwen-style identity hallucinations ('I am Claude/ChatGPT')."""
+    from code_scalpel.agent import _SYSTEM_PROMPT
+
+    text = _SYSTEM_PROMPT.lower()
+    assert "code-scalpel" in text
+    assert "anthropic" in text and "openai" in text  # explicitly denied

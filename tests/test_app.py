@@ -1,0 +1,147 @@
+"""Headless tests for ScalpelApp — slash commands, ESC cancellation, layout."""
+
+from __future__ import annotations
+
+import asyncio
+from collections.abc import AsyncIterator
+from pathlib import Path
+from typing import Any
+
+import pytest
+
+from code_scalpel.agent import StepAgent
+from code_scalpel.config import AgentConfig, AppConfig, ModelProfile
+from code_scalpel.llm.adapter import ChatResponse
+from code_scalpel.tui.app import ScalpelApp
+from code_scalpel.tui.widgets.input import ModeInput
+from code_scalpel.tui.widgets.output import OutputLog
+
+_CONFIG = AppConfig(
+    profiles={"local": ModelProfile(provider="lmstudio", model="local-model")},
+    agent=AgentConfig(max_files=0, max_file_lines=10),
+)
+
+
+class _StreamingMock:
+    """LLM mock with controllable stream pacing — lets tests interrupt mid-stream."""
+
+    def __init__(self, chunks: list[str], delay: float = 0.0) -> None:
+        self._chunks = chunks
+        self._delay = delay
+        self.calls: list[list[dict[str, str]]] = []
+
+    async def chat(self, messages: list[dict[str, str]], **kwargs: Any) -> ChatResponse:
+        self.calls.append(messages)
+        content = "".join(self._chunks)
+        return ChatResponse(content=content, prompt_tokens=0, completion_tokens=0, cost=None)
+
+    async def stream(self, messages: list[dict[str, str]], **kwargs: Any) -> AsyncIterator[str]:
+        self.calls.append(messages)
+        for chunk in self._chunks:
+            if self._delay:
+                await asyncio.sleep(self._delay)
+            yield chunk
+
+
+def _attach_mock(app: ScalpelApp, mock: _StreamingMock) -> None:
+    app._agent = StepAgent(llm=mock, cwd=app.cwd, config=app.config)
+
+
+@pytest.fixture
+def sandbox(tmp_path: Path) -> Path:
+    (tmp_path / "hello.py").write_text("x = 1\n")
+    return tmp_path
+
+
+@pytest.mark.asyncio
+async def test_app_starts_with_input_focused(sandbox: Path) -> None:
+    app = ScalpelApp(config=_CONFIG, cwd=sandbox)
+    async with app.run_test(headless=True, size=(80, 24)) as pilot:
+        await pilot.pause(0.1)
+        assert app.focused is not None
+        assert app.focused.__class__.__name__ == "Input"
+
+
+@pytest.mark.asyncio
+async def test_app_layout_has_separator_rules(sandbox: Path) -> None:
+    app = ScalpelApp(config=_CONFIG, cwd=sandbox)
+    async with app.run_test(headless=True, size=(80, 24)) as pilot:
+        await pilot.pause(0.1)
+        rules = list(app.query("Rule.input-rule"))
+        assert len(rules) == 2
+
+
+@pytest.mark.asyncio
+async def test_output_log_has_spacer_for_bottom_anchored_chat(sandbox: Path) -> None:
+    app = ScalpelApp(config=_CONFIG, cwd=sandbox)
+    async with app.run_test(headless=True, size=(80, 24)) as pilot:
+        await pilot.pause(0.1)
+        output = app.query_one(OutputLog)
+        spacers = [c for c in output.children if c.id == "_spacer"]
+        assert len(spacers) == 1
+
+
+@pytest.mark.asyncio
+async def test_slash_new_clears_chat(sandbox: Path) -> None:
+    app = ScalpelApp(config=_CONFIG, cwd=sandbox)
+    async with app.run_test(headless=True, size=(80, 24)) as pilot:
+        await pilot.pause(0.1)
+        _attach_mock(app, _StreamingMock(["hello"]))
+        output = app.query_one(OutputLog)
+
+        # post a regular message
+        app.post_message_no_wait_substitute = None  # type: ignore[attr-defined]
+        app._handle_slash("/help")  # appends a status line
+        await pilot.pause(0.1)
+        assert len([c for c in output.children if c.id != "_spacer"]) >= 1
+
+        app._handle_slash("/new")
+        await pilot.pause(0.1)
+        # /new wipes everything but the spacer
+        assert [c.id for c in output.children] == ["_spacer"]
+
+
+@pytest.mark.asyncio
+async def test_slash_mode_switches_mode(sandbox: Path) -> None:
+    app = ScalpelApp(config=_CONFIG, cwd=sandbox)
+    async with app.run_test(headless=True, size=(80, 24)) as pilot:
+        await pilot.pause(0.1)
+        assert app.query_one(ModeInput).mode == "ask"
+        app._handle_slash("/mode plan")
+        await pilot.pause(0.05)
+        assert app.query_one(ModeInput).mode == "plan"
+
+
+@pytest.mark.asyncio
+async def test_slash_help_lists_commands(sandbox: Path) -> None:
+    app = ScalpelApp(config=_CONFIG, cwd=sandbox)
+    async with app.run_test(headless=True, size=(80, 24)) as pilot:
+        await pilot.pause(0.1)
+        output = app.query_one(OutputLog)
+        before = len(list(output.children))
+        app._handle_slash("/help")
+        await pilot.pause(0.1)
+        # one new Static appears with the commands listing
+        assert len(list(output.children)) == before + 1
+
+
+@pytest.mark.asyncio
+async def test_escape_cancels_streaming_worker(sandbox: Path) -> None:
+    app = ScalpelApp(config=_CONFIG, cwd=sandbox)
+    # 50 small chunks with a tiny delay each → roughly 100ms total
+    mock = _StreamingMock(["x"] * 50, delay=0.002)
+    async with app.run_test(headless=True, size=(80, 24)) as pilot:
+        await pilot.pause(0.1)
+        _attach_mock(app, mock)
+
+        # trigger a streaming response via the message channel
+        from code_scalpel.tui.widgets.input import UserMessage
+
+        app.post_message(UserMessage("hi"))
+        await pilot.pause(0.05)  # let a few chunks stream
+        await pilot.press("escape")
+        await pilot.pause(0.2)
+
+        worker = getattr(app, "_step_worker", None)
+        assert worker is not None
+        assert worker.is_cancelled or worker.is_finished

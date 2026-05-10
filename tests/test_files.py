@@ -43,6 +43,21 @@ def test_list_files_excludes_git_dir(tmp_path: Path) -> None:
     assert "main.py" in names
 
 
+def test_list_files_excludes_hidden_dirs(tmp_path: Path) -> None:
+    """Hidden directories like .claude/ or .vscode/ must not leak into context."""
+    (tmp_path / ".claude").mkdir()
+    (tmp_path / ".claude" / "settings.json").write_text("{}")
+    (tmp_path / ".vscode").mkdir()
+    (tmp_path / ".vscode" / "tasks.json").write_text("{}")
+    (tmp_path / "main.py").write_text("x")
+
+    files = list_files(tmp_path)
+    names = [str(f) for f in files]
+    assert not any(".claude" in n for n in names)
+    assert not any(".vscode" in n for n in names)
+    assert "main.py" in names
+
+
 def test_list_files_max_files(tmp_path: Path) -> None:
     for i in range(10):
         (tmp_path / f"f{i}.py").write_text("x")
