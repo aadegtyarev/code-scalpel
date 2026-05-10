@@ -6,6 +6,15 @@ from datetime import UTC, datetime
 from code_scalpel.llm.adapter import ChatResponse
 
 
+def _detect_language(text: str) -> str:
+    """Heuristic: any Cyrillic = Russian; otherwise English. Sufficient for
+    the local-coder use case where the user picks one and sticks with it."""
+    for ch in text:
+        if "Ѐ" <= ch <= "ӿ":
+            return "Russian"
+    return "English"
+
+
 @dataclass
 class Session:
     total_prompt_tokens: int = 0
@@ -13,6 +22,7 @@ class Session:
     total_cost: float = 0.0
     requests: int = 0
     started_at: datetime = field(default_factory=lambda: datetime.now(UTC))
+    user_language: str | None = None  # auto-detected from first user message
 
     def record(self, response: ChatResponse) -> None:
         self.total_prompt_tokens += response.prompt_tokens
@@ -34,6 +44,12 @@ class Session:
         if pct >= warn:
             return f"[yellow]{label}[/yellow]"
         return label
+
+    def detect_and_pin_language(self, text: str) -> str:
+        """Set user_language from the given text if not already set; return it."""
+        if self.user_language is None:
+            self.user_language = _detect_language(text)
+        return self.user_language
 
     def summary_line(self) -> str:
         """One-line stats for footer: tokens · cost · elapsed."""

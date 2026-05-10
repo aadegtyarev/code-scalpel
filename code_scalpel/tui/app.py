@@ -9,7 +9,7 @@ from textual.geometry import Offset, Region, Spacing
 from textual.widgets import Markdown, Rule
 from textual_autocomplete import AutoComplete, DropdownItem
 
-from code_scalpel.agent import StepAgent
+from code_scalpel.agent import StepAgent, TextDelta, ToolExecuted
 from code_scalpel.config import AppConfig, autodetect_context_tokens
 from code_scalpel.llm.adapter import ChatResponse, OpenAICompatibleAdapter
 from code_scalpel.patch.edit_block import Edit, apply_edits, edits_to_diff, extract_edits
@@ -122,6 +122,7 @@ class ScalpelApp(App[None]):
         mode = self._AGENT_MODES[self._mode_index]
         output = self.query_one(OutputLog)
         output.print_user(f"{mode} › {message.text}")
+        self.session.detect_and_pin_language(message.text)
 
         if message.text.startswith("/"):
             self._handle_slash(message.text.strip())
@@ -132,7 +133,8 @@ class ScalpelApp(App[None]):
             return
 
         self.query_one(StatusFooter).status = "◌ thinking…"
-        text = message.text
+        lang = self.session.user_language or "English"
+        text = f"{message.text}\n\n(Reply in {lang}.)"
         # Defer worker until after refresh so the user message lands first
         self.call_after_refresh(
             lambda: setattr(
@@ -189,18 +191,27 @@ class ScalpelApp(App[None]):
             chunks = 0
             start = time.monotonic()
             last_tick = start
-            async for chunk in self._agent.stream_ask(task):
-                full += chunk
-                chunks += 1
-                md.update(full)
-                output.scroll_end(animate=False)
-                now = time.monotonic()
-                if now - last_tick > 0.25:
-                    elapsed = now - start
-                    if elapsed > 0.1:
-                        rate = chunks / elapsed
-                        footer.status = f"◌ streaming · {rate:.0f} tok/s"
-                    last_tick = now
+            async for item in self._agent.stream_ask(task):
+                if isinstance(item, TextDelta):
+                    full += item.text
+                    chunks += 1
+                    md.update(full)
+                    output.scroll_end(animate=False)
+                    now = time.monotonic()
+                    if now - last_tick > 0.25:
+                        elapsed = now - start
+                        if elapsed > 0.1:
+                            rate = chunks / elapsed
+                            footer.status = f"◌ streaming · {rate:.0f} tok/s"
+                        last_tick = now
+                elif isinstance(item, ToolExecuted):
+                    # Hide the empty Markdown widget that wrapped the tool-call
+                    # text (model wrote <TOOL: ...> only) — replace with a card.
+                    await md.remove()
+                    output.add_tool_use(item.call, item.result)
+                    full = ""
+                    md = output.print_assistant("")
+                    await self._wait_mounted(md)
 
             total_elapsed = time.monotonic() - start
             self._last_stream_rate = chunks / total_elapsed if total_elapsed > 0 else 0.0
@@ -297,7 +308,7 @@ class ScalpelApp(App[None]):
     def _update_footer(self) -> None:
         footer = self.query_one(StatusFooter)
         limit = self.state.context_limit
-        footer.hints = "[tab] · [ctrl+q] quit"
+        footer.hints = r"\[tab] cycle mode · \[ctrl+q] quit"
         footer.ctx = f"0k/{limit // 1000}k"
 
     def _update_ctx(self) -> None:

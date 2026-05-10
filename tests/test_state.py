@@ -61,6 +61,27 @@ def test_save_updates_last_saved_at(tmp_path: Path) -> None:
 # --- Session ---
 
 
+def test_detect_language_russian() -> None:
+    s = Session()
+    assert s.detect_and_pin_language("привет, как дела?") == "Russian"
+    assert s.user_language == "Russian"
+
+
+def test_detect_language_english() -> None:
+    s = Session()
+    assert s.detect_and_pin_language("add type hints please") == "English"
+    assert s.user_language == "English"
+
+
+def test_detect_language_pins_on_first_call() -> None:
+    """Once detected, language is sticky for the session lifetime."""
+    s = Session()
+    s.detect_and_pin_language("привет")
+    # Even if user types something English afterward, pinned value stays
+    s.detect_and_pin_language("ok")
+    assert s.user_language == "Russian"
+
+
 def test_session_record() -> None:
     sess = Session()
     resp = ChatResponse(content="hi", prompt_tokens=100, completion_tokens=50, cost=0.01)

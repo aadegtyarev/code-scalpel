@@ -103,6 +103,66 @@ async def test_read_file_missing_path_arg(tmp_path: Path) -> None:
     assert "missing" in result.output
 
 
+# ── execution: grep ──────────────────────────────────────────────────────────
+
+
+_HAS_RG = pytest.mark.skipif(
+    __import__("shutil").which("rg") is None,
+    reason="ripgrep (rg) not installed",
+)
+
+
+@_HAS_RG
+@pytest.mark.asyncio
+async def test_grep_finds_pattern(tmp_path: Path) -> None:
+    (tmp_path / "a.py").write_text("def needle(): pass\n")
+    (tmp_path / "b.py").write_text("def haystack(): pass\n")
+    call = ToolCall(name="grep", body="needle")
+    result = await execute(call, tmp_path)
+    assert result.ok
+    assert "a.py" in result.output
+    assert "needle" in result.output
+
+
+@pytest.mark.asyncio
+async def test_grep_missing_pattern(tmp_path: Path) -> None:
+    call = ToolCall(name="grep", body="")
+    result = await execute(call, tmp_path)
+    assert not result.ok
+    assert "missing pattern" in result.output
+
+
+@_HAS_RG
+@pytest.mark.asyncio
+async def test_grep_rejects_parent_path(tmp_path: Path) -> None:
+    call = ToolCall(name="grep", body="x\n../secrets")
+    result = await execute(call, tmp_path)
+    assert not result.ok
+    assert "inside project" in result.output
+
+
+# ── execution: run_tests ─────────────────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_run_tests_passes_when_clean(tmp_path: Path) -> None:
+    (tmp_path / "test_x.py").write_text("def test_a(): assert 1 == 1\n")
+    call = ToolCall(name="run_tests", body="")
+    result = await execute(call, tmp_path)
+    assert result.ok
+    assert "exit code: 0" in result.output
+
+
+@pytest.mark.asyncio
+async def test_run_tests_reports_failure(tmp_path: Path) -> None:
+    (tmp_path / "test_x.py").write_text("def test_a(): assert 1 == 2\n")
+    call = ToolCall(name="run_tests", body="")
+    result = await execute(call, tmp_path)
+    assert not result.ok
+    assert "exit code:" in result.output
+    assert "1" in result.output  # non-zero exit code
+
+
 @pytest.mark.asyncio
 async def test_unknown_tool_returns_error(tmp_path: Path) -> None:
     call = ToolCall(name="evaluate", body="any")

@@ -25,7 +25,8 @@ class ModeInput(Widget):
     ModeInput #prompt {
         width: auto;
         height: 1;
-        color: #3d6b72;
+        color: #a0c8d0;
+        text-style: bold;
         padding: 0 0 0 1;
         background: #1a1a1a;
     }

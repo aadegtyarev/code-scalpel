@@ -167,13 +167,16 @@ async def test_ask_handles_tool_call_loop(project: Path) -> None:
 
 @pytest.mark.asyncio
 async def test_stream_ask_yields_chunks(project: Path) -> None:
+    from code_scalpel.agent import TextDelta
+
     llm = MockLLMAdapter(["hello"])
     agent = StepAgent(llm=llm, cwd=project, config=_CONFIG)
 
-    chunks = [c async for c in agent.stream_ask("greet me")]
+    items = [c async for c in agent.stream_ask("greet me")]
+    text_items = [c for c in items if isinstance(c, TextDelta)]
 
-    assert "".join(chunks) == "hello"
-    assert len(chunks) == 5  # per-character stream
+    assert "".join(c.text for c in text_items) == "hello"
+    assert len(text_items) == 5  # per-character stream
 
 
 @pytest.mark.asyncio

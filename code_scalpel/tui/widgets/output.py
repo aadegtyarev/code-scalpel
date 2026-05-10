@@ -5,6 +5,9 @@ from textual.containers import VerticalScroll
 from textual.widget import Widget
 from textual.widgets import Markdown, Static
 
+from code_scalpel.tools.agent_tools import ToolCall, ToolResult
+from code_scalpel.tui.widgets.tool_use import ToolUseCard
+
 
 class OutputLog(VerticalScroll):
     """Output stream: messages mount at bottom and grow upward as more are added."""
@@ -15,8 +18,13 @@ class OutputLog(VerticalScroll):
         background: #0f0f0f;
         border: none;
         padding: 0 1;
-        scrollbar-color: #3a3a3a;
+        scrollbar-size-vertical: 1;
+        scrollbar-color: #2a2a2a;
+        scrollbar-color-hover: #404040;
+        scrollbar-color-active: #505050;
         scrollbar-background: #0f0f0f;
+        scrollbar-background-hover: #0f0f0f;
+        scrollbar-background-active: #0f0f0f;
     }
     OutputLog > #_spacer {
         height: 1fr;
@@ -38,7 +46,7 @@ class OutputLog(VerticalScroll):
     OutputLog Static.msg-error {
         height: auto;
         margin: 1 0 0 0;
-        color: #ff5555;
+        color: #bf6060;
         background: #0f0f0f;
     }
     OutputLog Markdown {
@@ -73,3 +81,6 @@ class OutputLog(VerticalScroll):
 
     def print_error(self, text: str) -> None:
         self.run_worker(self._append(Static(text, classes="msg-error")), exclusive=False)
+
+    def add_tool_use(self, call: ToolCall, result: ToolResult) -> None:
+        self.run_worker(self._append(ToolUseCard(call, result)), exclusive=False)

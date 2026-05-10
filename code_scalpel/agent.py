@@ -8,7 +8,13 @@ from code_scalpel.config import AppConfig
 from code_scalpel.llm.adapter import ChatResponse, LLMAdapter
 from code_scalpel.patch.edit_block import Edit, extract_edits
 from code_scalpel.project_map import build_map
-from code_scalpel.tools.agent_tools import ToolCall, execute, format_result, parse_tool_calls
+from code_scalpel.tools.agent_tools import (
+    ToolCall,
+    ToolResult,
+    execute,
+    format_result,
+    parse_tool_calls,
+)
 
 _MAX_TOOL_ROUNDS = 6
 
@@ -19,27 +25,21 @@ by Anthropic, OpenAI, or any other vendor.
 
 Always reply in the same natural language the user used in their last message.
 
-You can read project files on demand using this tool format:
+You can read project files on demand. Pick a real path from the project map
+(NOT the placeholder shown below):
 
     <TOOL: read_file>
-    relative/path/to/file.py
+    {actual path from the map}
     </TOOL>
 
-The system will reply with:
+The system will reply with a <RESULT: read_file> block containing the file
+with line numbers. Always call read_file before editing a file you haven't
+already inspected — the project map only shows symbols, not full content.
 
-    <RESULT: read_file>
-    path: relative/path/to/file.py
-    ---
-    <file content with line numbers>
-    </RESULT>
+To modify a file, output one or more SEARCH/REPLACE blocks (path is also a
+real path, not a placeholder):
 
-The user message contains a compact MAP of the project (paths + top-level
-symbols) but NOT the full content. Before editing a file, call read_file to
-see its current text.
-
-To modify a file, output one or more SEARCH/REPLACE blocks. Format:
-
-    path/to/file.py
+    {actual path from the map}
     ```python
     <<<<<<< SEARCH
     <lines that currently exist in the file, EXACTLY>
@@ -99,6 +99,25 @@ class StepResult:
         return self.edits if self.edits else None
 
 
+@dataclass(frozen=True)
+class TextDelta:
+    """Streaming chunk of model text, character/token-level."""
+
+    text: str
+
+
+@dataclass(frozen=True)
+class ToolExecuted:
+    """A tool call the model emitted, paired with its result. Yielded once
+    per call after we've executed it."""
+
+    call: ToolCall
+    result: ToolResult
+
+
+StreamItem = TextDelta | ToolExecuted
+
+
 class StepAgent:
     """Multi-turn agent: model can call read_file, then produces SEARCH/REPLACE."""
 
@@ -128,9 +147,9 @@ class StepAgent:
         edits = extract_edits(response.content)
         return StepResult(reply=response.content, edits=edits, response=response)
 
-    async def stream_ask(self, task: str) -> AsyncIterator[str]:
-        """Stream the model's tokens. Tool calls execute mid-loop; results are
-        yielded as text chunks so the TUI can render them inline."""
+    async def stream_ask(self, task: str) -> AsyncIterator[StreamItem]:
+        """Yield typed events: TextDelta for model output chunks, ToolExecuted
+        after each tool call resolves. The TUI dispatches per-type."""
         messages = self._initial_messages(task)
         profile = self._config.current_profile
 
@@ -138,15 +157,19 @@ class StepAgent:
             full = ""
             async for chunk in self._llm.stream(messages, **profile.inference_kwargs()):
                 full += chunk
-                yield chunk
+                yield TextDelta(chunk)
             messages.append({"role": "assistant", "content": full})
 
             calls = parse_tool_calls(full)
             if not calls:
                 return
 
-            tool_msg = await self._run_tools(calls)
-            yield f"\n\n{tool_msg}\n\n"
+            results: list[ToolResult] = []
+            for call in calls:
+                result = await execute(call, self._cwd, max_lines=self._config.agent.max_file_lines)
+                results.append(result)
+                yield ToolExecuted(call, result)
+            tool_msg = "\n\n".join(format_result(r) for r in results)
             messages.append({"role": "user", "content": tool_msg})
 
     async def _run_tools(self, calls: list[ToolCall]) -> str:
