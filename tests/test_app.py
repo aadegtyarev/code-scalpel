@@ -126,6 +126,21 @@ async def test_slash_help_lists_commands(sandbox: Path) -> None:
 
 
 @pytest.mark.asyncio
+async def test_slash_command_does_not_pin_language(sandbox: Path) -> None:
+    """Slash commands like '/mode plan' are not natural-language input.
+    Detecting language from them would pin English even if the user is
+    typing Russian for the actual conversation."""
+    from code_scalpel.tui.widgets.input import UserMessage
+
+    app = ScalpelApp(config=_CONFIG, cwd=sandbox)
+    async with app.run_test(headless=True, size=(80, 24)) as pilot:
+        await pilot.pause(0.1)
+        app.post_message(UserMessage("/mode plan"))
+        await pilot.pause(0.1)
+        assert app.session.user_language is None
+
+
+@pytest.mark.asyncio
 async def test_escape_cancels_streaming_worker(sandbox: Path) -> None:
     app = ScalpelApp(config=_CONFIG, cwd=sandbox)
     # 50 small chunks with a tiny delay each → roughly 100ms total

@@ -122,7 +122,8 @@ class ScalpelApp(App[None]):
         mode = self._AGENT_MODES[self._mode_index]
         output = self.query_one(OutputLog)
         output.print_user(f"{mode} › {message.text}")
-        self.session.detect_and_pin_language(message.text)
+        if not message.text.startswith("/"):
+            self.session.detect_and_pin_language(message.text)
 
         if message.text.startswith("/"):
             self._handle_slash(message.text.strip())
