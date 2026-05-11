@@ -1729,6 +1729,14 @@ v0.3 hooks captured in v0.2 (см. ниже):
 ### v0.3
 
 ```text
+enforce-read-before-show (HOOK): qwen-coder-14b в простых кейсах (например
+  dataclass с предсказуемыми полями) дампит «код метода» из обучения мимо
+  read_file даже с явным правилом в промте. Тест помечен xfail в
+  `test_qwen_reads_file_even_for_vague_show_code`. Два пути закрытия:
+  (1) post-hoc enforcement — если ответ содержит fenced python без
+  предшествующего read_file в этой/прошлых turn, отклоняем и просим
+  модель сначала прочитать файл; (2) переход на gemma-4 (24/24 на бенче
+  vs coder-14b 23/24), где правило соблюдается лучше из коробки.
 context indicator semantics (HOOK): сейчас footer показывает
   «накоплено с последнего /compact» через compact_baseline. Это лучше
   кумулятива, но не идеал — настоящее «сколько весит следующий промт»

@@ -43,15 +43,31 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
         "function": {
             "name": "read_file",
             "description": (
-                "Read a project file in full. Returns the file content with line "
-                "numbers. Use before producing SEARCH/REPLACE blocks for that file."
+                "Read a project file in full. Returns the file content with "
+                "line numbers. You MUST call this in any of these cases:\n"
+                "(1) Before producing a SEARCH/REPLACE block for that file — "
+                "your SEARCH text has to match the file character-for-"
+                "character including the body, and the MAP doesn't show "
+                "bodies. Using a MAP signature as SEARCH text will fail.\n"
+                "(2) The user asks you to SHOW, QUOTE, or DISPLAY a function/"
+                "method body, or a file's content.\n"
+                "(3) You're about to claim a fact about what a method does, "
+                "what its arguments look like, or what fields a class has — "
+                "anything beyond the top-level signature listed in the MAP.\n"
+                "The MAP contains signatures only — no function bodies, no "
+                "field defaults, no decorators. Recognising a familiar "
+                "pattern (dataclass, BaseModel) is NOT a substitute for "
+                "this tool."
             ),
             "parameters": {
                 "type": "object",
                 "properties": {
                     "path": {
                         "type": "string",
-                        "description": "Relative path from the project root.",
+                        "description": (
+                            "Relative path from the project root, exactly as "
+                            "it appears in the MAP. No leading 'path/' prefix."
+                        ),
                     }
                 },
                 "required": ["path"],
@@ -64,7 +80,10 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
             "name": "grep",
             "description": (
                 "Search the project (or a subdirectory) for a regex pattern. "
-                "Returns up to 30 matching lines."
+                "Returns up to 30 matching lines. Call this whenever the user "
+                "asks WHERE / FIND / IS THERE something, or before answering "
+                "a 'does X exist' question. Prefer grep over read_file when "
+                "you don't yet know which file holds the symbol."
             ),
             "parameters": {
                 "type": "object",

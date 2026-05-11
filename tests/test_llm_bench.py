@@ -596,6 +596,8 @@ _ADMITS_MISSING = (
     "не нашел",
     "не указан",
     "не указано",
+    "не виден",  # «не виден в карте проекта»
+    "не видно",
     "не в map",
     "not in the map",
     "not listed",
@@ -686,6 +688,56 @@ async def test_qwen_does_not_invent_class_method_from_intent(tmp_path: Path) -> 
         assert _admits_missing(result.reply), (
             f"model invented {invented} without flagging it as missing:\n{result.reply[:600]}"
         )
+
+
+@pytest.mark.llm
+async def test_qwen_reads_file_even_for_vague_show_code(tmp_path: Path) -> None:
+    """Direct repro of the 2026-05-11 turn-2/3 issue: user says «покажи код»
+    with no file/symbol named. Model must NOT dump a body it pattern-matched
+    from training data — it has to call read_file (or ask which file). The
+    earlier bench case used an explicit file name; this one uses a familiar
+    pattern (dataclass with predictable field declarations) that qwen is
+    tempted to reproduce from prior."""
+    import textwrap
+
+    (tmp_path / "session.py").write_text(
+        textwrap.dedent("""\
+            from dataclasses import dataclass
+
+
+            @dataclass
+            class Session:
+                total_prompt_tokens: int = 0
+                total_completion_tokens: int = 0
+
+                def record(self, response):
+                    self.total_prompt_tokens += response.prompt_tokens
+
+                def mark_compacted(self) -> None:
+                    pass
+        """)
+    )
+    agent = _make_agent(tmp_path)
+
+    # Prime turn 1 so the agent has some history but no file content yet.
+    await agent.ask("какие классы есть в проекте?")
+
+    real_chat = agent._llm.chat
+    tools_seen: list[str] = []
+
+    async def spy(messages: list[dict[str, object]], **kw: object) -> object:
+        resp = await real_chat(messages, **kw)  # type: ignore[arg-type]
+        for tc in resp.tool_calls:
+            tools_seen.append(tc.name)
+        return resp
+
+    agent._llm.chat = spy  # type: ignore[assignment]
+
+    result = await agent.ask("покажи код метода")
+    assert any(t in tools_seen for t in ("read_file", "grep")), (
+        f"model produced a reply to vague 'покажи код' without reading a "
+        f"file. reply:\n{result.reply[:600]}\ntools: {tools_seen}"
+    )
 
 
 @pytest.mark.llm

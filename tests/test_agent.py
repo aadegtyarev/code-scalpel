@@ -500,7 +500,10 @@ async def test_system_prompt_carries_grounding_rules() -> None:
     assert "verify" in text or "does not exist" in text
     # Anti-confabulation rule: similar names don't justify invention
     assert "mark_compacted" in text and "compact" in text
-    # Calling read_file before quoting code is explicit
-    assert "read_file" in text and ("quote" in text or "show" in text)
-    # And don't reconstruct from memory
-    assert "memory" in text or "guess" in text
+    # Tool descriptions are normative — prompt must direct the model to read
+    # them rather than restating the same rules in a competing voice.
+    assert "tool" in text and ("description" in text or "normative" in text)
+    # Pattern recognition is explicitly rejected as a source of truth.
+    assert "pattern recognition" in text or "you might" in text
+    # And the dataclass anti-example is in (covers the screenshot bug shape).
+    assert "dataclass" in text
