@@ -469,6 +469,16 @@ class ScalpelApp(App[None]):
                 card.set_reviewing(edits_to_diff(edits, self.cwd))
                 self._pending_edits = edits
                 footer.status = "● reviewing"
+            elif mode == "plan" and "## T" in full:
+                # Plan mode delivered a structured plan. The natural-language
+                # reply stays as Markdown; we add an inline PlanCard right
+                # after, expanded by default, so the user can pick a task by
+                # eye instead of re-reading the markdown.
+                from code_scalpel.tui.widgets.plan_card import PlanCard
+
+                plan_card = PlanCard.from_tasks_md(full)
+                output.run_worker(output._append(plan_card), exclusive=False)
+                footer.status = "● idle"
             else:
                 footer.status = "● idle"
         except asyncio.CancelledError:

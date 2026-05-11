@@ -298,6 +298,62 @@ def test_format_turn_summary_drops_zero_fields() -> None:
 
 
 @pytest.mark.asyncio
+async def test_plan_card_mounts_after_plan_mode_turn(sandbox: Path) -> None:
+    """When plan mode replies with a structured plan (## T###: ...), the
+    PlanCard widget is auto-mounted right after the markdown reply so the
+    user can scan tasks visually without re-reading the prose."""
+    from code_scalpel.tui.widgets.input import UserMessage
+    from code_scalpel.tui.widgets.plan_card import PlanCard
+
+    plan_reply = (
+        "Here's the plan:\n\n"
+        "## T001: First task\n\n"
+        "Goal: do thing\n"
+        "Files: a.py\n"
+        "Acceptance:\n"
+        "- works\n"
+        "Test command: pytest a\n\n"
+        "## T002: Second task\n\n"
+        "Goal: do another\n"
+        "Files: b.py\n"
+        "Acceptance:\n"
+        "- works\n"
+        "Test command: pytest b\n"
+    )
+    app = ScalpelApp(config=_CONFIG, cwd=sandbox)
+    mock = _StreamingMock([plan_reply])
+    async with app.run_test(headless=True, size=(80, 24)) as pilot:
+        await pilot.pause(0.1)
+        _attach_mock(app, mock)
+        app._handle_slash("/mode plan")
+        await pilot.pause(0.05)
+        app.post_message(UserMessage("plan it"))
+        await pilot.pause(0.5)
+        cards = list(app.query(PlanCard))
+        assert cards, "expected PlanCard to be mounted after plan-mode turn"
+        assert len(cards[0].tasks) == 2
+
+
+@pytest.mark.asyncio
+async def test_plan_card_not_mounted_in_non_plan_modes(sandbox: Path) -> None:
+    """Same plan-shape reply but mode=ask → no PlanCard. The card is
+    plan-mode-specific so other modes don't accidentally summon it."""
+    from code_scalpel.tui.widgets.input import UserMessage
+    from code_scalpel.tui.widgets.plan_card import PlanCard
+
+    plan_reply = "## T001: x\n\nGoal: y\nFiles: a.py\nAcceptance:\n- ok\nTest command: pytest\n"
+    app = ScalpelApp(config=_CONFIG, cwd=sandbox)
+    mock = _StreamingMock([plan_reply])
+    async with app.run_test(headless=True, size=(80, 24)) as pilot:
+        await pilot.pause(0.1)
+        _attach_mock(app, mock)
+        # Stay in ask mode
+        app.post_message(UserMessage("question"))
+        await pilot.pause(0.5)
+        assert not list(app.query(PlanCard))
+
+
+@pytest.mark.asyncio
 async def test_inline_turn_summary_appears_after_turn(sandbox: Path) -> None:
     """Every completed turn drops a dim summary line into the chat with
     duration/ctx. When no tools were called the tool field is just
