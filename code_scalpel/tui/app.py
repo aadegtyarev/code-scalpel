@@ -54,6 +54,7 @@ _SLASH_COMMANDS: list[tuple[str, str]] = [
     ("/map", "show the project map the model receives each turn"),
     ("/tasks", "show the current plan from .code-scalpel/TASKS.md"),
     ("/stats", "show this session's token/cost/timing stats"),
+    ("/context", "breakdown of context budget by category"),
     ("/remember", "save a project note (e.g. /remember always run linter)"),
     ("/recall", "browse stored notes; with text — search them"),
     ("/loop", "toggle code-mode iterative patch loop (apply → test → retry)"),
@@ -72,16 +73,14 @@ def _format_turn_summary(
     rate: float,
     completion_tokens: int,
     duration: float,
-    ctx_used: int,
-    ctx_limit: int,
 ) -> str:
-    """One-line summary printed inline after each turn — Claude-Code style.
-    Replaces the old footer overload; the footer only carries state now.
+    """One-line summary printed inline after each turn.
 
-    Tool count is shown only when tools were actually called — the inline
-    tool cards above already make their absence obvious, no need for a
-    separate warning. Tokens / rate / duration / ctx round out the cost
-    picture without dragging the user back to the bottom of the screen."""
+    Ctx usage moved to the footer (continuous state, every keystroke
+    moves it — not just turns). Turn summary keeps the per-turn cost
+    picture: how many tools were invoked, how many tokens came back,
+    at what rate, how long it took. Tool count is omitted when zero
+    so a zero-tool reply doesn't carry a misleading "0 tools" badge."""
     parts: list[str] = []
     if tool_calls > 0:
         noun = "tool" if tool_calls == 1 else "tools"
@@ -92,9 +91,6 @@ def _format_turn_summary(
         parts.append(f"{rate:.0f} tok/s")
     if duration > 0:
         parts.append(f"{duration:.1f}s")
-    if ctx_limit:
-        pct = ctx_used / ctx_limit * 100
-        parts.append(f"ctx {ctx_used // 1000}k/{ctx_limit // 1000}k ({pct:.0f}%)")
     return "⤷ " + " · ".join(parts)
 
 
@@ -301,6 +297,53 @@ class ScalpelApp(App[None]):
         call = ToolCall(name="tasks_md", body="")
         result = ToolResult(call=call, output=text, ok=True)
         output.add_tool_use(call, result)
+        self._last_tool_result = result
+
+    async def _do_context_worker(self) -> None:
+        with self.jobs.track("context", "Building context report"):
+            await asyncio.get_running_loop().run_in_executor(None, self._do_context)
+
+    def _do_context(self) -> None:
+        """Render a context-budget breakdown by category. Reads the same
+        building blocks the agent would send on the next turn (system
+        prompt, tools schema, overview, history) so the user sees
+        ground-truth, not a guess from session counters."""
+        import json
+
+        from code_scalpel.agent import _PLAN_MODE_ADDENDUM, _SYSTEM_PROMPT
+        from code_scalpel.context_report import build
+        from code_scalpel.project_map import build_map_overview
+        from code_scalpel.tools.agent_tools import TOOL_SCHEMAS
+
+        output = self.query_one(OutputLog)
+        model = self.config.current_profile.model
+        mode = self._AGENT_MODES[self._mode_index]
+        system = _SYSTEM_PROMPT + (_PLAN_MODE_ADDENDUM if mode == "plan" else "")
+        try:
+            overview = build_map_overview(self.cwd, max_files=200)
+        except Exception:
+            overview = ""
+        tools_text = json.dumps(TOOL_SCHEMAS)
+        # Stringify history as the model sees it — role + content per
+        # row joined; this is the same approximation used everywhere
+        # else and matches what session.context_used_tokens estimates.
+        history = ""
+        if self._agent is not None:
+            history = "\n".join(
+                f"{m.get('role', '')}: {m.get('content', '')}" for m in self._agent.history
+            )
+        report = build(
+            model=model,
+            ctx_limit=self.state.context_limit,
+            system_prompt=system,
+            tools_schema_text=tools_text,
+            overview_text=overview,
+            recall_text="",
+            history_text=history,
+        )
+        call = ToolCall(name="context_report", body="")
+        result = ToolResult(call=call, output=report.render(), ok=True)
+        output.add_tool_use(call, result, full=True)
         self._last_tool_result = result
 
     def _do_stats(self) -> None:
@@ -526,6 +569,12 @@ class ScalpelApp(App[None]):
             # Pure in-memory render — no I/O, no need for a worker.
             self._do_stats()
             return
+        if cmd == "/context":
+            # Touches build_map_overview which walks the project; for
+            # tiny repos it's instant, but route through a worker so
+            # /context on a large tree doesn't freeze the UI.
+            self.run_worker(self._do_context_worker(), exclusive=False, group="context")
+            return
         if cmd == "/remember" or cmd.startswith("/remember "):
             self._do_remember(cmd.removeprefix("/remember"))
             return
@@ -656,8 +705,6 @@ class ScalpelApp(App[None]):
                 rate=self._last_stream_rate,
                 completion_tokens=len(full) // 4,
                 duration=total_elapsed,
-                ctx_used=self.session.context_used_tokens,
-                ctx_limit=self.state.context_limit,
             )
             output.print_turn_summary(summary)
 
@@ -1014,8 +1061,6 @@ class ScalpelApp(App[None]):
             rate=0.0,
             completion_tokens=len(reply) // 4,
             duration=duration,
-            ctx_used=self.session.context_used_tokens,
-            ctx_limit=self.state.context_limit,
         )
         self.query_one(OutputLog).print_turn_summary(summary)
 
@@ -1122,7 +1167,16 @@ class ScalpelApp(App[None]):
         footer.hints = r"\[ctrl+t] cycle mode · \[ctrl+q] quit"
 
     def _update_ctx(self) -> None:
-        """No-op kept for callsite compatibility — context usage is shown in
-        the inline turn summary instead of the footer now. Callers like
-        /compact still invoke it; we no longer touch the footer."""
-        return
+        """Refresh the footer's ctx segment from the current Session +
+        state.context_limit. Inline turn summary stops carrying ctx
+        because the same number sat in two places and drifted on
+        every /compact. Footer is continuous state — typing moves
+        the bar, not just turn boundaries."""
+        footer = self.query_one(StatusFooter)
+        used = self.session.context_used_tokens
+        limit = self.state.context_limit
+        if not limit:
+            footer.ctx = ""
+            return
+        pct = used / limit * 100
+        footer.ctx = f"{used // 1000}k/{limit // 1000}k ({pct:.0f}%)"

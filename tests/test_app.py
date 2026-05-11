@@ -255,8 +255,6 @@ def test_format_turn_summary_omits_tools_field_when_zero() -> None:
         rate=5.4,
         completion_tokens=234,
         duration=1.4,
-        ctx_used=1024,
-        ctx_limit=16384,
     )
     assert "tools" not in out
     assert "no tools used" not in out
@@ -265,7 +263,8 @@ def test_format_turn_summary_omits_tools_field_when_zero() -> None:
     assert "↓ 234 tokens" in out
     assert "5 tok/s" in out
     assert "1.4s" in out
-    assert "ctx 1k/16k" in out
+    # Ctx lives in the footer now, not the inline turn summary.
+    assert "ctx" not in out
     # No dim wrapper — colour comes from the msg-summary CSS class.
     assert out.startswith("⤷ ")
     assert "[dim]" not in out
@@ -274,24 +273,19 @@ def test_format_turn_summary_omits_tools_field_when_zero() -> None:
 def test_format_turn_summary_pluralises_tool_noun() -> None:
     from code_scalpel.tui.app import _format_turn_summary
 
-    one = _format_turn_summary(
-        tool_calls=1, rate=0.0, completion_tokens=0, duration=0.0, ctx_used=0, ctx_limit=0
-    )
+    one = _format_turn_summary(tool_calls=1, rate=0.0, completion_tokens=0, duration=0.0)
     assert "🔧 1 tool" in one and "tools" not in one
 
-    many = _format_turn_summary(
-        tool_calls=3, rate=0.0, completion_tokens=0, duration=0.0, ctx_used=0, ctx_limit=0
-    )
+    many = _format_turn_summary(tool_calls=3, rate=0.0, completion_tokens=0, duration=0.0)
     assert "🔧 3 tools" in many
 
 
 def test_format_turn_summary_drops_zero_fields() -> None:
-    """Zero rate / zero tokens / no ctx limit shouldn't add empty noise."""
+    """Zero rate / zero tokens shouldn't add empty noise. Ctx moved to
+    the footer — verify it's not leaking back into the inline summary."""
     from code_scalpel.tui.app import _format_turn_summary
 
-    out = _format_turn_summary(
-        tool_calls=2, rate=0.0, completion_tokens=0, duration=0.0, ctx_used=0, ctx_limit=0
-    )
+    out = _format_turn_summary(tool_calls=2, rate=0.0, completion_tokens=0, duration=0.0)
     assert "tok/s" not in out
     assert "tokens" not in out
     assert "ctx " not in out
@@ -1606,3 +1600,46 @@ async def test_escape_closes_jobs_modal(sandbox: Path) -> None:
         await pilot.press("escape")
         await pilot.pause(0.1)
         assert not isinstance(app.screen, JobsModal)
+
+
+# ── /context slash ───────────────────────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_slash_context_mounts_breakdown_card(sandbox: Path) -> None:
+    """/context renders a ToolUseCard with the per-category breakdown —
+    system prompt / tools / overview / history / memory / free space.
+    Anchors against drift if the segment names ever shift."""
+    from code_scalpel.tui.widgets.tool_use import ToolUseCard
+
+    app = ScalpelApp(config=_CONFIG, cwd=sandbox)
+    async with app.run_test(headless=True, size=(80, 24)) as pilot:
+        await pilot.pause(0.1)
+        app._handle_slash("/context")
+        await pilot.pause(0.3)
+        output = app.query_one(OutputLog)
+        cards = list(output.query(ToolUseCard))
+        assert cards, "expected /context to mount a ToolUseCard"
+        body = cards[-1]._result.output
+        assert "Context Usage" in body
+        assert "System prompt" in body
+        assert "Tools schema" in body
+        assert "Overview" in body
+
+
+@pytest.mark.asyncio
+async def test_slash_context_handles_unknown_ctx_limit(sandbox: Path) -> None:
+    """Autodetect hasn't fired or LM Studio is silent → context_limit
+    is 0. Card still renders with a friendly "limit unknown" line."""
+    from code_scalpel.tui.widgets.tool_use import ToolUseCard
+
+    app = ScalpelApp(config=_CONFIG, cwd=sandbox)
+    async with app.run_test(headless=True, size=(80, 24)) as pilot:
+        await pilot.pause(0.1)
+        app.state.context_limit = 0
+        app._handle_slash("/context")
+        await pilot.pause(0.3)
+        cards = list(app.query_one(OutputLog).query(ToolUseCard))
+        assert cards
+        body = cards[-1]._result.output
+        assert "ctx limit unknown" in body
