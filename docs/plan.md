@@ -1812,11 +1812,18 @@ project memory + retrieval (BIG, ставит фундамент для всег
     сигнатуры сохранены, все 453 теста зелёные. `build_map` остался
     на ast (cache-keyed full-map путь — больше скоупа), `find_references`
     остался текстовым (никогда не использовал AST).
-    Phase 3 (следующая сессия): консьюмеры (agent.py, agent_tools.py,
-    tui/app.py) перейдут на index/ API напрямую; `build_map` тоже
-    через FileIndex; дедуплицировать `_internal_packages` (он сейчас
-    в обоих модулях); удалить ast-only helpers и сам project_map.py
-    когда консьюмеров не останется.
+    ✓ Phase 3 (2026-05-11): `build_map` теперь тоже через FileIndex;
+    сигнатуры/константы/parse-error переехали в `index/`
+    (`signatures.py`, `walkers.walk_top_level_constants`,
+    `builder.parse_error`); `_internal_packages` дедуплицирован в
+    `code_scalpel/workspace.py`; project_map.py схуднул с ~530 до
+    ~360 LOC, `import ast` исчез полностью. Все ast-walking helpers
+    (`_top_level_constants`, `_func_signature`, `_internal_imports`,
+    `_top_level_symbols`, `_docstring_summary`) удалены. Сам
+    project_map.py остаётся как рендеринг-шим для
+    `build_map`/`build_file_map`/`find_definitions`/`find_references`
+    + lightweight `build_map_overview` — публичный API не сломан,
+    консьюмеры (agent.py, agent_tools.py, tui/app.py) не тронуты.
     **Trap warning**: `tree-sitter-language-pack` 1.8.0 broken — на
     project_map.py вернул empty docstrings/signatures. Использовать
     индивидуальные пакеты (`tree-sitter-python` etc.).
@@ -1853,11 +1860,16 @@ project memory + retrieval (BIG, ставит фундамент для всег
   `tests/test_project_map.py` (находилка) и `tests/test_agent_tools.py`
   (схемы + dispatch).
 
-summaries вместо giant context: когда история turn'ов или
-  read_file результаты накапливаются — суммировать через LLM в
-  компактные note'ы. Уже есть /compact для history; нужно
-  расширить на «read_file output после N turn'ов теряет detail,
-  превращается в summary». Освобождает контекст для нового.
+✓ summaries вместо giant context: tool-results старше N turn'ов и
+  длиннее M символов перезаписываются маркером
+  `[compressed: tool(args) → N lines / M chars, see turn K | first-line]`
+  на конце каждого turn'а. Round-trip shape сохраняется (роль `tool`,
+  `tool_call_id`); только `content` сжимается. История теперь несёт
+  полный transcript (assistant tool_calls + tool results), не только
+  user+assistant pair'ы — это и питает hook, и даёт модели правильную
+  conversation shape на следующих turn'ах. Реализовано в
+  `code_scalpel/context_compress.py` + `StepAgent._compress_old_tool_results`;
+  конфиг `agent.compress_tool_results{,_after_turns,_min_chars}`.
 
 ✓ iterative patch loop (agent-side + TUI wiring): `StepAgent.code_with_retry()`
   применяет patch → run_tests → если красные, кормит pytest output
