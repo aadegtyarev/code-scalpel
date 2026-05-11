@@ -1788,10 +1788,20 @@ project memory + retrieval (BIG, ставит фундамент для всег
     проекте. Recommendation: **ADOPT, в 2 фазы**. Чистая установка
     (+5.4 MB net useful), perf на Python в шуме vs ast, но ts даёт
     multi-lang (Py/JS/Go/Rust одним walker), error recovery,
-    granular byte+line positions, incremental reparsing. Phase 1:
-    новый `code_scalpel/index/` package рядом с project_map.py
-    (parser.py / walkers.py / shape.py / model.py + tests). Phase 2:
-    cutover, swap import в agent.py, удалить ast-based код.
+    granular byte+line positions, incremental reparsing.
+    ✓ Phase 1: новый `code_scalpel/index/` package рядом с
+    project_map.py (parser.py / walkers.py / shape.py / model.py +
+    tests).
+    ✓ Phase 2: shim cutover — `project_map.build_file_map` и
+    `find_definitions` теперь зовут `build_file_index`; публичные
+    сигнатуры сохранены, все 453 теста зелёные. `build_map` остался
+    на ast (cache-keyed full-map путь — больше скоупа), `find_references`
+    остался текстовым (никогда не использовал AST).
+    Phase 3 (следующая сессия): консьюмеры (agent.py, agent_tools.py,
+    tui/app.py) перейдут на index/ API напрямую; `build_map` тоже
+    через FileIndex; дедуплицировать `_internal_packages` (он сейчас
+    в обоих модулях); удалить ast-only helpers и сам project_map.py
+    когда консьюмеров не останется.
     **Trap warning**: `tree-sitter-language-pack` 1.8.0 broken — на
     project_map.py вернул empty docstrings/signatures. Использовать
     индивидуальные пакеты (`tree-sitter-python` etc.).

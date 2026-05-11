@@ -20,6 +20,7 @@ import re
 from dataclasses import dataclass
 from pathlib import Path
 
+from code_scalpel.index import FileIndex, Symbol, build_file_index
 from code_scalpel.tools.files import list_files
 
 _INDEX_FILE = Path(".code-scalpel") / "INDEX.json"
@@ -35,6 +36,11 @@ def build_map(root: Path, max_files: int = 200, use_cache: bool = True) -> str:
     For per-turn context use `build_map_overview` and let the model drill in
     via the `map_file` tool. The full map is what `/map` slash and the
     initial-turn context use.
+
+    Phase 2 tree-sitter cutover left this on the ast engine: rewriting the
+    cache-keyed full-map path is bigger scope than the shim swap. Phase 3
+    will route this through `build_file_index` once `index/.Symbol` carries
+    arg/return info — see plan.md.
     """
     files = list_files(root, max_files=max_files)
     internal = _internal_packages(root)
@@ -94,7 +100,13 @@ def build_file_map(root: Path, rel_path: str) -> str:
 
     Returns the same per-file block format `build_map` would produce
     (path header + imports + signatures + docstrings), or a single-line
-    error if the file is missing / not Python / unreadable."""
+    error if the file is missing / not Python / unreadable.
+
+    Phase 2 tree-sitter cutover: symbol discovery + import filtering route
+    through `build_file_index`. Arg/return rendering still leans on ast
+    helpers — `index.Symbol` doesn't carry signature info yet (Phase 3 will
+    move that across so the engine swap is complete).
+    """
     target = root / rel_path
     if not target.is_file():
         return f"{rel_path}: file not found"
@@ -109,8 +121,17 @@ def build_file_map(root: Path, rel_path: str) -> str:
         source = target.read_text(errors="replace")
     except OSError:
         return f"{rel_path}: unreadable"
-    internal = _internal_packages(root)
-    return _python_block(rel_path, source, internal)
+    idx = build_file_index(root, rel_path)
+    if idx is None:
+        return f"{rel_path}: unreadable"
+    # Parse-error detection still goes through ast: tree-sitter recovers from
+    # `def f(:` and yields partial symbols, but the existing block contract
+    # promises a `parse error` footer on syntax errors. Cheap double-parse.
+    try:
+        tree = ast.parse(source)
+    except SyntaxError:
+        return f"{rel_path} [{idx.loc}L, parse error]"
+    return _render_file_block(idx, tree)
 
 
 @dataclass(frozen=True)
@@ -140,6 +161,10 @@ def find_definitions(root: Path, name: str, *, max_files: int = 200) -> list[Def
     list_files, then class-internal order). Empty list when nothing
     matched — caller decides if that's a not-found message or a hint
     to call `grep` for a wider search.
+
+    Phase 2: symbol discovery routes through `build_file_index` — the
+    tree-sitter walker emits the same kind labels and `qualified_name`
+    shape as the previous ast-based helper.
     """
     if not name:
         return []
@@ -148,32 +173,19 @@ def find_definitions(root: Path, name: str, *, max_files: int = 200) -> list[Def
     for rel in files:
         if rel.suffix != ".py":
             continue
-        path = root / rel
-        try:
-            source = path.read_text(errors="replace")
-        except OSError:
+        idx = build_file_index(root, str(rel))
+        if idx is None:
             continue
-        try:
-            tree = ast.parse(source)
-        except SyntaxError:
-            continue
-        out.extend(_definitions_in(tree, str(rel), name))
-    return out
-
-
-def _definitions_in(tree: ast.Module, rel: str, name: str) -> list[Definition]:
-    out: list[Definition] = []
-    for node in tree.body:
-        if isinstance(node, ast.ClassDef):
-            if node.name == name:
-                out.append(Definition(rel, node.lineno, "class", node.name))
-            for m in node.body:
-                if isinstance(m, ast.FunctionDef | ast.AsyncFunctionDef) and m.name == name:
-                    prefix = "async method" if isinstance(m, ast.AsyncFunctionDef) else "method"
-                    out.append(Definition(rel, m.lineno, prefix, f"{node.name}.{m.name}"))
-        elif isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef) and node.name == name:
-            prefix = "async function" if isinstance(node, ast.AsyncFunctionDef) else "function"
-            out.append(Definition(rel, node.lineno, prefix, node.name))
+        for sym in idx.symbols:
+            if sym.name == name:
+                out.append(
+                    Definition(
+                        rel_path=str(rel),
+                        line=sym.lineno,
+                        kind=sym.kind,
+                        qualified_name=sym.qualified_name,
+                    )
+                )
     return out
 
 
@@ -311,6 +323,75 @@ def _save_cache(root: Path, data: dict[str, dict[str, float | str]]) -> None:
         target.write_text(json.dumps(data))
     except OSError:
         pass
+
+
+def _render_file_block(idx: FileIndex, tree: ast.Module) -> str:
+    """Render the per-file block from a `FileIndex` + ast tree.
+
+    Phase 2 shim: symbols/imports come from the tree-sitter index, but
+    arg/return rendering looks up the matching ast node via qualified name
+    (`index.Symbol` doesn't carry signature info yet). Top-level uppercase
+    constants are still picked up from ast — they're not part of `FileIndex`,
+    and Phase 3 will move them across.
+    """
+    parts: list[str] = [f"{idx.rel_path} [{idx.loc}L]"]
+    if idx.imports:
+        parts.append(f"  imports: {', '.join(idx.imports)}")
+    ast_by_qn = _ast_nodes_by_qualified_name(tree)
+    # Source-order assembly: symbols + constants share the same indent contract
+    # the old _python_block produced (top-level → 2 spaces, methods → 4 spaces).
+    entries: list[tuple[int, str]] = []
+    for sym in idx.symbols:
+        line = _render_index_symbol(sym, ast_by_qn)
+        if line:
+            entries.append((sym.lineno, line))
+    for lineno, const in _top_level_constants(tree):
+        entries.append((lineno, f"  {const}"))
+    entries.sort(key=lambda e: e[0])
+    parts.extend(line for _, line in entries)
+    return "\n".join(parts)
+
+
+def _render_index_symbol(sym: Symbol, ast_by_qn: dict[str, ast.AST]) -> str:
+    if sym.kind == "class":
+        line = f"class {sym.name}"
+        if sym.docstring:
+            line += f"  # {sym.docstring}"
+        return f"  {line}"
+    is_async = sym.kind.startswith("async ")
+    is_method = sym.kind in ("method", "async method")
+    node = ast_by_qn.get(sym.qualified_name)
+    if not isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef):
+        return ""
+    prefix = "async def " if is_async else "def "
+    sig = _func_signature(node, prefix=prefix)
+    if sym.docstring:
+        sig += f"  # {sym.docstring}"
+    indent = "    " if is_method else "  "
+    return f"{indent}{sig}"
+
+
+def _ast_nodes_by_qualified_name(tree: ast.Module) -> dict[str, ast.AST]:
+    out: dict[str, ast.AST] = {}
+    for node in tree.body:
+        if isinstance(node, ast.ClassDef):
+            out[node.name] = node
+            for m in node.body:
+                if isinstance(m, ast.FunctionDef | ast.AsyncFunctionDef):
+                    out[f"{node.name}.{m.name}"] = m
+        elif isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef):
+            out[node.name] = node
+    return out
+
+
+def _top_level_constants(tree: ast.Module) -> list[tuple[int, str]]:
+    out: list[tuple[int, str]] = []
+    for node in tree.body:
+        if isinstance(node, ast.Assign):
+            for target in node.targets:
+                if isinstance(target, ast.Name) and target.id.isupper():
+                    out.append((node.lineno, f"{target.id} = ..."))
+    return out
 
 
 def _python_block(rel: str, source: str, internal: frozenset[str] = frozenset()) -> str:
