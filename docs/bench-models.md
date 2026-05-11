@@ -47,6 +47,7 @@ localhost:1234. `temperature=0.1`, `seed=42`. Каждая модель
 | qwen3.6-35b-a3b | 35B MoE (3B active) | qwen35moe | Q4_K_M | выкл | 13/24 (54%) | ~542s | — |
 | qwen2.5-coder-7b | 7B dense | qwen2 | Q6_K | вкл (draft qwen2-0.5B Q6) | 13/24 (54%) | ~42s | — |
 | qwen3.5-35b-a3b | 35B MoE (3B active) | qwen35moe | Q4_K_M | выкл | 10/24 (42%) | ~303s | 21.4 |
+| meta-llama-3.1-8b | 8B dense | llama | Q4_K_M | выкл | 9/24 (37.5%) | ~415s | 63.7 |
 
 (`arch` и `quant` берутся из LM Studio's `/api/v0/models` — это
 tokenizer-семейство и тип квантизации соответственно. `MXFP4` —
@@ -216,6 +217,9 @@ edit-задачах.
   dual-model setup. Общее рассуждение, не структурный код-edit.
 - **qwen3.5/3.6-35b-a3b** — пас. Big general-MoE не оправдывает себя
   на патч-задачах в нашем сетапе.
+- **meta-llama-3.1-8b** — пас. 37.5% — низшая планка нашего бенча,
+  спек не подключаем (ускорение не лечит провальное качество).
+  Llama-семья видела меньше SEARCH/REPLACE / diff формата чем qwen.
 
 См. v0.3 hook «dual-model setup» в `docs/plan.md` — теперь подтверждён
 данными.
