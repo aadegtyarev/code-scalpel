@@ -466,3 +466,19 @@ async def test_system_prompt_pins_identity() -> None:
     text = _SYSTEM_PROMPT.lower()
     assert "code-scalpel" in text
     assert "anthropic" in text and "openai" in text
+
+
+@pytest.mark.asyncio
+async def test_system_prompt_demands_informal_tone() -> None:
+    """The user finds the default formal register grating. Prompt must
+    explicitly require 'ты' in Russian and discourage corporate hedging."""
+    from code_scalpel.agent import _SYSTEM_PROMPT
+
+    text = _SYSTEM_PROMPT
+    # Russian ты/вы guidance is explicit
+    assert '"ты"' in text
+    assert '"вы"' in text
+    # Forbidden formal phrases should be called out as anti-examples
+    assert "Извините" in text
+    # Tone keyword anchors the section
+    assert "tone" in text.lower()
