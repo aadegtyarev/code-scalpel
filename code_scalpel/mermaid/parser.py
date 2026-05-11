@@ -142,9 +142,15 @@ def _is_flowchart_header(line: str) -> bool:
 
 
 def _is_unsupported_diagram(line: str) -> bool:
-    """First non-empty non-comment line decides the type."""
+    """First non-empty non-comment line decides the type.
+
+    sequenceDiagram / classDiagram больше не "unsupported" на уровне
+    пакета — у них собственные парсеры в `sequence.py` / `classes.py`.
+    Но для `parse_flowchart` они по-прежнему чужие: возвращаем None,
+    чтобы caller (`render_mermaid`) ушёл в нужную ветку dispatch.
+    """
     stripped = line.strip().lower()
-    # Mermaid diagram types we don't render — caller falls back to raw.
+    # Mermaid diagram types `parse_flowchart` точно не понимает.
     return any(
         stripped.startswith(kw)
         for kw in (
@@ -164,6 +170,24 @@ def _is_unsupported_diagram(line: str) -> bool:
             "sankey",
         )
     )
+
+
+def first_significant_line(source: str) -> str | None:
+    """Return the first non-empty, non-`%%` line lowercased + stripped.
+
+    Helper для dispatch в `render_mermaid`: один проход по source,
+    каждый под-парсер не должен повторять эту логику.
+    """
+    if not source:
+        return None
+    for raw in source.splitlines():
+        stripped = raw.strip()
+        if not stripped:
+            continue
+        if stripped.startswith("%%"):
+            continue
+        return stripped.lower()
+    return None
 
 
 def parse_flowchart(source: str) -> Flowchart | None:

@@ -79,21 +79,41 @@ async def test_card_renders_flowchart_via_pure_python_when_mmdc_missing(
 
 
 @pytest.mark.asyncio
-async def test_card_shows_unsupported_hint_for_sequence_without_mmdc(
+async def test_card_renders_sequence_diagram_via_pure_python(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """sequenceDiagram + нет mmdc → pure-Python вернул None, показываем
-    подсказку про flowchart-only + raw source."""
+    """sequenceDiagram теперь рендерится pure-Python'ом — install hint
+    исчезает, видны actor boxes и текст сообщения."""
     monkeypatch.setattr(mc_module.shutil, "which", lambda _name: None)
     card = MermaidCard("sequenceDiagram\nAlice->>John: Hello")
     app = _Harness(card)
     async with app.run_test(headless=True, size=(80, 24)) as pilot:
         await pilot.pause(0.2)
         text = _all_text(card)
-        # Уточнённая подсказка про flowchart-only.
-        assert "flowchart only" in text or "flowchart" in text
+        # Actor боксы и текст message-а отрисованы.
+        assert "Alice" in text
+        assert "John" in text
+        assert "Hello" in text
+        # Install hint больше не показываем.
+        assert "Install" not in text
+
+
+@pytest.mark.asyncio
+async def test_card_shows_unsupported_hint_for_gantt_without_mmdc(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """gantt всё ещё не поддерживается pure-Python'ом — без mmdc показываем
+    обновлённую подсказку (упоминает три поддерживаемых типа)."""
+    monkeypatch.setattr(mc_module.shutil, "which", lambda _name: None)
+    card = MermaidCard("gantt\ntitle X")
+    app = _Harness(card)
+    async with app.run_test(headless=True, size=(80, 24)) as pilot:
+        await pilot.pause(0.2)
+        text = _all_text(card)
+        # Hint упоминает поддерживаемые типы.
+        assert "flowchart" in text
         # Source виден.
-        assert "sequenceDiagram" in text
+        assert "gantt" in text
 
 
 @pytest.mark.asyncio

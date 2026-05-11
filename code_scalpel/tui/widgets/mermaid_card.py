@@ -51,10 +51,12 @@ _INSTALL_HINT = (
     "[b]rich-pixels[/b] to render diagrams inline.[/]"
 )
 
-# Подсказка, когда pure-Python renderer не смог (sequenceDiagram и т.п.).
+# Подсказка, когда pure-Python renderer не смог. Сейчас он покрывает
+# flowchart / sequenceDiagram / classDiagram; всё остальное — gantt,
+# gitgraph, stateDiagram, ER — уходит на mmdc.
 _UNSUPPORTED_HINT = (
-    "[dim]Pure-Python renderer supports flowchart only; "
-    "install [b]mmdc[/b] for full Mermaid support.[/]"
+    "[dim]Pure-Python renderer supports flowchart, sequenceDiagram and "
+    "classDiagram; install [b]mmdc[/b] for other types.[/]"
 )
 
 

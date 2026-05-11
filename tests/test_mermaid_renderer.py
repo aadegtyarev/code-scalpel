@@ -13,13 +13,27 @@ def test_simple_flowchart_renders_to_non_empty_string() -> None:
     assert len(out) > 0
 
 
-def test_sequence_diagram_returns_none() -> None:
+def test_sequence_diagram_now_renders() -> None:
+    """Sequence renderer landed — `render_mermaid` отдаёт ASCII вместо None."""
     src = "sequenceDiagram\nAlice->>John: Hello\nJohn-->>Alice: Hi"
-    assert render_mermaid(src) is None
+    out = render_mermaid(src)
+    assert out is not None
+    assert "Alice" in out
+    assert "John" in out
+    assert "Hello" in out
 
 
-def test_classdiagram_returns_none() -> None:
-    assert render_mermaid("classDiagram\nAnimal <|-- Duck") is None
+def test_classdiagram_now_renders() -> None:
+    """Class renderer landed — `render_mermaid` отдаёт ASCII вместо None."""
+    out = render_mermaid("classDiagram\nAnimal <|-- Duck")
+    assert out is not None
+    assert "Animal" in out
+    assert "Duck" in out
+
+
+def test_gantt_still_returns_none() -> None:
+    """Не-flowchart, не-sequence, не-class → None как и было."""
+    assert render_mermaid("gantt\ntitle Foo") is None
 
 
 def test_renderer_does_not_raise_on_malformed_source() -> None:
