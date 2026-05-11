@@ -121,9 +121,9 @@ async def test_system_prompt_carries_identity_anchor(project: Path) -> None:
     # task-words explicitly and tells the model to call tools instead.
     assert "найди" in system or "find" in system.lower()
     assert "list_files" in system or "tools" in system.lower()
-    # No "Я — code-scalpel, как помочь?" template — that exact phrase
-    # was the bug shape and we ban it specifically.
-    assert "NEVER answer" in system or "никогда" in system.lower()
+    # Absolute ban on opening task replies with "Я — code-scalpel" /
+    # "I'm code-scalpel" — that's the identity-blur regression shape.
+    assert "ABSOLUTE BAN" in system
 
 
 @pytest.mark.asyncio
