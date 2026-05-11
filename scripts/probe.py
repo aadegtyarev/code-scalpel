@@ -31,7 +31,9 @@ _CONFIG = AppConfig(
         "local": ModelProfile(
             provider="lmstudio",
             model="qwen/qwen2.5-coder-14b",
-            temperature=0.1,
+            # No explicit temperature — use the per-mode defaults from
+            # ModeTemperatures (ask=0.7 etc.). Pinning to 0.1 here used
+            # to mask the deterministic-refusal pattern the bump fixes.
             seed=42,
         )
     },
