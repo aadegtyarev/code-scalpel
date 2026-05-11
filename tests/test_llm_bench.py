@@ -27,7 +27,7 @@ from code_scalpel.tools.shell import AsyncShellRunner
 
 _PROFILE = ModelProfile(
     provider="lmstudio",
-    model="google/gemma-4-26b-a4b",
+    model="qwen/qwen2.5-coder-14b",
     temperature=0.1,
     seed=42,
 )
