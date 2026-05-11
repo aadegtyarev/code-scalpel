@@ -12,7 +12,7 @@ from textual.widget import Widget
 from textual.widgets import Rule
 from textual_autocomplete import AutoComplete, DropdownItem
 
-from code_scalpel.agent import StepAgent, TextDelta, ToolExecuted
+from code_scalpel.agent import PatchAttempt, StepAgent, TextDelta, ToolExecuted
 from code_scalpel.config import AppConfig, autodetect_context_tokens, resolve_model_name
 from code_scalpel.jobs import JobRegistry
 from code_scalpel.llm.adapter import ChatResponse, OpenAICompatibleAdapter
@@ -55,6 +55,7 @@ _SLASH_COMMANDS: list[tuple[str, str]] = [
     ("/stats", "show this session's token/cost/timing stats"),
     ("/remember", "save a project note (e.g. /remember always run linter)"),
     ("/recall", "browse stored notes; with text — search them"),
+    ("/loop", "toggle code-mode iterative patch loop (apply → test → retry)"),
     ("/help", "list commands"),
     ("/mode ask", "switch to ask mode"),
     ("/mode plan", "switch to plan mode"),
@@ -243,12 +244,18 @@ class ScalpelApp(App[None]):
         self.query_one(StatusFooter).status = "◌ thinking…"
         lang = self.session.user_language or "English"
         text = f"{message.text}\n\n(Reply in {lang}.)"
+        # In code mode with the iterative loop opted in, swap the regular
+        # streaming step for the auto apply→test→retry path. The streaming
+        # path stays untouched for ask/plan/review so opt-out is a clean
+        # one-flag flip — no behaviour leaks across modes.
+        use_loop = mode == "code" and self.config.agent.iterative_patch_loop
+        coro = self._run_code_with_retry(text) if use_loop else self._run_step(text, mode=mode)
         # Defer worker until after refresh so the user message lands first
         self.call_after_refresh(
             lambda: setattr(
                 self,
                 "_step_worker",
-                self.run_worker(self._run_step(text, mode=mode), exclusive=True, group="step"),
+                self.run_worker(coro, exclusive=True, group="step"),
             )
         )
 
@@ -514,6 +521,13 @@ class ScalpelApp(App[None]):
         if cmd == "/recall" or cmd.startswith("/recall "):
             self._do_recall(cmd.removeprefix("/recall"))
             return
+        if cmd == "/loop":
+            # Flip the iterative patch loop on/off without editing config —
+            # this is the user's opt-in for code-mode auto apply→test→retry.
+            self.config.agent.iterative_patch_loop = not self.config.agent.iterative_patch_loop
+            state = "on" if self.config.agent.iterative_patch_loop else "off"
+            output.print_status(f"● Iterative patch loop: {state}")
+            return
         if cmd.startswith("/mode "):
             mode = cmd.removeprefix("/mode ").strip()
             if mode in self._AGENT_MODES:
@@ -649,6 +663,124 @@ class ScalpelApp(App[None]):
             # Cover every exit (success / cancel / error) — a stuck job
             # would otherwise stay in the JobsBar forever.
             self.jobs.finish(job_id)
+
+    async def _run_code_with_retry(self, task: str) -> None:
+        """Code mode + iterative_patch_loop: let the agent run apply→test→retry
+        itself, rendering each attempt as an inline ToolUseCard. The user no
+        longer mashes [g] N times to wear the model down — the agent does it
+        and only surfaces the manual review card if every attempt failed.
+
+        Each attempt becomes a `patch_attempt_{idx}` ToolUseCard whose body
+        is the synthesised diff + test output. The card's ok dot tracks
+        `attempt.tests_passed`, mirroring how every other tool card signals
+        success/failure at a glance."""
+        import time
+
+        output = self.query_one(OutputLog)
+        footer = self.query_one(StatusFooter)
+        assert self._agent is not None
+
+        max_attempts = self.config.agent.max_debug_attempts + 1
+        start = time.monotonic()
+        with self.jobs.track("code-retry", f"code: {task[:60]}"):
+            footer.status = "◌ patch loop…"
+            output.print_status(f"● Running patch loop (max attempts: {max_attempts})")
+            try:
+                result = await self._agent.code_with_retry(task)
+            except asyncio.CancelledError:
+                output.print_status("● Cancelled.")
+                footer.status = "● idle"
+                raise
+            except Exception as e:
+                output.print_error(f"Error: {e}")
+                footer.status = "● error"
+                return
+
+            attempts = result.attempts
+            # Plain-text answer (no SEARCH/REPLACE blocks) — surface the
+            # reply same as the streaming path would and bail. Loop did
+            # nothing to retry.
+            if not attempts:
+                if result.reply:
+                    output.print_assistant(result.reply)
+                duration = time.monotonic() - start
+                self._record_loop_usage(task, result.reply, duration, 0)
+                footer.status = "● idle"
+                return
+
+            for idx, attempt in enumerate(attempts, start=1):
+                call = ToolCall(name=f"patch_attempt_{idx}", body="")
+                body = self._render_attempt(attempt)
+                tool_result = ToolResult(call=call, output=body, ok=attempt.tests_passed)
+                output.add_tool_use(call, tool_result)
+                self._last_tool_result = tool_result
+
+            duration = time.monotonic() - start
+            self._record_loop_usage(task, result.reply, duration, len(attempts))
+
+            final = attempts[-1]
+            if final.tests_passed:
+                output.print_status(f"● Patch loop succeeded after {len(attempts)} attempt(s).")
+                footer.status = "● idle"
+            else:
+                # Gave up — fall back to the manual review flow so the user
+                # keeps their escape hatch. They see every attempt above plus
+                # a [a]/[r]/[g] card on the LAST diff.
+                output.print_status(
+                    f"✗ Gave up after {len(attempts)} attempt(s) — review diff manually."
+                )
+                last_edits = final.edits
+                if last_edits:
+                    card = ToolCallCard("Apply", "")
+                    await self.mount(card, before=self.query_one(ModeInput))
+                    card.set_reviewing(edits_to_diff(last_edits, self.cwd))
+                    self._pending_edits = list(last_edits)
+                    footer.status = "● reviewing"
+                else:
+                    footer.status = "● idle"
+
+    def _render_attempt(self, attempt: PatchAttempt) -> str:
+        """Card body for one patch attempt: synthesized diff + apply/test
+        verdict. Test output is truncated — the full thing is one Ctrl+O
+        away via the standard ToolUseCard surface."""
+        from code_scalpel.patch.edit_block import edits_to_diff
+
+        diff = edits_to_diff(attempt.edits, self.cwd) if attempt.edits else "(no edits)"
+        if attempt.apply_ok:
+            verdict = "tests passed" if attempt.tests_passed else "tests failed"
+        else:
+            verdict = f"apply failed: {attempt.apply_error or 'unknown error'}"
+        test_output = attempt.test_output or ""
+        if len(test_output) > 2000:
+            test_output = test_output[:2000] + "\n… (truncated)"
+        parts = [diff, f"--- {verdict} ---"]
+        if test_output:
+            parts.append(test_output)
+        return "\n".join(parts)
+
+    def _record_loop_usage(self, task: str, reply: str, duration: float, attempts: int) -> None:
+        """Mirror the streaming-path session bookkeeping: token usage is
+        approximate (no streaming usage payload) and the inline summary
+        carries duration + ctx so the user can gauge cost without the
+        footer."""
+        self.session.record(
+            ChatResponse(
+                content=reply,
+                prompt_tokens=len(task) // 4 + 1000,
+                completion_tokens=len(reply) // 4,
+                cost=None,
+            )
+        )
+        self._update_ctx()
+        summary = _format_turn_summary(
+            tool_calls=attempts,
+            rate=0.0,
+            completion_tokens=len(reply) // 4,
+            duration=duration,
+            ctx_used=self.session.context_used_tokens,
+            ctx_limit=self.state.context_limit,
+        )
+        self.query_one(OutputLog).print_turn_summary(summary)
 
     async def _regenerate(self, prev_edits: list[Edit]) -> None:
         """Ask the model to retry the patch — used after a rejected or

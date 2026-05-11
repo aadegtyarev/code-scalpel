@@ -1033,3 +1033,266 @@ async def test_do_map_registers_then_clears_job(sandbox: Path) -> None:
         bar = app.query_one(JobsBar)
         # After completion the bar must be idle again.
         assert not bar.has_class("live")
+
+
+# ── /loop slash + iterative patch loop wiring ───────────────────────────────
+
+
+def _make_step_result(
+    *,
+    reply: str = "",
+    attempts: tuple[Any, ...] = (),
+) -> Any:
+    """Build a StepResult shaped like what code_with_retry returns. The
+    response field carries empty token counts because the loop path
+    approximates usage from edits/reply length anyway."""
+    from code_scalpel.agent import StepResult
+
+    return StepResult(
+        reply=reply,
+        edits=[],
+        response=ChatResponse(content=reply, prompt_tokens=0, completion_tokens=0, cost=None),
+        attempts=attempts,
+    )
+
+
+def _make_attempt(
+    *,
+    apply_ok: bool = True,
+    apply_error: str = "",
+    test_output: str = "",
+    tests_passed: bool = False,
+    path: str = "hello.py",
+    search: str = "x = 1\n",
+    replace: str = "x = 2\n",
+) -> Any:
+    from code_scalpel.agent import PatchAttempt
+    from code_scalpel.patch.edit_block import Edit
+
+    return PatchAttempt(
+        edits=[Edit(path=path, search=search, replace=replace)],
+        apply_ok=apply_ok,
+        apply_error=apply_error,
+        test_output=test_output,
+        tests_passed=tests_passed,
+    )
+
+
+@pytest.mark.asyncio
+async def test_code_mode_iterative_loop_disabled_uses_streaming_path(sandbox: Path) -> None:
+    """When iterative_patch_loop is off, code mode must keep the existing
+    streaming behaviour intact — the LLM mock's stream() is consumed, not
+    code_with_retry. Opt-in is one flag flip, no surprises."""
+    from unittest.mock import AsyncMock
+
+    from code_scalpel.tui.widgets.input import UserMessage
+
+    config = AppConfig(
+        profiles={"local": ModelProfile(provider="lmstudio", model="local-model")},
+        agent=AgentConfig(max_files=0, max_file_lines=10, iterative_patch_loop=False),
+    )
+    app = ScalpelApp(config=config, cwd=sandbox)
+    mock_llm = _StreamingMock(["just a reply, no patch"])
+    async with app.run_test(headless=True, size=(80, 24)) as pilot:
+        await pilot.pause(0.1)
+        _attach_mock(app, mock_llm)
+        # Spy on code_with_retry to confirm it is NOT invoked.
+        assert app._agent is not None
+        app._agent.code_with_retry = AsyncMock()  # type: ignore[method-assign]
+
+        app._handle_slash("/mode code")
+        await pilot.pause(0.05)
+        app.post_message(UserMessage("change x"))
+        await pilot.pause(0.4)
+
+        app._agent.code_with_retry.assert_not_called()  # type: ignore[attr-defined]
+        # Streaming mock saw the request.
+        assert mock_llm.calls, "expected the streaming path to be used"
+
+
+@pytest.mark.asyncio
+async def test_code_mode_iterative_loop_enabled_invokes_code_with_retry(
+    sandbox: Path,
+) -> None:
+    """With iterative_patch_loop on AND mode=code, the user message must
+    route through code_with_retry — that's the whole point of the wiring."""
+    from unittest.mock import AsyncMock
+
+    from code_scalpel.tui.widgets.input import UserMessage
+    from code_scalpel.tui.widgets.tool_use import ToolUseCard
+
+    config = AppConfig(
+        profiles={"local": ModelProfile(provider="lmstudio", model="local-model")},
+        agent=AgentConfig(max_files=0, max_file_lines=10, iterative_patch_loop=True),
+    )
+    app = ScalpelApp(config=config, cwd=sandbox)
+    async with app.run_test(headless=True, size=(80, 24)) as pilot:
+        await pilot.pause(0.1)
+        _attach_mock(app, _StreamingMock([""]))
+        assert app._agent is not None
+
+        result = _make_step_result(
+            reply="done",
+            attempts=(
+                _make_attempt(
+                    apply_ok=True,
+                    test_output="1 passed",
+                    tests_passed=True,
+                ),
+            ),
+        )
+        app._agent.code_with_retry = AsyncMock(return_value=result)  # type: ignore[method-assign]
+
+        app._handle_slash("/mode code")
+        await pilot.pause(0.05)
+        app.post_message(UserMessage("change x"))
+        await pilot.pause(0.4)
+
+        app._agent.code_with_retry.assert_called_once()  # type: ignore[attr-defined]
+        output = app.query_one(OutputLog)
+        cards = list(output.query(ToolUseCard))
+        assert cards, "expected at least one patch_attempt ToolUseCard"
+        assert cards[-1]._call.name == "patch_attempt_1"
+
+
+@pytest.mark.asyncio
+async def test_iterative_loop_renders_each_attempt_as_card(sandbox: Path) -> None:
+    """Three attempts (2 failed + 1 success) → three cards in order. The
+    user must see the full retry history, not just the final patch — the
+    failed attempts are the diagnostic value."""
+    from unittest.mock import AsyncMock
+
+    from code_scalpel.tui.widgets.input import UserMessage
+    from code_scalpel.tui.widgets.tool_use import ToolUseCard
+
+    config = AppConfig(
+        profiles={"local": ModelProfile(provider="lmstudio", model="local-model")},
+        agent=AgentConfig(max_files=0, max_file_lines=10, iterative_patch_loop=True),
+    )
+    app = ScalpelApp(config=config, cwd=sandbox)
+    async with app.run_test(headless=True, size=(80, 24)) as pilot:
+        await pilot.pause(0.1)
+        _attach_mock(app, _StreamingMock([""]))
+        assert app._agent is not None
+
+        result = _make_step_result(
+            reply="done",
+            attempts=(
+                _make_attempt(
+                    apply_ok=False,
+                    apply_error="SEARCH did not match",
+                    tests_passed=False,
+                ),
+                _make_attempt(
+                    apply_ok=True,
+                    test_output="FAILED tests/test_x.py",
+                    tests_passed=False,
+                ),
+                _make_attempt(
+                    apply_ok=True,
+                    test_output="1 passed",
+                    tests_passed=True,
+                ),
+            ),
+        )
+        app._agent.code_with_retry = AsyncMock(return_value=result)  # type: ignore[method-assign]
+
+        app._handle_slash("/mode code")
+        await pilot.pause(0.05)
+        app.post_message(UserMessage("fix it"))
+        await pilot.pause(0.5)
+
+        output = app.query_one(OutputLog)
+        cards = list(output.query(ToolUseCard))
+        assert len(cards) == 3, f"expected 3 attempt cards, got {len(cards)}"
+        assert [c._call.name for c in cards] == [
+            "patch_attempt_1",
+            "patch_attempt_2",
+            "patch_attempt_3",
+        ]
+        # First two cards must surface failure (red dot in title); the third
+        # is the success.
+        assert cards[0]._result.ok is False
+        assert cards[1]._result.ok is False
+        assert cards[2]._result.ok is True
+
+
+@pytest.mark.asyncio
+async def test_iterative_loop_failure_surfaces_final_diff_for_manual_review(
+    sandbox: Path,
+) -> None:
+    """Every attempt failed → the loop gives up but must NOT silently
+    drop the work. A ToolCallCard in reviewing state appears so the user
+    keeps their [a]/[r]/[g] escape hatch on the last diff."""
+    from unittest.mock import AsyncMock
+
+    from code_scalpel.tui.widgets.cards.tool_call import ToolCallCard
+    from code_scalpel.tui.widgets.input import UserMessage
+
+    config = AppConfig(
+        profiles={"local": ModelProfile(provider="lmstudio", model="local-model")},
+        agent=AgentConfig(max_files=0, max_file_lines=10, iterative_patch_loop=True),
+    )
+    app = ScalpelApp(config=config, cwd=sandbox)
+    async with app.run_test(headless=True, size=(80, 24)) as pilot:
+        await pilot.pause(0.1)
+        _attach_mock(app, _StreamingMock([""]))
+        assert app._agent is not None
+
+        result = _make_step_result(
+            reply="couldn't get it",
+            attempts=(
+                _make_attempt(
+                    apply_ok=True,
+                    test_output="FAILED",
+                    tests_passed=False,
+                ),
+                _make_attempt(
+                    apply_ok=True,
+                    test_output="STILL FAILED",
+                    tests_passed=False,
+                ),
+            ),
+        )
+        app._agent.code_with_retry = AsyncMock(return_value=result)  # type: ignore[method-assign]
+
+        app._handle_slash("/mode code")
+        await pilot.pause(0.05)
+        app.post_message(UserMessage("fix it"))
+        await pilot.pause(0.5)
+
+        # A review card must be mounted so the user can still apply manually.
+        review_cards = list(app.query(ToolCallCard))
+        assert review_cards, "expected a manual-review ToolCallCard after giving up"
+        # The card is in reviewing state (set_reviewing was called).
+        assert review_cards[-1]._state == "reviewing"
+        # And _pending_edits holds the LAST attempt's edits so [a] can apply.
+        assert app._pending_edits is not None
+        assert app._pending_edits == list(result.attempts[-1].edits)
+
+
+@pytest.mark.asyncio
+async def test_loop_slash_toggles_config_flag(sandbox: Path) -> None:
+    """/loop flips iterative_patch_loop on/off and prints the new state —
+    the user's opt-in without editing config.yaml."""
+    config = AppConfig(
+        profiles={"local": ModelProfile(provider="lmstudio", model="local-model")},
+        agent=AgentConfig(max_files=0, max_file_lines=10, iterative_patch_loop=False),
+    )
+    app = ScalpelApp(config=config, cwd=sandbox)
+    async with app.run_test(headless=True, size=(80, 24)) as pilot:
+        await pilot.pause(0.1)
+        output = app.query_one(OutputLog)
+
+        assert app.config.agent.iterative_patch_loop is False
+        app._handle_slash("/loop")
+        await pilot.pause(0.1)
+        assert app.config.agent.iterative_patch_loop is True
+        chat = "\n".join(str(c.render()) for c in output.children if c.id != "_spacer")
+        assert "on" in chat.lower()
+
+        app._handle_slash("/loop")
+        await pilot.pause(0.1)
+        assert app.config.agent.iterative_patch_loop is False
+        chat = "\n".join(str(c.render()) for c in output.children if c.id != "_spacer")
+        assert "off" in chat.lower()

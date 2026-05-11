@@ -1818,15 +1818,17 @@ summaries вместо giant context: когда история turn'ов или
   расширить на «read_file output после N turn'ов теряет detail,
   превращается в summary». Освобождает контекст для нового.
 
-✓ iterative patch loop (agent-side): `StepAgent.code_with_retry()`
+✓ iterative patch loop (agent-side + TUI wiring): `StepAgent.code_with_retry()`
   применяет patch → run_tests → если красные, кормит pytest output
   обратно модели как retry-context. Cap = `agent.max_debug_attempts`
   (+1 initial attempt). Опт-ин через `agent.iterative_patch_loop`
   (дефолт False). `StepResult.attempts: tuple[PatchAttempt, ...]`
   хранит историю (edits / apply_ok / apply_error / test_output /
-  tests_passed) чтобы TUI мог показать прогресс. TUI wiring всё ещё
-  TODO — `_regenerate` пока остаётся ручным [g] хоткеем; следующий
-  шаг — переключить `code`/`run` режимы на `code_with_retry`.
+  tests_passed). TUI wiring done: `_run_code_with_retry` рендерит
+  каждую попытку как inline `patch_attempt_N` ToolUseCard. Если все
+  попытки провалились — финальный diff поднимается в ToolCallCard
+  для ручного [a]/[r]/[g] (escape hatch сохранён). Слэш-команда
+  `/loop` переключает флаг без правки конфига.
 
 mandatory tests: для каждой задачи в plan'е модель должна заявлять
   testы которые покрывают изменение. Если testов нет — задача не
