@@ -448,6 +448,13 @@ class StepAgent:
         self._history.clear()
         self._read_files_history.clear()
 
+    def attach_memory(self, store: MemoryStore | None) -> None:
+        """Swap or detach the auto-recall memory store. The TUI builds
+        MemoryStore lazily on first /remember/ /recall — when that
+        happens after the agent is already constructed, this is the
+        public hook for handing it over. Pass None to detach."""
+        self._memory = store
+
     async def ask(self, task: str, *, mode: str = "ask") -> StepResult:
         result = await self._chat_loop_with_hook(task, mode=mode)
         if mode == "plan":

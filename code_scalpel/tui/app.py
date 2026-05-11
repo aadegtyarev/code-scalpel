@@ -423,8 +423,7 @@ class ScalpelApp(App[None]):
             # — otherwise the agent's recall would miss anything saved this
             # session until the next /new.
             if self._agent is not None:
-                # TODO(phase-3-cleanup): need public StepAgent.attach_memory(...)
-                self._agent._memory = self._memory
+                self._agent.attach_memory(self._memory)
         return self._memory
 
     def _do_remember(self, text: str) -> None:
