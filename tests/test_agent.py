@@ -6,6 +6,7 @@ import pytest
 
 from code_scalpel.agent import StepAgent
 from code_scalpel.config import AgentConfig, AppConfig, ModelProfile
+from code_scalpel.plan import Task
 from tests.mocks import MockLLMAdapter
 
 _EDIT_BLOCK = """\
@@ -1123,3 +1124,309 @@ async def test_user_message_survives_broken_memory_query(project: Path) -> None:
     await agent.ask("any task")
     # No header, but the call completed normally.
     assert llm.calls
+
+
+# ── supervised autonomous mode (run_plan) ───────────────────────────────────
+
+_TASKS_THREE = (
+    "## T001: Make hello return hi\n\n"
+    "Goal: change return value\n"
+    "Files: hello.py\n"
+    "Acceptance:\n"
+    "- hello() returns 'hi'\n"
+    "Test command: pytest\n\n"
+    "## T002: Touch main\n\n"
+    "Goal: keep import working\n"
+    "Files: main.py\n"
+    "Acceptance:\n"
+    "- imports cleanly\n"
+    "Test command: pytest\n\n"
+    "## T003: Tidy up\n\n"
+    "Goal: docstring\n"
+    "Files: hello.py\n"
+    "Acceptance:\n"
+    "- has docstring\n"
+    "Test command: pytest\n"
+)
+
+
+def _write_tasks(project: Path, text: str) -> Path:
+    p = project / ".code-scalpel" / "TASKS.md"
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text(text)
+    return p
+
+
+_GOOD_PATCH_NOOP = """\
+hello.py
+```python
+<<<<<<< SEARCH
+def hello():
+    pass
+=======
+def hello():
+    return "hi"
+>>>>>>> REPLACE
+```
+"""
+
+
+@pytest.mark.asyncio
+async def test_run_plan_happy_path_marks_each_task_done(project: Path) -> None:
+    """All three tasks succeed → file gets three [✓] marks and outcomes
+    list mirrors the order."""
+    from code_scalpel.tools.shell import ShellResult
+    from tests.mocks import MockShellRunner
+
+    tasks_path = _write_tasks(project, _TASKS_THREE)
+
+    # Three patches, three pytest passes — one per task. After T001 the
+    # file is already changed, so T002/T003 use plain-text "no-op" replies
+    # (skipped, won't fail). To keep this simple we have all three
+    # produce a benign patch + passing tests.
+    edit_main = """\
+main.py
+```python
+<<<<<<< SEARCH
+from hello import hello
+hello()
+=======
+from hello import hello
+
+hello()
+>>>>>>> REPLACE
+```
+"""
+    edit_doc = """\
+hello.py
+```python
+<<<<<<< SEARCH
+def hello():
+    return "hi"
+=======
+def hello():
+    \"\"\"Greet.\"\"\"
+    return "hi"
+>>>>>>> REPLACE
+```
+"""
+    llm = MockLLMAdapter([_GOOD_PATCH_NOOP, edit_main, edit_doc])
+    shell = MockShellRunner([ShellResult("1 passed", 0)] * 3)
+    agent = StepAgent(llm=llm, cwd=project, config=_retry_config(), shell_runner=shell)
+
+    result = await agent.run_plan()
+
+    assert result.stopped_reason == "all_done"
+    assert result.tasks_completed == 3
+    assert len(result.outcomes) == 3
+    assert [o.status for o in result.outcomes] == ["done", "done", "done"]
+    # File now carries three [✓] heads.
+    final = tasks_path.read_text()
+    assert final.count("## [✓] T") == 3
+
+
+@pytest.mark.asyncio
+async def test_run_plan_stops_after_consecutive_failures(project: Path) -> None:
+    """Two consecutive failed tasks → stop with reason `max_failures`."""
+    from code_scalpel.tools.shell import ShellResult
+    from tests.mocks import MockShellRunner
+
+    _write_tasks(project, _TASKS_THREE)
+
+    # All patches produce edits that apply but tests fail. Each task
+    # consumes (max_debug_attempts + 1) = 3 LLM responses and pytest
+    # invocations. We feed bad patches for the first two tasks → both
+    # fail → stop_after_failures=2 trips on the second.
+    bad = """\
+hello.py
+```python
+<<<<<<< SEARCH
+def hello():
+    pass
+=======
+def hello():
+    return "wrong"
+>>>>>>> REPLACE
+```
+"""
+    bad_idem = """\
+hello.py
+```python
+<<<<<<< SEARCH
+def hello():
+    return "wrong"
+=======
+def hello():
+    return "wrong"
+>>>>>>> REPLACE
+```
+"""
+    llm = MockLLMAdapter([bad, bad_idem, bad_idem] * 2)
+    shell = MockShellRunner([ShellResult("FAILED", 1)] * 10)
+    agent = StepAgent(llm=llm, cwd=project, config=_retry_config(), shell_runner=shell)
+
+    result = await agent.run_plan(stop_after_failures=2)
+
+    assert result.stopped_reason == "max_failures"
+    assert result.tasks_completed == 0
+    # Two outcomes (both failed); T003 never started.
+    assert len(result.outcomes) == 2
+    assert all(o.status == "failed" for o in result.outcomes)
+
+
+@pytest.mark.asyncio
+async def test_run_plan_no_tasks_file_returns_no_tasks(project: Path) -> None:
+    """File missing → reason `no_tasks`, no exception. The TUI uses this
+    to coach the user to switch into plan mode first."""
+    llm = MockLLMAdapter([])
+    agent = StepAgent(llm=llm, cwd=project, config=_retry_config())
+
+    result = await agent.run_plan()
+
+    assert result.stopped_reason == "no_tasks"
+    assert result.outcomes == ()
+    assert result.tasks_completed == 0
+    # Never called the LLM.
+    assert llm.calls == []
+
+
+@pytest.mark.asyncio
+async def test_run_plan_all_done_returns_immediately(project: Path) -> None:
+    """A file where every task is already [✓] is a no-op."""
+    _write_tasks(
+        project,
+        "## [✓] T001: done\n\nGoal: x\n\n## [✓] T002: also done\n\nGoal: y\n",
+    )
+    llm = MockLLMAdapter([])
+    agent = StepAgent(llm=llm, cwd=project, config=_retry_config())
+
+    result = await agent.run_plan()
+
+    assert result.stopped_reason == "all_done"
+    assert result.tasks_completed == 0
+    assert llm.calls == []
+
+
+@pytest.mark.asyncio
+async def test_run_plan_detects_plan_modification_mid_run(project: Path) -> None:
+    """If TASKS.md changes between iterations (user edited it in another
+    window), stop with reason `plan_modified`. Already-marked progress
+    stays on disk; the user's edits win the race."""
+    from code_scalpel.tools.shell import ShellResult
+    from tests.mocks import MockShellRunner
+
+    tasks_path = _write_tasks(project, _TASKS_THREE)
+
+    # First task succeeds. Hook before second task starts overwrites
+    # TASKS.md with foreign content to simulate concurrent edit.
+    called = {"n": 0}
+
+    def _meddle(task: Task) -> None:
+        called["n"] += 1
+        if called["n"] == 2:
+            tasks_path.write_text("## T999: foreign\n\nGoal: meddled\n")
+
+    edit_main = """\
+main.py
+```python
+<<<<<<< SEARCH
+from hello import hello
+hello()
+=======
+from hello import hello
+
+hello()
+>>>>>>> REPLACE
+```
+"""
+    llm = MockLLMAdapter([_GOOD_PATCH_NOOP, edit_main])
+    shell = MockShellRunner([ShellResult("1 passed", 0)] * 2)
+    agent = StepAgent(llm=llm, cwd=project, config=_retry_config(), shell_runner=shell)
+
+    result = await agent.run_plan(on_task_start=_meddle)
+
+    assert result.stopped_reason == "plan_modified"
+    assert result.tasks_completed == 1
+    # The user's hand-rewrite is what's on disk; we did NOT clobber it.
+    assert "foreign" in tasks_path.read_text()
+
+
+@pytest.mark.asyncio
+async def test_run_plan_skipped_when_model_emits_no_edits(project: Path) -> None:
+    """Model replies in plain text for a task — that task is `skipped`,
+    not `failed`. The skip doesn't count toward the failure budget."""
+    from code_scalpel.tools.shell import ShellResult
+    from tests.mocks import MockShellRunner
+
+    _write_tasks(
+        project,
+        "## T001: clarify\n\nGoal: figure it out\n\n"
+        "## T002: do it\n\nGoal: actually patch\nFiles: hello.py\n",
+    )
+
+    # T001 → plain text. T002 → working patch.
+    llm = MockLLMAdapter(
+        [
+            "I have a question about what 'figure it out' means here.",
+            _GOOD_PATCH_NOOP,
+        ]
+    )
+    shell = MockShellRunner([ShellResult("1 passed", 0)])
+    agent = StepAgent(llm=llm, cwd=project, config=_retry_config(), shell_runner=shell)
+
+    result = await agent.run_plan(stop_after_failures=2)
+
+    assert result.stopped_reason == "all_done"
+    assert [o.status for o in result.outcomes] == ["skipped", "done"]
+    assert result.tasks_completed == 1
+
+
+@pytest.mark.asyncio
+async def test_run_plan_cancellation_propagates_and_keeps_done_marks(
+    project: Path,
+) -> None:
+    """If `asyncio.CancelledError` fires mid-run (user pressed Esc), the
+    error must propagate. Tasks already marked [✓] stay on disk."""
+    import asyncio as _asyncio
+
+    from code_scalpel.tools.shell import ShellResult
+    from tests.mocks import MockShellRunner
+
+    tasks_path = _write_tasks(project, _TASKS_THREE)
+
+    # T001 succeeds. T002 raises CancelledError as the user hits Esc
+    # mid-run. We simulate that by patching code_with_retry on the
+    # agent to raise on its second call.
+    edit_main = """\
+main.py
+```python
+<<<<<<< SEARCH
+from hello import hello
+hello()
+=======
+from hello import hello
+
+hello()
+>>>>>>> REPLACE
+```
+"""
+    llm = MockLLMAdapter([_GOOD_PATCH_NOOP, edit_main])
+    shell = MockShellRunner([ShellResult("1 passed", 0)])
+    agent = StepAgent(llm=llm, cwd=project, config=_retry_config(), shell_runner=shell)
+
+    original = agent.code_with_retry
+    call_count = {"n": 0}
+
+    async def _cancelling_wrapper(task: str, *, mode: str = "code"):  # type: ignore[no-untyped-def]
+        call_count["n"] += 1
+        if call_count["n"] == 2:
+            raise _asyncio.CancelledError()
+        return await original(task, mode=mode)
+
+    agent.code_with_retry = _cancelling_wrapper  # type: ignore[method-assign]
+
+    with pytest.raises(_asyncio.CancelledError):
+        await agent.run_plan()
+
+    # T001's [✓] mark survived the cancel.
+    assert "[✓] T001" in tasks_path.read_text()

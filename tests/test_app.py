@@ -1272,6 +1272,182 @@ async def test_iterative_loop_failure_surfaces_final_diff_for_manual_review(
 
 
 @pytest.mark.asyncio
+async def test_slash_run_with_no_tasks_file_prints_hint(sandbox: Path) -> None:
+    """/run with no TASKS.md must coach the user toward plan mode, not
+    crash and not invoke the agent."""
+    from unittest.mock import AsyncMock
+
+    config = AppConfig(
+        profiles={"local": ModelProfile(provider="lmstudio", model="local-model")},
+        agent=AgentConfig(max_files=0, max_file_lines=10, iterative_patch_loop=True),
+    )
+    app = ScalpelApp(config=config, cwd=sandbox)
+    async with app.run_test(headless=True, size=(80, 24)) as pilot:
+        await pilot.pause(0.1)
+        _attach_mock(app, _StreamingMock([""]))
+        assert app._agent is not None
+        app._agent.run_plan = AsyncMock()  # type: ignore[method-assign]
+
+        app._handle_slash("/run")
+        await pilot.pause(0.2)
+
+        app._agent.run_plan.assert_not_called()  # type: ignore[attr-defined]
+        output = app.query_one(OutputLog)
+        chat = "\n".join(str(c.render()) for c in output.children if c.id != "_spacer")
+        assert "No plan yet" in chat
+
+
+@pytest.mark.asyncio
+async def test_slash_run_invokes_run_plan_and_renders_status_lines(
+    sandbox: Path,
+) -> None:
+    """/run with a TASKS.md must call `agent.run_plan` and render a
+    per-task status line plus the final summary."""
+    from unittest.mock import AsyncMock
+
+    from code_scalpel.agent import RunPlanResult, TaskOutcome
+    from code_scalpel.plan import Task
+
+    tasks_dir = sandbox / ".code-scalpel"
+    tasks_dir.mkdir()
+    (tasks_dir / "TASKS.md").write_text(
+        "## T001: First\n\nGoal: a\nFiles: x.py\n\n## T002: Second\n\nGoal: b\nFiles: y.py\n"
+    )
+
+    config = AppConfig(
+        profiles={"local": ModelProfile(provider="lmstudio", model="local-model")},
+        agent=AgentConfig(max_files=0, max_file_lines=10, iterative_patch_loop=True),
+    )
+    app = ScalpelApp(config=config, cwd=sandbox)
+    async with app.run_test(headless=True, size=(80, 24)) as pilot:
+        await pilot.pause(0.1)
+        _attach_mock(app, _StreamingMock([""]))
+        assert app._agent is not None
+
+        # Mock run_plan: fire both hooks so we exercise the per-task
+        # rendering path, then return a happy aggregate.
+        async def _fake_run_plan(
+            *,
+            stop_after_failures: int = 2,
+            on_task_start: Any = None,
+            on_task_end: Any = None,
+        ) -> RunPlanResult:
+            t1 = Task(id="T001", title="First", body="Goal: a", done=False)
+            t2 = Task(id="T002", title="Second", body="Goal: b", done=False)
+            sr = _make_step_result(
+                reply="ok",
+                attempts=(_make_attempt(apply_ok=True, tests_passed=True),),
+            )
+            o1 = TaskOutcome(task=t1, step_result=sr, status="done")
+            o2 = TaskOutcome(task=t2, step_result=sr, status="done")
+            if on_task_start:
+                on_task_start(t1)
+            if on_task_end:
+                on_task_end(o1)
+            if on_task_start:
+                on_task_start(t2)
+            if on_task_end:
+                on_task_end(o2)
+            return RunPlanResult(outcomes=(o1, o2), stopped_reason="all_done", tasks_completed=2)
+
+        app._agent.run_plan = AsyncMock(side_effect=_fake_run_plan)  # type: ignore[method-assign]
+
+        app._handle_slash("/run")
+        await pilot.pause(0.5)
+
+        app._agent.run_plan.assert_called_once()  # type: ignore[attr-defined]
+        output = app.query_one(OutputLog)
+        chat = "\n".join(str(c.render()) for c in output.children if c.id != "_spacer")
+        assert "Running T001: First" in chat
+        assert "Running T002: Second" in chat
+
+
+@pytest.mark.asyncio
+async def test_slash_run_renders_final_summary(sandbox: Path) -> None:
+    """After /run finishes the chat carries a single `⤷ Run finished: …`
+    line with stop reason. The user can scan one line and know what
+    happened during their coffee break."""
+    from unittest.mock import AsyncMock
+
+    from code_scalpel.agent import RunPlanResult, TaskOutcome
+    from code_scalpel.plan import Task
+
+    (sandbox / ".code-scalpel").mkdir()
+    (sandbox / ".code-scalpel" / "TASKS.md").write_text("## T001: x\n\nGoal: y\n")
+
+    config = AppConfig(
+        profiles={"local": ModelProfile(provider="lmstudio", model="local-model")},
+        agent=AgentConfig(max_files=0, max_file_lines=10, iterative_patch_loop=True),
+    )
+    app = ScalpelApp(config=config, cwd=sandbox)
+    async with app.run_test(headless=True, size=(80, 24)) as pilot:
+        await pilot.pause(0.1)
+        _attach_mock(app, _StreamingMock([""]))
+        assert app._agent is not None
+
+        t1 = Task(id="T001", title="x", body="Goal: y", done=False)
+        sr = _make_step_result(
+            reply="bad",
+            attempts=(_make_attempt(apply_ok=True, tests_passed=False),),
+        )
+        result = RunPlanResult(
+            outcomes=(TaskOutcome(task=t1, step_result=sr, status="failed"),),
+            stopped_reason="max_failures",
+            tasks_completed=0,
+        )
+        app._agent.run_plan = AsyncMock(return_value=result)  # type: ignore[method-assign]
+
+        app._handle_slash("/run")
+        await pilot.pause(0.5)
+
+        output = app.query_one(OutputLog)
+        chat = "\n".join(str(c.render()) for c in output.children if c.id != "_spacer")
+        assert "Run finished" in chat
+        assert "max_failures" in chat
+        assert "0 done" in chat
+        assert "1 failed" in chat
+
+
+@pytest.mark.asyncio
+async def test_slash_run_cancellation_routes_through_step_worker(
+    sandbox: Path,
+) -> None:
+    """Esc during /run must cancel the worker. `_step_worker` is the
+    handle the existing `action_cancel_step` already targets, so /run
+    must register itself there to share the cancel path."""
+    import asyncio as _asyncio
+    from unittest.mock import AsyncMock
+
+    (sandbox / ".code-scalpel").mkdir()
+    (sandbox / ".code-scalpel" / "TASKS.md").write_text("## T001: x\n\nGoal: y\n")
+
+    config = AppConfig(
+        profiles={"local": ModelProfile(provider="lmstudio", model="local-model")},
+        agent=AgentConfig(max_files=0, max_file_lines=10, iterative_patch_loop=True),
+    )
+    app = ScalpelApp(config=config, cwd=sandbox)
+    async with app.run_test(headless=True, size=(80, 24)) as pilot:
+        await pilot.pause(0.1)
+        _attach_mock(app, _StreamingMock([""]))
+        assert app._agent is not None
+
+        async def _slow_run_plan(**kwargs: Any) -> Any:
+            await _asyncio.sleep(2.0)
+            raise AssertionError("should have been cancelled")
+
+        app._agent.run_plan = AsyncMock(side_effect=_slow_run_plan)  # type: ignore[method-assign]
+
+        app._handle_slash("/run")
+        await pilot.pause(0.1)
+        # `_step_worker` must be set — same handle Esc targets.
+        worker = getattr(app, "_step_worker", None)
+        assert worker is not None
+        await pilot.press("escape")
+        await pilot.pause(0.2)
+        assert worker.is_cancelled or worker.is_finished
+
+
+@pytest.mark.asyncio
 async def test_loop_slash_toggles_config_flag(sandbox: Path) -> None:
     """/loop flips iterative_patch_loop on/off and prints the new state —
     the user's opt-in without editing config.yaml."""

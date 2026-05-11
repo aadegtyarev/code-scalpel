@@ -56,6 +56,7 @@ _SLASH_COMMANDS: list[tuple[str, str]] = [
     ("/remember", "save a project note (e.g. /remember always run linter)"),
     ("/recall", "browse stored notes; with text — search them"),
     ("/loop", "toggle code-mode iterative patch loop (apply → test → retry)"),
+    ("/run", "walk TASKS.md unattended — one task at a time, stop on N failures"),
     ("/help", "list commands"),
     ("/mode ask", "switch to ask mode"),
     ("/mode plan", "switch to plan mode"),
@@ -521,6 +522,26 @@ class ScalpelApp(App[None]):
         if cmd == "/recall" or cmd.startswith("/recall "):
             self._do_recall(cmd.removeprefix("/recall"))
             return
+        if cmd == "/run":
+            if self._agent is None:
+                output.print_error("No LLM configured.")
+                return
+            tasks_path = self.cwd / ".code-scalpel" / "TASKS.md"
+            if not tasks_path.is_file():
+                output.print_status(
+                    "● No plan yet. Switch to plan mode and ask for a breakdown first."
+                )
+                return
+            # Same worker plumbing as a regular turn so Esc cancels via
+            # `_step_worker` and JobsBar tracks the run in real time.
+            self.call_after_refresh(
+                lambda: setattr(
+                    self,
+                    "_step_worker",
+                    self.run_worker(self._run_plan(), exclusive=True, group="step"),
+                )
+            )
+            return
         if cmd == "/loop":
             # Flip the iterative patch loop on/off without editing config —
             # this is the user's opt-in for code-mode auto apply→test→retry.
@@ -738,6 +759,69 @@ class ScalpelApp(App[None]):
                     footer.status = "● reviewing"
                 else:
                     footer.status = "● idle"
+
+    async def _run_plan(self) -> None:
+        """Walk `.code-scalpel/TASKS.md` unattended through code_with_retry.
+
+        Per-task inline rendering: a "● Running T00N: <title>" status
+        line before each iteration, then the same `patch_attempt_*`
+        cards the manual code-mode flow already produces, followed by
+        a one-line verdict per task. A final summary line closes the
+        run (tasks done, failed, stop reason).
+        """
+        import time
+
+        output = self.query_one(OutputLog)
+        footer = self.query_one(StatusFooter)
+        assert self._agent is not None
+
+        start = time.monotonic()
+        with self.jobs.track("run-plan", "Executing TASKS.md"):
+            footer.status = "◌ run-plan…"
+
+            # Hooks run from the worker thread context (same loop). They
+            # mount widgets through OutputLog's `run_worker` plumbing, so
+            # they're non-blocking.
+            def _start(task: Any) -> None:
+                output.print_status(f"● Running {task.id}: {task.title}")
+
+            def _end(outcome: Any) -> None:
+                step_result = outcome.step_result
+                attempts = step_result.attempts if step_result is not None else ()
+                for idx, attempt in enumerate(attempts, start=1):
+                    call = ToolCall(name=f"{outcome.task.id}_attempt_{idx}", body="")
+                    body = self._render_attempt(attempt)
+                    tr = ToolResult(call=call, output=body, ok=attempt.tests_passed)
+                    output.add_tool_use(call, tr)
+                    self._last_tool_result = tr
+                verdict = {
+                    "done": "✓ done",
+                    "failed": "✗ failed — rolled back",
+                    "skipped": "↷ skipped (model emitted no patch)",
+                }.get(outcome.status, outcome.status)
+                output.print_status(f"  {outcome.task.id} {verdict}")
+
+            try:
+                result = await self._agent.run_plan(on_task_start=_start, on_task_end=_end)
+            except asyncio.CancelledError:
+                output.print_status("● Cancelled.")
+                footer.status = "● idle"
+                raise
+            except Exception as e:
+                output.print_error(f"Run-plan error: {e}")
+                footer.status = "● error"
+                return
+
+            duration = time.monotonic() - start
+            done = result.tasks_completed
+            failed = sum(1 for o in result.outcomes if o.status == "failed")
+            skipped = sum(1 for o in result.outcomes if o.status == "skipped")
+            reason = result.stopped_reason
+            output.print_turn_summary(
+                f"⤷ Run finished: {done} done, {failed} failed, "
+                f"{skipped} skipped · stopped: {reason} · {duration:.1f}s"
+            )
+            footer.status = "● idle"
 
     def _render_attempt(self, attempt: PatchAttempt) -> str:
         """Card body for one patch attempt: synthesized diff + apply/test

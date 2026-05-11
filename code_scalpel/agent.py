@@ -1,6 +1,9 @@
 from __future__ import annotations
 
-from collections.abc import AsyncIterator
+import hashlib
+import os
+from collections.abc import AsyncIterator, Callable
+from contextlib import suppress
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -11,6 +14,7 @@ if TYPE_CHECKING:
     from code_scalpel.memory import MemoryStore
 from code_scalpel.llm.adapter import ChatResponse, LLMAdapter, NativeToolCall
 from code_scalpel.patch.edit_block import Edit, apply_edits, extract_edits
+from code_scalpel.plan import Task, parse_tasks_md, serialize_tasks
 from code_scalpel.tools.agent_tools import (
     TOOL_SCHEMAS,
     ToolCall,
@@ -226,6 +230,41 @@ class StepResult:
 
 
 @dataclass(frozen=True)
+class TaskOutcome:
+    """Result of one run-plan iteration over a `Task`. `step_result` is
+    None when the task was skipped (e.g. plan-modified mid-run stopped
+    the loop before this task started).
+
+    `status` values:
+      - "done"    — `code_with_retry` returned with a passing patch
+      - "failed"  — `code_with_retry` exhausted retries
+      - "skipped" — model emitted no edits (treated as "question, not
+        a patch") or the task never started because the loop stopped
+    """
+
+    task: Task
+    step_result: StepResult | None
+    status: str
+
+
+@dataclass(frozen=True)
+class RunPlanResult:
+    """Aggregate of a single run-plan invocation.
+
+    `stopped_reason` reflects WHY the loop stopped:
+      - "all_done"      — every non-done task completed (or was skipped)
+      - "max_failures"  — N consecutive task failures hit the cap
+      - "cancelled"     — user pressed Esc; partial progress on disk
+      - "plan_modified" — TASKS.md hash changed mid-run (user editor race)
+      - "no_tasks"      — file missing or empty; nothing to do
+    """
+
+    outcomes: tuple[TaskOutcome, ...]
+    stopped_reason: str
+    tasks_completed: int
+
+
+@dataclass(frozen=True)
 class TextDelta:
     """Streaming chunk of model text, character/token-level."""
 
@@ -242,6 +281,49 @@ class ToolExecuted:
 
 
 StreamItem = TextDelta | ToolExecuted
+
+
+def _hash_text(text: str) -> str:
+    return hashlib.sha256(text.encode("utf-8", errors="replace")).hexdigest()
+
+
+def _atomic_write(path: Path, content: str) -> None:
+    """Write through a `.tmp` sibling then rename. Mirrors AgentState.save —
+    a partial write during cancel must NOT leave TASKS.md half-rewritten."""
+    tmp = path.with_suffix(path.suffix + ".tmp")
+    tmp.write_text(content)
+    os.replace(tmp, path)
+
+
+def _build_task_prompt(task: Task) -> str:
+    """One run-plan iteration's prompt to the code-mode agent. We keep
+    it close to the planner's own task shape so the model sees its own
+    output framed as the request — no translation layer, no drift."""
+    parts = [f"Execute task {task.id}: {task.title}"]
+    body = task.body.strip()
+    if body:
+        parts.append(body)
+    return "\n\n".join(parts)
+
+
+def _classify_outcome(task: Task, step_result: StepResult) -> TaskOutcome:
+    """Decide done / failed / skipped from a `code_with_retry` return.
+
+    - No attempts AND no edits  → model answered in plain text. The
+      planner asked for a patch; if no patch came out, this task was
+      a no-op (model decided nothing needs changing, or asked a
+      clarifying question). Mark "skipped" — neither a win nor a
+      retry-worthy failure.
+    - Attempts present, last one passed tests → "done".
+    - Attempts present, last one did not pass → "failed". The workspace
+      was rolled back by code_with_retry itself; we keep going.
+    """
+    attempts = step_result.attempts
+    if not attempts:
+        return TaskOutcome(task=task, step_result=step_result, status="skipped")
+    if attempts[-1].tests_passed:
+        return TaskOutcome(task=task, step_result=step_result, status="done")
+    return TaskOutcome(task=task, step_result=step_result, status="failed")
 
 
 class StepAgent:
@@ -404,6 +486,112 @@ class StepAgent:
             edits=last_result.edits,
             response=last_result.response,
             attempts=tuple(attempts),
+        )
+
+    async def run_plan(
+        self,
+        *,
+        stop_after_failures: int = 2,
+        on_task_start: Callable[[Task], None] | None = None,
+        on_task_end: Callable[[TaskOutcome], None] | None = None,
+    ) -> RunPlanResult:
+        """Walk `.code-scalpel/TASKS.md` and execute each non-done task
+        through `code_with_retry`. Marks completed tasks `[✓]` in the
+        file atomically (write `.tmp` → rename).
+
+        Stop conditions:
+          - `stop_after_failures` consecutive task failures → "max_failures"
+          - `asyncio.CancelledError` propagates → already-marked tasks
+            stay marked, in-flight `code_with_retry` rolls back its own
+            workspace via the existing snapshot path.
+          - TASKS.md hash changes between iterations → "plan_modified"
+            (defends against the user editing the file in another
+            window mid-run).
+          - All non-done tasks consumed → "all_done".
+          - File missing or empty → "no_tasks" (no exception).
+
+        Optional `on_task_start` / `on_task_end` hooks let the TUI render
+        progress inline without re-reading the file or re-parsing the
+        outcomes tuple. The hooks fire synchronously around each
+        `code_with_retry` call; exceptions inside them are swallowed so
+        a buggy widget can't kill the autonomous loop.
+        """
+        tasks_path = self._cwd / ".code-scalpel" / "TASKS.md"
+        if not tasks_path.is_file():
+            return RunPlanResult(outcomes=(), stopped_reason="no_tasks", tasks_completed=0)
+
+        original_text = tasks_path.read_text()
+        initial_hash = _hash_text(original_text)
+        tasks = parse_tasks_md(original_text)
+        if not tasks or all(t.done for t in tasks):
+            reason = "no_tasks" if not tasks else "all_done"
+            return RunPlanResult(outcomes=(), stopped_reason=reason, tasks_completed=0)
+
+        outcomes: list[TaskOutcome] = []
+        consecutive_failures = 0
+        # Mutable list so we can flip individual tasks done without
+        # rebuilding the tuple every iteration.
+        live_tasks: list[Task] = list(tasks)
+        stopped_reason = "all_done"
+
+        for idx, task in enumerate(live_tasks):
+            if task.done:
+                continue
+
+            # Fire start-hook BEFORE the modification check so the TUI
+            # has its "● Running T00N…" line on screen the moment we
+            # commit to attempting this task. The check below is the
+            # last gate.
+            if on_task_start is not None:
+                with suppress(Exception):
+                    on_task_start(task)
+
+            # Plan-modification detection — re-read before each task. If
+            # the file changed under us, stop. Already-marked tasks stay
+            # on disk; the user's edits win the race.
+            current_text = tasks_path.read_text()
+            if _hash_text(current_text) != initial_hash:
+                stopped_reason = "plan_modified"
+                break
+
+            prompt = _build_task_prompt(task)
+            try:
+                step_result = await self.code_with_retry(prompt, mode="code")
+            except Exception:
+                # Surface to the caller — cancellation propagates,
+                # arbitrary failures stop the loop with a record.
+                raise
+
+            outcome = _classify_outcome(task, step_result)
+            outcomes.append(outcome)
+            if on_task_end is not None:
+                with suppress(Exception):
+                    on_task_end(outcome)
+
+            if outcome.status == "done":
+                live_tasks[idx] = Task(id=task.id, title=task.title, body=task.body, done=True)
+                # Persist atomically. We refresh `initial_hash` against
+                # OUR own write so the plan-modification check doesn't
+                # trip on the very change we just made.
+                new_text = serialize_tasks(tuple(live_tasks), current_text)
+                _atomic_write(tasks_path, new_text)
+                initial_hash = _hash_text(new_text)
+                consecutive_failures = 0
+            elif outcome.status == "failed":
+                consecutive_failures += 1
+                if consecutive_failures >= stop_after_failures:
+                    stopped_reason = "max_failures"
+                    break
+            else:
+                # "skipped" — model decided no patch needed. Doesn't
+                # count toward failure budget; we move on.
+                consecutive_failures = 0
+
+        completed = sum(1 for o in outcomes if o.status == "done")
+        return RunPlanResult(
+            outcomes=tuple(outcomes),
+            stopped_reason=stopped_reason,
+            tasks_completed=completed,
         )
 
     async def _run_tests(self) -> tuple[str, bool]:
