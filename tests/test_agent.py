@@ -80,6 +80,24 @@ async def test_ask_sends_system_prompt(project: Path) -> None:
 
 
 @pytest.mark.asyncio
+async def test_system_prompt_carries_identity_anchor(project: Path) -> None:
+    """When the user asks "кто ты", weak LLMs translate the system prompt
+    back verbatim ("Ты — ассистент…") instead of self-introducing. The
+    Identity block has to give them a first-person template so the answer
+    starts with "Я — code-scalpel", not "Ты —". This test guards the
+    block — if the anchor disappears, the "кто ты" probe regresses."""
+    llm = MockLLMAdapter(["OK"])
+    agent = StepAgent(llm=llm, cwd=project, config=_CONFIG)
+    await agent.ask("do something")
+    system = llm.calls[0][0]["content"]
+    assert "Identity" in system
+    assert "code-scalpel" in system
+    # Concrete templates — without them weak models hallucinate from scratch.
+    assert "Я — code-scalpel" in system
+    assert "I'm code-scalpel" in system
+
+
+@pytest.mark.asyncio
 async def test_ask_sends_system_and_task_only(project: Path) -> None:
     """With native function calling, tools are declared via API schema —
     no need for few-shot examples. Initial messages = system + task."""

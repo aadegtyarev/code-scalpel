@@ -132,6 +132,21 @@ SCENARIOS = [
         check=_contains("mark_compacted"),
     ),
     Scenario(
+        name="identity",
+        description="'кто ты' must self-introduce 1st person — not echo system prompt",
+        turns=["кто ты"],
+        # Pass if the reply leads with Я/I (first person) and names
+        # code-scalpel. Fail = "Ты — ассистент..." (the bug from
+        # 2026-05-11: weak model translates system prompt back).
+        check=lambda replies: (
+            (
+                replies[0].lstrip().lower().startswith(("я ", "я—", "я-", "i'm", "i am"))
+                and "code-scalpel" in replies[0].lower(),
+                f"reply must start 1st-person + name 'code-scalpel'; got: {replies[0][:80]!r}",
+            )
+        ),
+    ),
+    Scenario(
         name="plan-mode",
         description="Plan mode: produce TASKS.md structure",
         turns=[],  # set below — plan mode needs explicit mode pass
