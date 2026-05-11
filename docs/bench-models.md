@@ -158,17 +158,32 @@ microscaling 4-bit формат от OpenAI, GPU-friendly.)
 Какая комбинация решающая — нам без файнтюна не узнать. Факт:
 **на нашем бенче gemma-4-26b-a4b — №1 по качеству, №3 по скорости**.
 
-## По MoE + спек (контекст, не наш замер)
+## MoE + спек на LM Studio: пробовали, не вышло
 
-Мы не запускали MoE-модели со спек-декодингом — этот вариант сейчас
-заблокирован в LM Studio для Qwen3.5/3.6 dense → A3B target pairing
-(см. tracking issue [#1597](https://github.com/lmstudio-ai/lmstudio-bug-tracker/issues/1597)).
-Снаружи (llama.cpp / SGLang / vLLM) поддержка есть, но мы её не
-мерили — было вне scope v0.2.
+Мы попытались включить спек для gemma-4-26b-a4b с её official
+purpose-built drafter'ом от Google
+(`AtomicChat/gemma-4-26B-A4B-it-assistant-GGUF`, 0.4B, тот же 262K
+vocab). LM Studio **отказался их пэйрить** — у assistant-варианта
+arch=`gemma4_assistant`, у target arch=`gemma4`. Текст в UI:
+*«Не найдено ни одной совместимой черновой модели для вашего
+текущего выбора модели»*.
 
-Если в будущем понадобится — переключаться на SGLang с EAGLE3 head
-для A3B family. Готовый head для qwen3-coder-30b-a3b есть в
-[lmsys/SGLang-EAGLE3-Qwen3-Coder-30B-A3B](https://huggingface.co/lmsys/SGLang-EAGLE3-Qwen3-Coder-30B-A3B-Instruct-SpecForge).
+Это [LM Studio bug #1597](https://github.com/lmstudio-ai/lmstudio-bug-tracker/issues/1597)
+— открыт 2026-03-02, висит без owner'а. Та же проблема блокирует
+Qwen3.5/3.6 dense → A3B target pairing.
+
+**Альтернативы (вне scope нашего v0.2 замера):**
+- SGLang с EAGLE3 head для A3B family. Готовый head для
+  qwen3-coder-30b-a3b есть в
+  [lmsys/SGLang-EAGLE3-Qwen3-Coder-30B-A3B](https://huggingface.co/lmsys/SGLang-EAGLE3-Qwen3-Coder-30B-A3B-Instruct-SpecForge).
+- vLLM с собственными draft head'ами (для gemma-4/A3B пока
+  публичных нет).
+- llama-cpp напрямую (после merge PR в апреле 2026) — но это
+  отказ от LM Studio UI.
+
+Для нашего use case — ждём пока issue #1597 разрулят. До тех
+пор: coder-14b со спек = быстрее, gemma-4 без спек = качественнее,
+но не оба сразу.
 
 ## Где проседают разные модели
 
