@@ -245,7 +245,9 @@ async def test_escape_cancels_streaming_worker(sandbox: Path) -> None:
         assert worker.is_cancelled or worker.is_finished
 
 
-def test_format_turn_summary_no_tools_shows_warning() -> None:
+def test_format_turn_summary_omits_tools_field_when_zero() -> None:
+    """When no tools were called, the summary just drops that field —
+    the inline tool cards above already make their absence obvious."""
     from code_scalpel.tui.app import _format_turn_summary
 
     out = _format_turn_summary(
@@ -256,14 +258,17 @@ def test_format_turn_summary_no_tools_shows_warning() -> None:
         ctx_used=1024,
         ctx_limit=16384,
     )
-    assert "⚠ no tools used" in out
+    assert "tools" not in out
+    assert "no tools used" not in out
+    assert "🔧" not in out
+    # Other fields still present
     assert "↓ 234 tokens" in out
     assert "5 tok/s" in out
     assert "1.4s" in out
     assert "ctx 1k/16k" in out
-    # Surrounding dim wrapper keeps the summary visually quiet.
-    assert out.startswith("[dim]⤷ ")
-    assert out.endswith("[/dim]")
+    # No dim wrapper — colour comes from the msg-summary CSS class.
+    assert out.startswith("⤷ ")
+    assert "[dim]" not in out
 
 
 def test_format_turn_summary_pluralises_tool_noun() -> None:
@@ -293,10 +298,11 @@ def test_format_turn_summary_drops_zero_fields() -> None:
 
 
 @pytest.mark.asyncio
-async def test_inline_turn_summary_flags_no_tools(sandbox: Path) -> None:
-    """The reply was generated without any read_file/grep — the inline
-    turn summary must flag it so the user spots the kind of ungrounded
-    answer the 2026-05-11 screenshot bug produced."""
+async def test_inline_turn_summary_appears_after_turn(sandbox: Path) -> None:
+    """Every completed turn drops a dim summary line into the chat with
+    duration/ctx. When no tools were called the tool field is just
+    omitted — no yellow warning, no shouting — the inline tool cards
+    above already make tool absence visible."""
     from code_scalpel.tui.widgets.footer import StatusFooter
     from code_scalpel.tui.widgets.input import UserMessage
 
@@ -309,16 +315,18 @@ async def test_inline_turn_summary_flags_no_tools(sandbox: Path) -> None:
         app.post_message(UserMessage("hi"))
         await pilot.pause(0.3)
 
-        # Footer is minimal — should NOT carry the warning anymore.
+        # Footer carries no warning either way.
         footer_status = app.query_one(StatusFooter).status
-        assert "no tools used" not in footer_status, (
-            f"footer should be minimal, not carry the warning: {footer_status!r}"
-        )
-        # The warning lives inline in the chat now.
+        assert "no tools used" not in footer_status
+
         output = app.query_one(OutputLog)
         chat = "\n".join(str(c.render()) for c in output.children if c.id != "_spacer")
-        assert "no tools used" in chat, f"inline summary missing from chat:\n{chat}"
-        # And it includes a duration field.
+        # Summary marker is there.
+        assert "⤷" in chat, f"inline summary missing:\n{chat}"
+        # But no warning — tool field is just absent for tool_calls=0.
+        assert "no tools used" not in chat
+        assert "🔧" not in chat
+        # Duration field present.
         assert "0.0s" in chat or "0.1s" in chat or "0.2s" in chat
 
 

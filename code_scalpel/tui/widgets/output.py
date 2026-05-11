@@ -43,6 +43,14 @@ class OutputLog(VerticalScroll):
         color: #585858;
         background: #0f0f0f;
     }
+    OutputLog Static.msg-summary {
+        /* Post-turn summary line — same brightness as the footer
+           (#a0a0a0) so it's legible without competing with chat text. */
+        height: auto;
+        margin: 1 0 0 0;
+        color: #a0a0a0;
+        background: #0f0f0f;
+    }
     OutputLog Static.msg-error {
         height: auto;
         margin: 1 0 0 0;
@@ -111,6 +119,14 @@ class OutputLog(VerticalScroll):
         otherwise blow up Rich's markup parser."""
         self.run_worker(
             self._append(Static(text, classes="msg-status", markup=markup)),
+            exclusive=False,
+        )
+
+    def print_turn_summary(self, text: str) -> None:
+        """Inline per-turn summary (tools, tokens, speed, ctx). Brighter
+        than the regular status line so it's readable alongside chat text."""
+        self.run_worker(
+            self._append(Static(text, classes="msg-summary")),
             exclusive=False,
         )
 

@@ -11,6 +11,7 @@ from __future__ import annotations
 from rich.console import RenderableType
 from rich.markup import escape
 from rich.syntax import Syntax
+from rich.text import Text
 from textual.app import ComposeResult
 from textual.binding import Binding
 from textual.containers import Vertical, VerticalScroll
@@ -97,9 +98,10 @@ class ToolResultModal(ModalScreen[None]):
         if not self._result.output or not self._result.ok:
             return None
         # Custom highlight for project_map — the format isn't valid Python,
-        # so no Pygments lexer fits. See _map_highlight.py.
+        # so no Pygments lexer fits. See _map_highlight.py. Line numbers
+        # are prepended manually because rich.Text has no built-in gutter.
         if self._result.call.name == "project_map":
-            return highlight_map(self._result.output)
+            return _prepend_line_numbers(highlight_map(self._result.output))
         lexer = _infer_lexer_for(self._result.call)
         if lexer:
             return Syntax(
@@ -114,12 +116,27 @@ class ToolResultModal(ModalScreen[None]):
 
     @staticmethod
     def _with_line_numbers(text: str) -> str:
-        """Prepend 1-indexed line numbers to plain-text bodies (project map,
-        grep results, run_tests output). Lines are zero-padded to the widest
-        line-number width so the columns stay aligned."""
+        """Prepend 1-indexed line numbers to plain-text bodies (grep
+        results, run_tests output). Right-aligned to the widest line-number
+        width so the gutter stays straight."""
         lines = text.splitlines() or [""]
         width = len(str(len(lines)))
         return "\n".join(f"{i:>{width}}  {line}" for i, line in enumerate(lines, 1))
+
+
+def _prepend_line_numbers(text: Text) -> Text:
+    """Same idea as _with_line_numbers but for an already-styled rich.Text.
+    Splits on newlines (preserving spans), prepends a dim gutter, and
+    reassembles. The gutter style matches the modal's secondary colour."""
+    lines = text.split("\n", allow_blank=True)
+    width = len(str(len(lines)))
+    out = Text()
+    for i, line in enumerate(lines, 1):
+        out.append(f"{i:>{width}}  ", style="dim #707070")
+        out.append_text(line)
+        if i < len(lines):
+            out.append("\n")
+    return out
 
     def compose(self) -> ComposeResult:
         with Vertical():
@@ -141,11 +158,23 @@ class ToolResultModal(ModalScreen[None]):
             yield Static(r"\[esc] close · \[ctrl+c] copy", id="trm-hint")
 
     def action_copy(self) -> None:
-        """Ctrl+C copies the raw tool output (not the rendered highlight)."""
+        """Ctrl+C copies the raw tool output (not the rendered highlight).
+        Surfaces a passive toast so the user knows it landed — no action
+        required to dismiss."""
         text = self._result.output or ""
         try:
             self.app.copy_to_clipboard(text)
         except Exception:
-            # Some terminals don't support OSC52; quiet fail keeps the
-            # modal usable as a fallback viewer.
+            # Some terminals don't support OSC52 — let the user know.
+            self.app.notify(
+                "Clipboard not supported by this terminal.",
+                title="Copy",
+                severity="warning",
+                timeout=2,
+            )
             return
+        self.app.notify(
+            f"Copied {len(text)} chars to clipboard.",
+            title="Copy",
+            timeout=2,
+        )

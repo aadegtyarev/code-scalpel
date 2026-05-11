@@ -66,13 +66,12 @@ def _format_turn_summary(
     """One-line summary printed inline after each turn — Claude-Code style.
     Replaces the old footer overload; the footer only carries state now.
 
-    Tools / no-tools warning is surfaced so the user can spot ungrounded
-    replies. Tokens / rate / duration / ctx round out the cost picture
-    without dragging the user back to the bottom of the screen."""
+    Tool count is shown only when tools were actually called — the inline
+    tool cards above already make their absence obvious, no need for a
+    separate warning. Tokens / rate / duration / ctx round out the cost
+    picture without dragging the user back to the bottom of the screen."""
     parts: list[str] = []
-    if tool_calls == 0:
-        parts.append("[yellow]⚠ no tools used[/yellow]")
-    else:
+    if tool_calls > 0:
         noun = "tool" if tool_calls == 1 else "tools"
         parts.append(f"🔧 {tool_calls} {noun}")
     if completion_tokens:
@@ -84,7 +83,7 @@ def _format_turn_summary(
     if ctx_limit:
         pct = ctx_used / ctx_limit * 100
         parts.append(f"ctx {ctx_used // 1000}k/{ctx_limit // 1000}k ({pct:.0f}%)")
-    return "[dim]⤷ " + " · ".join(parts) + "[/dim]"
+    return "⤷ " + " · ".join(parts)
 
 
 class ScalpelApp(App[None]):
@@ -225,6 +224,25 @@ class ScalpelApp(App[None]):
             )
         )
 
+    async def _do_map(self) -> None:
+        """Build the project map off the event loop and surface progress
+        inline. UI must NEVER freeze — even fast paths route through here
+        so /map feels the same on a 5-file repo and a 500-file one."""
+        output = self.query_one(OutputLog)
+        output.print_status("● Building project map…", markup=True)
+        # Give the event loop a chance to paint the notice before we go
+        # CPU-bound on AST parsing.
+        await asyncio.sleep(0)
+        from code_scalpel.project_map import build_map
+
+        loop = asyncio.get_running_loop()
+        text = await loop.run_in_executor(None, build_map, self.cwd)
+
+        call = ToolCall(name="project_map", body="")
+        result = ToolResult(call=call, output=text, ok=True)
+        output.add_tool_use(call, result)
+        self._last_tool_result = result
+
     async def _do_compact(self) -> None:
         output = self.query_one(OutputLog)
         footer = self.query_one(StatusFooter)
@@ -291,18 +309,11 @@ class ScalpelApp(App[None]):
             output.print_status(lines)
             return
         if cmd == "/map":
-            from code_scalpel.project_map import build_map
-
-            text = build_map(self.cwd)
-            # Render as a ToolUseCard — same pattern every tool result uses:
-            # collapsed by default, 5-line preview, Ctrl+O for the full
-            # popup. The map IS the output of an implicit tool that runs
-            # every turn, so this naming is honest.
-            call = ToolCall(name="project_map", body="")
-            result = ToolResult(call=call, output=text, ok=True)
-            output.add_tool_use(call, result)
-            # Make Ctrl+O target this result.
-            self._last_tool_result = result
+            # build_map walks the project (up to 200 files, AST-parses each)
+            # and would block the event loop for seconds on larger trees.
+            # Run it on a worker so the user message + "Building…" notice
+            # render instantly, then the card appears when the build returns.
+            self.run_worker(self._do_map(), exclusive=False, group="map")
             return
         if cmd.startswith("/mode "):
             mode = cmd.removeprefix("/mode ").strip()
@@ -379,7 +390,7 @@ class ScalpelApp(App[None]):
                 ctx_used=self.session.context_used_tokens,
                 ctx_limit=self.state.context_limit,
             )
-            output.print_status(summary)
+            output.print_turn_summary(summary)
 
             edits = extract_edits(full)
             if edits:
