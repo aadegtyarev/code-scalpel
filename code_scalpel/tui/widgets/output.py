@@ -164,5 +164,8 @@ class OutputLog(VerticalScroll):
             exclusive=False,
         )
 
-    def add_tool_use(self, call: ToolCall, result: ToolResult) -> None:
-        self.run_worker(self._append(ToolUseCard(call, result)), exclusive=False)
+    def add_tool_use(self, call: ToolCall, result: ToolResult, *, full: bool = False) -> None:
+        """`full=True` forwards to ToolUseCard's full-render mode — body
+        renders inline without the "N more lines" cap. Use it for cards
+        whose payload is small by construction (e.g. /stats)."""
+        self.run_worker(self._append(ToolUseCard(call, result, full=full)), exclusive=False)

@@ -100,10 +100,22 @@ class ToolUseCard(Widget):
 
     _PREVIEW_LINES = 5
 
-    def __init__(self, call: ToolCall, result: ToolResult) -> None:
+    def __init__(
+        self,
+        call: ToolCall,
+        result: ToolResult,
+        *,
+        full: bool = False,
+    ) -> None:
+        """`full=True` skips the preview-truncation: the card renders the
+        whole `result.output` inline. Use it for tool cards whose body is
+        intentionally short (e.g. /stats — 6-10 rows of session metadata)
+        where the "… N more lines (Ctrl+O for full view)" footer just
+        wastes a slot and forces a modal for nothing."""
         super().__init__()
         self._call = call
         self._result = result
+        self._full = full
 
     def _title(self) -> str:
         dot = "[#5fbf5f]●[/]" if self._result.ok else "[#bf6060]●[/]"
@@ -146,8 +158,11 @@ class ToolUseCard(Widget):
 
     def _preview_text(self) -> tuple[str, int]:
         """Return (head, hidden_count). head is the first N lines; hidden_count
-        is the number of trailing lines elided."""
+        is the number of trailing lines elided. `full=True` short-circuits
+        the cap so the whole output renders inline."""
         out = self._result.output
+        if self._full:
+            return out, 0
         lines = out.splitlines()
         if len(lines) <= self._PREVIEW_LINES:
             return out, 0

@@ -83,6 +83,18 @@ def test_preview_long_output_truncates_with_hidden_count() -> None:
     assert hidden == 15
 
 
+def test_preview_full_mode_skips_truncation() -> None:
+    """`full=True` short-circuits the cap — for cards whose body is small
+    by construction (e.g. /stats: 6-10 rows of session metadata), the
+    "N more lines (Ctrl+O for full view)" footer is pure noise."""
+    lines = "\n".join(f"line {i}" for i in range(1, 21))  # 20 lines, > preview
+    call = ToolCall(name="session_stats", body="")
+    card = ToolUseCard(call, ToolResult(call=call, output=lines, ok=True), full=True)
+    head, hidden = card._preview_text()
+    assert head == lines  # the whole thing
+    assert hidden == 0
+
+
 # ── syntax highlighting (read_file only) ─────────────────────────────────────
 
 

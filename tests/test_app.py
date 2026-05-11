@@ -575,9 +575,10 @@ async def test_slash_tasks_mounts_card_when_file_exists(sandbox: Path) -> None:
 
 
 @pytest.mark.asyncio
-async def test_slash_system_mounts_card_with_prompt(sandbox: Path) -> None:
-    """/system mounts a ToolUseCard whose body is the actual system prompt —
-    the user can see what the model sees on each turn."""
+async def test_slash_stats_mounts_card_with_session_stats(sandbox: Path) -> None:
+    """/stats mounts a ToolUseCard whose body is the live session report —
+    requests / tokens / elapsed / mode / model — so the user can sanity-
+    check cost and behaviour without leaving the chat."""
     from code_scalpel.tui.widgets.tool_use import ToolUseCard
 
     app = ScalpelApp(config=_CONFIG, cwd=sandbox)
@@ -585,25 +586,25 @@ async def test_slash_system_mounts_card_with_prompt(sandbox: Path) -> None:
         await pilot.pause(0.1)
         output = app.query_one(OutputLog)
 
-        app._handle_slash("/system")
+        app._handle_slash("/stats")
         await pilot.pause(0.1)
 
         cards = list(output.query(ToolUseCard))
-        assert cards, "expected /system to mount a ToolUseCard"
+        assert cards, "expected /stats to mount a ToolUseCard"
         card = cards[-1]
-        assert card._call.name == "system_prompt"
-        # Anchor specific to the project's prompt — guards against accidental
-        # gutting of the system message.
-        assert "code-scalpel" in card._result.output
+        assert card._call.name == "session_stats"
+        body = card._result.output
+        # Spot-check fields that must show up even on a fresh session
+        assert "requests" in body
+        assert "elapsed" in body
+        assert "tokens" in body
+        assert "mode" in body
 
 
 @pytest.mark.asyncio
-async def test_slash_system_appends_plan_addendum_when_in_plan_mode(
-    sandbox: Path,
-) -> None:
-    """In plan mode the addendum is concatenated onto the base prompt —
-    /system must reflect that so the user sees exactly what the next turn
-    will carry."""
+async def test_slash_stats_reflects_current_mode(sandbox: Path) -> None:
+    """After /mode plan the next /stats must report mode=plan — the report
+    is the user's only programmatic readback of which mode is active."""
     from code_scalpel.tui.widgets.tool_use import ToolUseCard
 
     app = ScalpelApp(config=_CONFIG, cwd=sandbox)
@@ -612,14 +613,14 @@ async def test_slash_system_appends_plan_addendum_when_in_plan_mode(
         app._handle_slash("/mode plan")
         await pilot.pause(0.05)
 
-        app._handle_slash("/system")
+        app._handle_slash("/stats")
         await pilot.pause(0.1)
 
         output = app.query_one(OutputLog)
         cards = list(output.query(ToolUseCard))
         assert cards
         body = cards[-1]._result.output
-        assert "PLAN mode" in body
+        assert "plan" in body
 
 
 @pytest.mark.asyncio

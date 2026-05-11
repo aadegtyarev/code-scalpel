@@ -79,3 +79,46 @@ def test_detect_and_pin_language_caches_first_call() -> None:
     assert s.detect_and_pin_language("привет") == "Russian"
     # Second call must not flip the pin even if the new text is in English.
     assert s.detect_and_pin_language("hello") == "Russian"
+
+
+def test_stats_report_lists_core_fields() -> None:
+    s = Session()
+    s.record(_response(prompt=120, completion=80, cost=0.0050))
+    s.record(_response(prompt=200, completion=160))
+    report = s.stats_report(ctx_limit=16384, model="qwen/qwen2.5-coder-14b", mode="ask")
+    assert "qwen/qwen2.5-coder-14b" in report
+    assert "ask" in report
+    assert "requests" in report
+    assert "320" in report  # prompt total
+    assert "240" in report  # completion total
+    assert "16384" in report
+    assert "$0.0050" in report
+
+
+def test_stats_report_omits_optional_when_not_provided() -> None:
+    """No model / mode / ctx_limit / cost → those rows simply don't appear,
+    rather than rendering blank values."""
+    s = Session()
+    s.record(_response(prompt=50, completion=30))
+    report = s.stats_report()
+    assert "requests" in report
+    assert "tokens" in report
+    assert "model" not in report
+    assert "cost" not in report  # zero cost suppressed
+
+
+def test_stats_report_surfaces_pinned_language() -> None:
+    s = Session()
+    s.detect_and_pin_language("Привет!")
+    report = s.stats_report()
+    assert "language" in report
+    assert "Russian" in report
+
+
+def test_stats_report_marks_compact_baseline_once_set() -> None:
+    s = Session()
+    s.record(_response(prompt=1000, completion=400))
+    s.mark_compacted()
+    report = s.stats_report()
+    assert "compacted at" in report
+    assert "1400" in report
