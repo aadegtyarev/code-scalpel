@@ -101,9 +101,7 @@ class ContextReport:
         lines.append("")
         if self.ctx_limit:
             pct = self.used_tokens / self.ctx_limit * 100
-            lines.append(
-                f"used {self.used_tokens:,} / {self.ctx_limit:,} tokens ({pct:.0f}%)"
-            )
+            lines.append(f"used {self.used_tokens:,} / {self.ctx_limit:,} tokens ({pct:.0f}%)")
             lines.append(_bar(pct, width=40))
         else:
             lines.append(f"used {self.used_tokens:,} tokens · ctx limit unknown")

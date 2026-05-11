@@ -281,30 +281,24 @@ class ScalpelApp(App[None]):
             output.add_tool_use(call, result)
             self._last_tool_result = result
 
-    async def _do_tasks(self) -> None:
-        """Surface the current plan (.code-scalpel/TASKS.md) inline as a
-        collapsed ToolUseCard — same shape as /map so the file is right
-        there in the chat without dumping its full body into view. The
-        read is tiny but we still bounce through a worker for parity
-        with /map: keeps the UI thread free if the file ever grows."""
+    def _do_tasks(self) -> None:
+        """Surface the current plan (.code-scalpel/TASKS.md) inline as
+        a collapsed ToolUseCard. The file is tiny (rarely >5KB); a
+        synchronous read is cheaper than the worker-bounce latency."""
         output = self.query_one(OutputLog)
         tasks_path = self.cwd / ".code-scalpel" / "TASKS.md"
         if not tasks_path.is_file():
             output.print_status("No plan yet. Switch to plan mode and ask for a breakdown.")
             return
-        # Tiny read, but keep the event loop responsive — the executor
-        # bounce is cheap and matches how /map handles its I/O.
-        loop = asyncio.get_running_loop()
-        text = await loop.run_in_executor(None, tasks_path.read_text)
-
+        try:
+            text = tasks_path.read_text()
+        except OSError as e:
+            output.print_error(f"TASKS.md read failed: {e}")
+            return
         call = ToolCall(name="tasks_md", body="")
         result = ToolResult(call=call, output=text, ok=True)
         output.add_tool_use(call, result)
         self._last_tool_result = result
-
-    async def _do_context_worker(self) -> None:
-        with self.jobs.track("context", "Building context report"):
-            await asyncio.get_running_loop().run_in_executor(None, self._do_context)
 
     def _do_context(self) -> None:
         """Render a context-budget breakdown by category. Reads the same
@@ -621,19 +615,17 @@ class ScalpelApp(App[None]):
             self.run_worker(self._do_map(), exclusive=False, group="map")
             return
         if cmd == "/tasks":
-            # Off-loop read keeps parity with /map even though the file is
-            # tiny — same UX surface, same code shape.
-            self.run_worker(self._do_tasks(), exclusive=False, group="tasks")
+            # Sync — TASKS.md is rarely >5KB, no worker bounce needed.
+            self._do_tasks()
             return
         if cmd == "/stats":
             # Pure in-memory render — no I/O, no need for a worker.
             self._do_stats()
             return
         if cmd == "/context":
-            # Touches build_map_overview which walks the project; for
-            # tiny repos it's instant, but route through a worker so
-            # /context on a large tree doesn't freeze the UI.
-            self.run_worker(self._do_context_worker(), exclusive=False, group="context")
+            # Synchronous: build_map_overview is ~50ms on this repo.
+            # Worker-bounce + thread-switch latency dwarfed the work.
+            self._do_context()
             return
         if cmd == "/skills":
             # Pure in-memory render — static catalog.
