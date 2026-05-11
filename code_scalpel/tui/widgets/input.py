@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from textual.app import ComposeResult
-from textual.binding import Binding
 from textual.message import Message
 from textual.widget import Widget
 from textual.widgets import Input, Static
@@ -10,22 +9,17 @@ from textual.widgets import Input, Static
 class HistoryInput(Input):
     """Single-line input with bash-style ↑/↓ history navigation.
 
-    The textual-autocomplete dropdown that ships with ModeInput hijacks
-    the arrow keys: ↓ opens the slash-command list, ↑ steps inside it.
-    That's the wrong interaction for a shell-shaped prompt — what we
-    actually want is what every Linux terminal does: ↑ recalls the
-    previous command, ↓ moves forward through history (and clears when
-    you walk past the newest entry). Priority bindings let us intercept
-    before the dropdown sees the key.
+    Bash semantics: ↑ recalls the previous command, ↓ moves forward
+    through history and restores the draft when you walk past the
+    newest entry. History is per-widget, in-memory only.
 
-    History is per-widget instance, in-memory only — bash-history
-    persistence across sessions can come later (cheap, but unscoped).
+    We DON'T use a priority Binding for ↑/↓ — that would steal the
+    keys even when the slash-command autocomplete dropdown is open
+    (regression caught 2026-05-11: dropdown couldn't be navigated).
+    Instead we intercept in `on_key`: if a textual-autocomplete
+    dropdown is mounted and showing, hand the key off; otherwise
+    swallow it and do history.
     """
-
-    BINDINGS = [
-        Binding("up", "history_prev", "Previous command", show=False, priority=True),
-        Binding("down", "history_next", "Next command", show=False, priority=True),
-    ]
 
     def __init__(self, *args: object, **kwargs: object) -> None:
         super().__init__(*args, **kwargs)  # type: ignore[arg-type]
@@ -50,7 +44,44 @@ class HistoryInput(Input):
         self._idx = None
         self._draft = ""
 
-    def action_history_prev(self) -> None:
+    def on_key(self, event: object) -> None:
+        """Hand ↑/↓ to the autocomplete dropdown when it's visible —
+        otherwise do bash-style history navigation here. Anything else
+        (printable keys, backspace, etc.) falls through to Input's
+        default handler untouched."""
+        key = getattr(event, "key", None)
+        if key not in ("up", "down"):
+            return
+        if self._autocomplete_open():
+            return  # dropdown gets the event via its own listener
+        if key == "up":
+            self._history_prev()
+        else:
+            self._history_next()
+        stop = getattr(event, "stop", None)
+        if callable(stop):
+            stop()
+        prevent = getattr(event, "prevent_default", None)
+        if callable(prevent):
+            prevent()
+
+    def _autocomplete_open(self) -> bool:
+        """True iff a textual-autocomplete dropdown is currently
+        showing for this widget. We don't import AutoComplete (avoid
+        a tight coupling) — duck-type by class name + visibility."""
+        try:
+            screen = self.screen
+        except Exception:
+            return False
+        for child in screen.walk_children():
+            cls = type(child).__name__
+            if "AutoComplete" not in cls:
+                continue
+            if getattr(child, "display", True) and getattr(child, "visible", True):
+                return True
+        return False
+
+    def _history_prev(self) -> None:
         if not self._history:
             return
         if self._idx is None:
@@ -63,7 +94,7 @@ class HistoryInput(Input):
         self.value = self._history[self._idx]
         self.cursor_position = len(self.value)
 
-    def action_history_next(self) -> None:
+    def _history_next(self) -> None:
         if self._idx is None:
             # Not browsing → nothing meaningful "below" the current
             # draft. Stay quiet rather than opening the autocomplete
@@ -78,6 +109,15 @@ class HistoryInput(Input):
             self.value = self._draft
             self._draft = ""
         self.cursor_position = len(self.value)
+
+    # Public-action wrappers kept for tests / external callers that
+    # exercised the previous bound-action API. Unit tests rely on
+    # calling these directly without an App in scope.
+    def action_history_prev(self) -> None:
+        self._history_prev()
+
+    def action_history_next(self) -> None:
+        self._history_next()
 
     @property
     def history(self) -> list[str]:
