@@ -12,9 +12,22 @@ from code_scalpel.config import (
     ModeTemperatures,
     _deep_merge,
     autodetect_context_tokens,
+    autodetect_model_name,
     load_config,
     resolve_context_tokens,
+    resolve_model_name,
 )
+
+
+def _mock_httpx_with_models(models: list[dict[str, object]]) -> AsyncMock:
+    resp = MagicMock()
+    resp.raise_for_status = MagicMock()
+    resp.json.return_value = {"data": models}
+    client = AsyncMock()
+    client.__aenter__ = AsyncMock(return_value=client)
+    client.__aexit__ = AsyncMock(return_value=None)
+    client.get = AsyncMock(return_value=resp)
+    return client
 
 
 def test_default_config() -> None:
@@ -296,3 +309,86 @@ async def test_resolve_raises_when_no_source() -> None:
         pytest.raises(ValueError, match="context_tokens"),
     ):
         await resolve_context_tokens(profile)
+
+
+# ── model name detection / resolution ────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_autodetect_model_name_returns_first_id() -> None:
+    profile = ModelProfile(provider="lmstudio", model="auto")
+    client = _mock_httpx_with_models(
+        [{"id": "qwen2.5-coder-14b-instruct", "context_length": 32768}]
+    )
+    with patch("code_scalpel.config.httpx.AsyncClient", return_value=client):
+        result = await autodetect_model_name(profile)
+    assert result == "qwen2.5-coder-14b-instruct"
+
+
+@pytest.mark.asyncio
+async def test_autodetect_model_name_skips_empty_ids() -> None:
+    profile = ModelProfile(provider="lmstudio", model="auto")
+    client = _mock_httpx_with_models([{"id": ""}, {"id": None}, {"id": "real-model"}])
+    with patch("code_scalpel.config.httpx.AsyncClient", return_value=client):
+        result = await autodetect_model_name(profile)
+    assert result == "real-model"
+
+
+@pytest.mark.asyncio
+async def test_autodetect_model_name_returns_none_on_empty_list() -> None:
+    profile = ModelProfile(provider="lmstudio", model="auto")
+    client = _mock_httpx_with_models([])
+    with patch("code_scalpel.config.httpx.AsyncClient", return_value=client):
+        result = await autodetect_model_name(profile)
+    assert result is None
+
+
+@pytest.mark.asyncio
+async def test_resolve_model_name_manual_override_wins() -> None:
+    """Explicit model id in config is passed through untouched — no /v1/models hit."""
+    profile = ModelProfile(provider="lmstudio", model="qwen2.5-coder-14b")
+    with patch("code_scalpel.config.autodetect_model_name", new=AsyncMock()) as detected:
+        result = await resolve_model_name(profile)
+    assert result == "qwen2.5-coder-14b"
+    detected.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_resolve_model_name_auto_sentinel_triggers_detection() -> None:
+    profile = ModelProfile(provider="lmstudio", model="auto")
+    with patch(
+        "code_scalpel.config.autodetect_model_name",
+        new=AsyncMock(return_value="qwen-detected"),
+    ):
+        result = await resolve_model_name(profile)
+    assert result == "qwen-detected"
+
+
+@pytest.mark.asyncio
+async def test_resolve_model_name_legacy_local_model_sentinel() -> None:
+    """Old configs/defaults shipped `model: local-model`. Treat it as auto-detect
+    so they keep working without manual edits."""
+    profile = ModelProfile(provider="lmstudio", model="local-model")
+    with patch(
+        "code_scalpel.config.autodetect_model_name",
+        new=AsyncMock(return_value="qwen-detected"),
+    ):
+        result = await resolve_model_name(profile)
+    assert result == "qwen-detected"
+
+
+@pytest.mark.asyncio
+async def test_resolve_model_name_falls_back_to_sentinel_on_detect_fail() -> None:
+    """When detection returns nothing (server down, empty list), keep the
+    placeholder — LM Studio's 'use whatever is loaded' behavior is the safety
+    net, and we'd rather show 'auto' than crash."""
+    profile = ModelProfile(provider="lmstudio", model="auto")
+    with patch("code_scalpel.config.autodetect_model_name", new=AsyncMock(return_value=None)):
+        result = await resolve_model_name(profile)
+    assert result == "auto"
+
+
+def test_default_profile_uses_auto_sentinel() -> None:
+    """Out-of-the-box default profile should self-discover its model."""
+    config = AppConfig.model_validate({})
+    assert config.current_profile.model == "auto"

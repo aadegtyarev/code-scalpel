@@ -19,6 +19,16 @@ _MODE_COLORS: dict[str, str] = {
     "review": "#d97b6c",  # coral — caution / examining
 }
 
+# Darkened siblings of _MODE_COLORS (≈55% brightness) — used as the
+# cursor-cell background so the cursor reads as "the same mode" without
+# competing with the prompt text for attention.
+_MODE_CURSOR_COLORS: dict[str, str] = {
+    "ask": "#3d6b72",
+    "plan": "#6b502a",
+    "code": "#3a6b48",
+    "review": "#6b3d36",
+}
+
 
 class ModeInput(Widget):
     """Single-line input bar: '<mode> › <text>'. Enter submits."""
@@ -51,8 +61,20 @@ class ModeInput(Widget):
         background: #1a1a1a;
         border: none;
     }
-    ModeInput Input > .input--cursor {
+    ModeInput.mode-ask Input > .input--cursor {
         background: #3d6b72;
+        color: #ffffff;
+    }
+    ModeInput.mode-plan Input > .input--cursor {
+        background: #6b502a;
+        color: #ffffff;
+    }
+    ModeInput.mode-code Input > .input--cursor {
+        background: #3a6b48;
+        color: #ffffff;
+    }
+    ModeInput.mode-review Input > .input--cursor {
+        background: #6b3d36;
         color: #ffffff;
     }
     """
@@ -60,6 +82,7 @@ class ModeInput(Widget):
     def __init__(self, mode: str = "ask") -> None:
         super().__init__()
         self.mode = mode
+        self.add_class(f"mode-{mode}")
 
     def _prompt_str(self) -> str:
         color = _MODE_COLORS.get(self.mode, "#6bc8d4")
@@ -77,6 +100,9 @@ class ModeInput(Widget):
             event.input.value = ""
 
     def set_mode(self, mode: str) -> None:
+        for m in _MODE_COLORS:
+            self.remove_class(f"mode-{m}")
+        self.add_class(f"mode-{mode}")
         self.mode = mode
         self.query_one("#prompt", Static).update(self._prompt_str())
 

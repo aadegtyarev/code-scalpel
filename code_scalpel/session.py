@@ -23,6 +23,11 @@ class Session:
     requests: int = 0
     started_at: datetime = field(default_factory=lambda: datetime.now(UTC))
     user_language: str | None = None  # auto-detected from first user message
+    # Token counts at the most recent /compact. The footer subtracts these
+    # from totals so the bar reflects "current context", not lifetime usage.
+    # totals themselves stay intact for the exit cost summary.
+    compact_baseline_prompt: int = 0
+    compact_baseline_completion: int = 0
 
     def record(self, response: ChatResponse) -> None:
         self.total_prompt_tokens += response.prompt_tokens
@@ -30,6 +35,22 @@ class Session:
         if response.cost is not None:
             self.total_cost += response.cost
         self.requests += 1
+
+    def mark_compacted(self) -> None:
+        """Anchor the footer budget to the post-compact state. Cumulative
+        totals are preserved — only the visible 'current context' drops."""
+        self.compact_baseline_prompt = self.total_prompt_tokens
+        self.compact_baseline_completion = self.total_completion_tokens
+
+    @property
+    def context_used_tokens(self) -> int:
+        """Tokens spent on prompts+completions since the last /compact."""
+        return (
+            self.total_prompt_tokens
+            - self.compact_baseline_prompt
+            + self.total_completion_tokens
+            - self.compact_baseline_completion
+        )
 
     @property
     def elapsed_seconds(self) -> float:

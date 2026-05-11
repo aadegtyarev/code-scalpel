@@ -97,11 +97,17 @@ class ModelProfile(BaseModel):
         return os.environ.get(var, "lm-studio")
 
 
+# Sentinels that trigger model auto-detect from the provider's /v1/models
+# endpoint. "auto" is the new explicit form; "local-model" is kept for
+# backwards compat with the previous default profile.
+_MODEL_AUTO_SENTINELS = frozenset({"auto", "local-model", ""})
+
+
 def _default_profiles() -> dict[str, ModelProfile]:
     return {
         "local": ModelProfile(
             provider="lmstudio",
-            model="local-model",
+            model="auto",
         )
     }
 
@@ -158,10 +164,9 @@ def _extract_ctx(model: dict[str, Any]) -> int | None:
     return None
 
 
-async def autodetect_context_tokens(profile: ModelProfile) -> int | None:
-    """Detect context window. Tries LM Studio's REST API first (richer info),
-    then falls back to OpenAI-compatible /v1/models. If no match by model id,
-    uses first model in list (LM Studio serves one model at a time)."""
+async def _fetch_models(profile: ModelProfile) -> list[dict[str, Any]]:
+    """Fetch the provider's model list. Tries LM Studio's richer REST API
+    first, then OpenAI-compatible /v1/models. Returns [] on any failure."""
     base = profile.provider_base_url()
     urls = [f"{base}/api/v0/models", f"{base}/v1/models"]
     try:
@@ -172,20 +177,54 @@ async def autodetect_context_tokens(profile: ModelProfile) -> int | None:
                     resp.raise_for_status()
                 except Exception:
                     continue
-                models = resp.json().get("data", [])
-                first_ctx: int | None = None
-                for m in models:
-                    ctx = _extract_ctx(m)
-                    if ctx is not None:
-                        if first_ctx is None:
-                            first_ctx = ctx
-                        if m.get("id") == profile.model:
-                            return ctx
-                if first_ctx is not None:
-                    return first_ctx
+                data = resp.json().get("data", [])
+                if isinstance(data, list) and data:
+                    return [m for m in data if isinstance(m, dict)]
     except Exception:
         pass
+    return []
+
+
+async def autodetect_context_tokens(profile: ModelProfile) -> int | None:
+    """Detect context window. Matches profile.model first; if no match, falls
+    back to the first model in the list (LM Studio typically serves one)."""
+    models = await _fetch_models(profile)
+    first_ctx: int | None = None
+    for m in models:
+        ctx = _extract_ctx(m)
+        if ctx is not None:
+            if first_ctx is None:
+                first_ctx = ctx
+            if m.get("id") == profile.model:
+                return ctx
+    return first_ctx
+
+
+async def autodetect_model_name(profile: ModelProfile) -> str | None:
+    """Pick the model id served by the provider. LM Studio (and most local
+    runtimes) serve a single model at a time — we return its first id."""
+    models = await _fetch_models(profile)
+    for m in models:
+        model_id = m.get("id")
+        if isinstance(model_id, str) and model_id:
+            return model_id
     return None
+
+
+async def resolve_model_name(profile: ModelProfile) -> str:
+    """Return the model id the adapter should pass to the provider.
+
+    Manual override wins: if the profile names a specific model, it's used
+    verbatim — provider must serve that exact id. The "auto" sentinel (and
+    the legacy "local-model" placeholder) trigger detection from the
+    provider's /v1/models endpoint. If detection fails, we keep the sentinel
+    so LM Studio's "use the loaded model regardless of name" behaviour still
+    works as a last resort.
+    """
+    if profile.model and profile.model not in _MODEL_AUTO_SENTINELS:
+        return profile.model
+    detected = await autodetect_model_name(profile)
+    return detected if detected else profile.model
 
 
 async def resolve_context_tokens(profile: ModelProfile) -> int:

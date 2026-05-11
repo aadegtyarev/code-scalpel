@@ -12,7 +12,7 @@ from textual.widgets import Rule
 from textual_autocomplete import AutoComplete, DropdownItem
 
 from code_scalpel.agent import StepAgent, TextDelta, ToolExecuted
-from code_scalpel.config import AppConfig, autodetect_context_tokens
+from code_scalpel.config import AppConfig, autodetect_context_tokens, resolve_model_name
 from code_scalpel.llm.adapter import ChatResponse, OpenAICompatibleAdapter
 from code_scalpel.patch.edit_block import Edit, apply_edits, edits_to_diff, extract_edits
 from code_scalpel.session import Session
@@ -131,13 +131,26 @@ class ScalpelApp(App[None]):
                 cost_per_1k=profile.cost_per_1k,
             )
             self._agent = StepAgent(llm=llm, cwd=self.cwd, config=self.config)
+            # Footer shows configured name until resolve_model_name finishes.
+            self.query_one(StatusFooter).model = profile.model
         except (KeyError, ValueError) as e:
             self.query_one(OutputLog).print_error(f"Config error: {e}")
 
     async def _detect_context(self) -> None:
+        """One-shot startup discovery: model name and context window. Both
+        come from the same /v1/models endpoint, so we do them together —
+        cuts the round-trip count in half and keeps the footer's two
+        right-side fields in sync."""
         try:
             profile = self.config.current_profile
+            model_name = await resolve_model_name(profile)
             tokens = await autodetect_context_tokens(profile)
+            footer = self.query_one(StatusFooter)
+            footer.model = model_name
+            # Adapter was built with profile.model (likely "auto"); replace
+            # so the next request carries the real id and logs cleanly.
+            if self._agent is not None and model_name != profile.model:
+                self._agent._llm._model = model_name  # type: ignore[attr-defined]
             if tokens:
                 self.state.context_limit = tokens
                 self._update_footer()
@@ -188,6 +201,9 @@ class ScalpelApp(App[None]):
             output.print_status("Nothing to compact.")
         else:
             output.print_status(f"● Compacted. Summary:\n{summary}")
+            # Anchor the footer budget to "post-compact" so the bar drops.
+            self.session.mark_compacted()
+            self._update_ctx()
         footer.status = "● idle"
 
     def action_cancel_step(self) -> None:
@@ -400,7 +416,9 @@ class ScalpelApp(App[None]):
         footer.ctx = f"0k/{limit // 1000}k"
 
     def _update_ctx(self) -> None:
-        used = self.session.total_prompt_tokens + self.session.total_completion_tokens
+        # context_used_tokens drops back to ~0 after /compact; totals stay
+        # intact for the exit cost summary.
+        used = self.session.context_used_tokens
         limit = self.state.context_limit
         ctx = self.session.context_bar(
             used,

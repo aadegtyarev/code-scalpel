@@ -125,6 +125,25 @@ async def test_slash_mode_switches_mode(sandbox: Path) -> None:
 
 
 @pytest.mark.asyncio
+async def test_mode_switch_updates_cursor_class(sandbox: Path) -> None:
+    """Cursor cell must repaint to match the new mode (gold for plan, etc.).
+    We check the CSS class — the actual repaint is Textual's job."""
+    app = ScalpelApp(config=_CONFIG, cwd=sandbox)
+    async with app.run_test(headless=True, size=(80, 24)) as pilot:
+        await pilot.pause(0.1)
+        mi = app.query_one(ModeInput)
+        assert mi.has_class("mode-ask")
+        app._handle_slash("/mode plan")
+        await pilot.pause(0.05)
+        assert mi.has_class("mode-plan")
+        assert not mi.has_class("mode-ask")
+        app._handle_slash("/mode code")
+        await pilot.pause(0.05)
+        assert mi.has_class("mode-code")
+        assert not mi.has_class("mode-plan")
+
+
+@pytest.mark.asyncio
 async def test_slash_help_lists_commands(sandbox: Path) -> None:
     app = ScalpelApp(config=_CONFIG, cwd=sandbox)
     async with app.run_test(headless=True, size=(80, 24)) as pilot:

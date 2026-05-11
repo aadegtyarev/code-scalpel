@@ -1699,6 +1699,19 @@ class Session:
   Заодно переименован UI mode `step` → `code` (понятнее: «модель пишет
   патч», а не «шаг чего-то»). `run` (autonomous) и debug-sub-mode не
   тронуты.
+- ✓ informal tone в system prompt — «ты», не «вы»; без «Извините,
+  пожалуйста, переформулируйте». Колли́гиальный тон, не корпоративный.
+- ✓ TUI прозрачность пачкой:
+  • model auto-detect через `/v1/models` + ручной override в config.
+    Sentinel `"auto"` (плюс legacy `"local-model"`) → автодетект.
+  • footer показывает имя модели справа-снизу (dim) — больше не
+    «`local-model`» в логах, после resolve подставляется реальный id.
+  • `/compact` теперь честно роняет индикатор контекста: `Session`
+    держит `compact_baseline_*` снапшот, `context_used_tokens` показывает
+    «потрачено с последнего компакта», cumulative totals остаются для
+    exit-summary.
+  • cursor cell перекрашивается под цвет mode (`mode-ask/plan/code/review`
+    CSS-классы).
 - planner mode + TASKS.md — большой кусок, рядом с autonomous
 - step summarizer — depends on step mode
 - context builder compression — пока не упираемся в лимит
@@ -1711,6 +1724,11 @@ v0.3 hooks captured in v0.2 (см. ниже):
 ### v0.3
 
 ```text
+context indicator semantics (HOOK): сейчас footer показывает
+  «накоплено с последнего /compact» через compact_baseline. Это лучше
+  кумулятива, но не идеал — настоящее «сколько весит следующий промт»
+  должно считаться как system + history + map. Когда появится
+  context/builder.py, переехать туда и убрать baseline-хак из Session.
 gemma+спек retry (TODO с следующей сессии): сейчас заблокировано
   OOM на 16 GB VRAM (gemma-4 26B Q4 = 18 GB > 16 GB - desktop). Два
   пути: (1) дискретная display-карта чтобы освободить 5060 Ti
