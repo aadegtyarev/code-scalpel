@@ -886,3 +886,100 @@ async def test_ctrl_up_with_no_cards_is_noop(sandbox: Path) -> None:
         app.action_focus_prev_card()
         await pilot.pause(0.05)
         assert app.focused is before
+
+
+# ── /remember and /recall slashes ────────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_slash_remember_saves_to_memory(sandbox: Path) -> None:
+    """/remember persists the line and confirms inline. The follow-up
+    /recall must find it back — round-trip is the whole point."""
+    app = ScalpelApp(config=_CONFIG, cwd=sandbox)
+    async with app.run_test(headless=True, size=(80, 24)) as pilot:
+        await pilot.pause(0.1)
+        app._handle_slash("/remember always rebase, never merge")
+        await pilot.pause(0.1)
+
+        # MemoryStore must have been built lazily.
+        assert app._memory is not None
+        entries = app._memory.all()
+        assert any("rebase" in e.text for e in entries)
+
+
+@pytest.mark.asyncio
+async def test_slash_remember_empty_text_errors(sandbox: Path) -> None:
+    """/remember with no body is a user mistake — error inline, no
+    silent save of an empty entry. MemoryStore itself rejects empties
+    but we want a friendlier message than the bare exception."""
+    app = ScalpelApp(config=_CONFIG, cwd=sandbox)
+    async with app.run_test(headless=True, size=(80, 24)) as pilot:
+        await pilot.pause(0.1)
+        app._handle_slash("/remember")
+        await pilot.pause(0.1)
+        # Memory store stays uninitialised — no .code-scalpel/memory.db
+        # gets materialised for a typo.
+        entries = app._memory.all() if app._memory else []
+        assert entries == []
+
+
+@pytest.mark.asyncio
+async def test_slash_recall_with_query_mounts_card(sandbox: Path) -> None:
+    """/recall <query> mounts a ToolUseCard with the matched notes —
+    consistent surface with /map and /stats."""
+    from code_scalpel.tui.widgets.tool_use import ToolUseCard
+
+    app = ScalpelApp(config=_CONFIG, cwd=sandbox)
+    async with app.run_test(headless=True, size=(80, 24)) as pilot:
+        await pilot.pause(0.1)
+        app._handle_slash("/remember run ruff before commit")
+        app._handle_slash("/remember tests use real database")
+        await pilot.pause(0.1)
+
+        app._handle_slash("/recall ruff")
+        await pilot.pause(0.1)
+        output = app.query_one(OutputLog)
+        cards = list(output.query(ToolUseCard))
+        assert cards, "expected /recall to mount a ToolUseCard"
+        body = cards[-1]._result.output
+        assert "ruff" in body
+        # The query is reflected in the card's args summary
+        assert "ruff" in cards[-1]._call.body
+
+
+@pytest.mark.asyncio
+async def test_slash_recall_no_args_lists_all(sandbox: Path) -> None:
+    """Bare /recall is the "show me what's stored" sanity check — must
+    list every entry, no search filter."""
+    from code_scalpel.tui.widgets.tool_use import ToolUseCard
+
+    app = ScalpelApp(config=_CONFIG, cwd=sandbox)
+    async with app.run_test(headless=True, size=(80, 24)) as pilot:
+        await pilot.pause(0.1)
+        app._handle_slash("/remember alpha")
+        app._handle_slash("/remember bravo")
+        await pilot.pause(0.1)
+        app._handle_slash("/recall")
+        await pilot.pause(0.1)
+
+        output = app.query_one(OutputLog)
+        cards = list(output.query(ToolUseCard))
+        assert cards
+        body = cards[-1]._result.output
+        assert "alpha" in body
+        assert "bravo" in body
+
+
+@pytest.mark.asyncio
+async def test_slash_recall_empty_store_prints_no_hits(sandbox: Path) -> None:
+    """Empty store → friendly status line, no empty card."""
+    from code_scalpel.tui.widgets.tool_use import ToolUseCard
+
+    app = ScalpelApp(config=_CONFIG, cwd=sandbox)
+    async with app.run_test(headless=True, size=(80, 24)) as pilot:
+        await pilot.pause(0.1)
+        app._handle_slash("/recall anything")
+        await pilot.pause(0.1)
+        output = app.query_one(OutputLog)
+        cards = list(output.query(ToolUseCard))
+        assert not cards

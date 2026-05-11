@@ -957,3 +957,78 @@ def replaced():
     # The retry prompt mentions the apply error
     second_task = llm.calls[1][-1]["content"]
     assert "did not apply" in second_task or "apply" in second_task.lower()
+
+
+# ── memory recall integration ────────────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_user_message_carries_recalled_notes_when_memory_hits(project: Path) -> None:
+    """When MemoryStore is wired in and the user's task matches an entry,
+    that note must appear inline in the user message under a clearly
+    labelled "Recalled notes" header — that's the whole reason the
+    recall layer exists. No header = no signal for the model that the
+    bullet came from memory, not from the user."""
+    from code_scalpel.memory import MemoryStore
+
+    mem = MemoryStore(root=project)
+    mem.add("Always run ruff format before commit")
+    mem.add("Tests must hit a real database, never mocks")
+
+    llm = MockLLMAdapter(["OK"])
+    agent = StepAgent(llm=llm, cwd=project, config=_CONFIG, memory=mem)
+    await agent.ask("what to do before commit?")
+
+    user_msg = llm.calls[0][-1]["content"]
+    assert "Recalled notes" in user_msg
+    assert "ruff format" in user_msg
+
+
+@pytest.mark.asyncio
+async def test_user_message_no_memory_header_when_store_empty(project: Path) -> None:
+    """Empty store → no "Recalled notes" header. Weak models latch onto
+    visible headers and try to explain them; an empty one is pure noise."""
+    from code_scalpel.memory import MemoryStore
+
+    mem = MemoryStore(root=project)  # empty
+    llm = MockLLMAdapter(["OK"])
+    agent = StepAgent(llm=llm, cwd=project, config=_CONFIG, memory=mem)
+    await agent.ask("any task")
+
+    user_msg = llm.calls[0][-1]["content"]
+    assert "Recalled notes" not in user_msg
+
+
+@pytest.mark.asyncio
+async def test_user_message_no_memory_header_when_store_not_wired(project: Path) -> None:
+    """memory=None (default) → recall is fully disabled. Important for
+    tests and lightweight callers that never want to materialise a
+    .code-scalpel/memory.db file."""
+    llm = MockLLMAdapter(["OK"])
+    agent = StepAgent(llm=llm, cwd=project, config=_CONFIG)
+    await agent.ask("any task")
+
+    user_msg = llm.calls[0][-1]["content"]
+    assert "Recalled notes" not in user_msg
+
+
+@pytest.mark.asyncio
+async def test_user_message_survives_broken_memory_query(project: Path) -> None:
+    """A malformed FTS5 query inside the recall call must NOT break the
+    turn. Memory is a convenience layer; the turn always wins. We
+    simulate the failure with a stub store whose .search raises."""
+
+    class _BrokenStore:
+        def search(self, q: str, *, k: int = 3) -> list[object]:  # noqa: ARG002
+            raise RuntimeError("simulated FTS5 failure")
+
+    llm = MockLLMAdapter(["OK"])
+    agent = StepAgent(
+        llm=llm,
+        cwd=project,
+        config=_CONFIG,
+        memory=_BrokenStore(),  # type: ignore[arg-type]
+    )
+    await agent.ask("any task")
+    # No header, but the call completed normally.
+    assert llm.calls

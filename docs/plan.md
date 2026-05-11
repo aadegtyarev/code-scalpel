@@ -1765,10 +1765,18 @@ project memory + retrieval (BIG, ставит фундамент для всег
     3. Дедупликация **не работает** в 2.0.2 в vector-пути — главная
        причина брать mem0, а её и нет
     4. +138 MB зависимостей (numpy, grpcio, sqlalchemy, qdrant)
-  Альтернатива: thin `code_scalpel/memory.py` (~150 LOC):
-    • sqlite для fact rows (persist)
-    • Chroma или Qdrant через abstract interface (не lock-in)
-    • Используем существующий LLMAdapter для contradiction-check
+  ✓ Альтернатива реализована: thin `code_scalpel/memory.py` (~166 LOC):
+    sqlite + FTS5 (zero new deps), 14 unit-тестов, `MemoryEntry`
+    frozen, `MemoryStore.add/search/all/delete/clear/__len__`.
+  ✓ TUI wiring: `/remember <fact>` сохраняет, `/recall [query]`
+    показывает ToolUseCard. Авто-recall на каждый turn — top-3 OR-
+    запрос через FTS5, вставляется в user message как «Recalled
+    notes» блок (только если что-то нашлось). Доступ через
+    `StepAgent(memory=...)` — DI, как остальное.
+  Дальше:
+    • Vector-слой (Chroma/Qdrant) — на следующий раз когда FTS5
+      перестанет ловить нужное (пока матчит достаточно)
+    • Contradiction-check через LLMAdapter
   Полный отчёт spike: `/tmp/mem0_spike_report.md`.
   AST/symbols/summaries — наш moat в любом случае.
   Слои:

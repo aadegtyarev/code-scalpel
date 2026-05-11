@@ -3,9 +3,12 @@ from __future__ import annotations
 from collections.abc import AsyncIterator
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from code_scalpel.config import AppConfig
+
+if TYPE_CHECKING:
+    from code_scalpel.memory import MemoryStore
 from code_scalpel.llm.adapter import ChatResponse, LLMAdapter, NativeToolCall
 from code_scalpel.patch.edit_block import Edit, apply_edits, extract_edits
 from code_scalpel.tools.agent_tools import (
@@ -245,6 +248,7 @@ class StepAgent:
         config: AppConfig,
         *,
         shell_runner: ShellRunner | None = None,
+        memory: MemoryStore | None = None,
     ) -> None:
         self._llm = llm
         self._cwd = cwd
@@ -253,6 +257,13 @@ class StepAgent:
         # want to point pytest at a sandbox. When None, agent_tools.execute
         # constructs the default AsyncShellRunner per tool call.
         self._shell_runner = shell_runner
+        # Optional pluggable memory layer. When set, each turn does a
+        # cheap top-3 FTS5 lookup on the user's task and prepends any
+        # hits as a "Recalled notes" block — facts the user told us
+        # ("when you touch X always update Y", project conventions,
+        # past decisions) ride along automatically. None disables it
+        # entirely so tests / lightweight callers don't take the cost.
+        self._memory = memory
         self._history: list[dict[str, str]] = []
 
     @property
@@ -572,10 +583,47 @@ class StepAgent:
         from code_scalpel.project_map import build_map_overview
 
         overview = build_map_overview(self._cwd, max_files=200)
-        return (
-            f"Task: {task}\n\n"
-            f"Project overview — paths + line counts only. Call "
-            f"`map_file(path)` for one file's outline (classes / "
-            f"functions / imports), `read_file` for content, `grep` "
-            f"to find symbols by name:\n{overview}"
+        parts = [f"Task: {task}", ""]
+        # Memory recall — quiet by default. Only attached when something
+        # comes back, so a fresh project with an empty store doesn't ship
+        # the "Recalled notes:" header with nothing under it (header noise
+        # is exactly what weak models latch onto and explain).
+        recalled = self._recall_notes(task)
+        if recalled:
+            parts.append("Recalled notes (from prior `/remember` calls):")
+            parts.extend(f"- {n}" for n in recalled)
+            parts.append("")
+        parts.append(
+            "Project overview — paths + line counts only. Call "
+            "`map_file(path)` for one file's outline (classes / "
+            "functions / imports), `read_file` for content, `grep` "
+            "to find symbols by name:"
         )
+        parts.append(overview)
+        return "\n".join(parts)
+
+    def _recall_notes(self, task: str, *, k: int = 3) -> list[str]:
+        """Top-k memory hits for the current task. Swallows store errors —
+        memory is a non-critical convenience layer, a broken FTS5 query
+        must NOT break the turn.
+
+        FTS5 defaults to AND-conjunction; a free-text task like "what to
+        do before commit?" requires every word to match. We rewrite the
+        query as OR over alpha-numeric tokens so a single shared word is
+        enough to surface a stored note. Punctuation and stop-shaped
+        chars are dropped — they're FTS5 operators and would corrupt the
+        query.
+        """
+        if self._memory is None:
+            return []
+        import re
+
+        tokens = re.findall(r"\w+", task, flags=re.UNICODE)
+        if not tokens:
+            return []
+        query = " OR ".join(f'"{t}"' for t in tokens)
+        try:
+            hits = self._memory.search(query, k=k)
+        except Exception:
+            return []
+        return [h.text for h in hits]

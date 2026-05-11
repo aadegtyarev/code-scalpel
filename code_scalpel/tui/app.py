@@ -15,6 +15,7 @@ from textual_autocomplete import AutoComplete, DropdownItem
 from code_scalpel.agent import StepAgent, TextDelta, ToolExecuted
 from code_scalpel.config import AppConfig, autodetect_context_tokens, resolve_model_name
 from code_scalpel.llm.adapter import ChatResponse, OpenAICompatibleAdapter
+from code_scalpel.memory import MemoryStore
 from code_scalpel.patch.edit_block import Edit, apply_edits, edits_to_diff, extract_edits
 from code_scalpel.session import Session
 from code_scalpel.state import AgentState
@@ -50,6 +51,8 @@ _SLASH_COMMANDS: list[tuple[str, str]] = [
     ("/map", "show the project map the model receives each turn"),
     ("/tasks", "show the current plan from .code-scalpel/TASKS.md"),
     ("/stats", "show this session's token/cost/timing stats"),
+    ("/remember", "save a project note (e.g. /remember always run linter)"),
+    ("/recall", "browse stored notes; with text — search them"),
     ("/help", "list commands"),
     ("/mode ask", "switch to ask mode"),
     ("/mode plan", "switch to plan mode"),
@@ -117,6 +120,10 @@ class ScalpelApp(App[None]):
         self._agent: StepAgent | None = None
         # Latest tool round-trip from the agent — Ctrl+O opens it in a modal.
         self._last_tool_result: ToolResult | None = None
+        # Project-scoped persistent memory. Built on first use rather than
+        # at construction so tests / lightweight callers that never touch
+        # /remember don't get a .code-scalpel/memory.db materialised.
+        self._memory: MemoryStore | None = None
 
     # ── compose ───────────────────────────────────────────────────────────────
 
@@ -174,7 +181,12 @@ class ScalpelApp(App[None]):
                 timeout=float(self.config.agent.llm_timeout),
                 cost_per_1k=profile.cost_per_1k,
             )
-            self._agent = StepAgent(llm=llm, cwd=self.cwd, config=self.config)
+            self._agent = StepAgent(
+                llm=llm,
+                cwd=self.cwd,
+                config=self.config,
+                memory=self._get_memory(),
+            )
             # Footer shows configured name until resolve_model_name finishes.
             self.query_one(StatusFooter).model = profile.model
         except (KeyError, ValueError) as e:
@@ -287,6 +299,64 @@ class ScalpelApp(App[None]):
         call = ToolCall(name="session_stats", body="")
         result = ToolResult(call=call, output=text, ok=True)
         # Small fixed body — render inline, no "N more lines" footer.
+        output.add_tool_use(call, result, full=True)
+        self._last_tool_result = result
+
+    def _get_memory(self) -> MemoryStore:
+        """Lazy MemoryStore — built on first /remember or /recall (or
+        whenever the agent is wired). Tests that never trigger memory
+        usage get no .code-scalpel/memory.db on disk."""
+        if self._memory is None:
+            self._memory = MemoryStore(root=self.cwd)
+            # Hand the same instance to the live agent if it already exists
+            # — otherwise the agent's recall would miss anything saved this
+            # session until the next /new.
+            if self._agent is not None:
+                self._agent._memory = self._memory
+        return self._memory
+
+    def _do_remember(self, text: str) -> None:
+        """/remember <fact> — persist one note. The agent recalls top-3
+        matches automatically on every turn, so this is the user's way
+        of teaching project conventions or past decisions without
+        re-typing them each session."""
+        output = self.query_one(OutputLog)
+        text = text.strip()
+        if not text:
+            output.print_error("Usage: /remember <fact to save>")
+            return
+        try:
+            mem = self._get_memory()
+            mem.add(text, source="slash:remember")
+        except Exception as e:
+            output.print_error(f"Memory error: {e}")
+            return
+        output.print_status(f"● Remembered: {text}")
+
+    def _do_recall(self, query: str) -> None:
+        """/recall <query> — preview what the agent would pull on a turn
+        with this task. No-arg form lists ALL stored notes (newest first)
+        as a sanity check."""
+        output = self.query_one(OutputLog)
+        try:
+            mem = self._get_memory()
+        except Exception as e:
+            output.print_error(f"Memory error: {e}")
+            return
+        query = query.strip()
+        if query:
+            hits = mem.search(query, k=10)
+            label = f"recall(query={query!r}, k=10)"
+        else:
+            hits = list(reversed(mem.all()))  # newest first
+            label = f"recall(all, count={len(hits)})"
+        if not hits:
+            output.print_status("● No memory hits.")
+            return
+        body = "\n".join(f"- {h.text}" for h in hits)
+        call = ToolCall(name="recall", body=label)
+        result = ToolResult(call=call, output=body, ok=True)
+        # Small payload; render full inline like /stats.
         output.add_tool_use(call, result, full=True)
         self._last_tool_result = result
 
@@ -425,6 +495,12 @@ class ScalpelApp(App[None]):
         if cmd == "/stats":
             # Pure in-memory render — no I/O, no need for a worker.
             self._do_stats()
+            return
+        if cmd == "/remember" or cmd.startswith("/remember "):
+            self._do_remember(cmd.removeprefix("/remember"))
+            return
+        if cmd == "/recall" or cmd.startswith("/recall "):
+            self._do_recall(cmd.removeprefix("/recall"))
             return
         if cmd.startswith("/mode "):
             mode = cmd.removeprefix("/mode ").strip()
