@@ -1701,6 +1701,13 @@ v0.3 hooks captured in v0.2 (см. ниже):
 ### v0.3
 
 ```text
+gemma+спек retry (TODO с следующей сессии): сейчас заблокировано
+  OOM на 16 GB VRAM (gemma-4 26B Q4 = 18 GB > 16 GB - desktop). Два
+  пути: (1) дискретная display-карта чтобы освободить 5060 Ti
+  полностью; (2) собрать CUDA-build llama.cpp (vs текущий Vulkan
+  которому не хватает memory-allocator efficiency). Цель: 24/24 +
+  ~60s со спек = новый абсолютный чемпион. См. подробности в
+  `docs/bench-models.md`.
 tool-result viewer (HOOK): сейчас ToolUseCard при разворачивании
   показывает первые 5 строк результата (TUI вис при попытке отрендерить
   200+ строк). Нужен Ctrl+O попап с подсветкой синтаксиса для

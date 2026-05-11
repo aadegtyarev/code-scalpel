@@ -159,6 +159,28 @@ microscaling 4-bit формат от OpenAI, GPU-friendly.)
 Какая комбинация решающая — нам без файнтюна не узнать. Факт:
 **на нашем бенче gemma-4-26b-a4b — №1 по качеству, №3 по скорости**.
 
+## Попытка gemma+спек через llama.cpp напрямую (отложено)
+
+LM Studio блокирует pairing (см. ниже), но llama.cpp в принципе
+поддерживает gemma-4 + assistant-drafter. Попробовали поднять
+`llama-server` своими руками — упёрлись в **OOM на 16 GB VRAM**:
+
+- llama.cpp pre-built бинари в свежих релизах только Vulkan / ROCm /
+  SYCL / OpenVINO / CPU. CUDA-build надо собирать самим
+  (`nvidia-cuda-toolkit` + 10 мин компиляции).
+- Vulkan-allocator менее компактный чем CUDA — на 18 GB модели Q4_K_M
+  + draft 0.3 GB + KV 8k не хватает места. Постоянная OOM ошибка на
+  выделении ~870 MB tensor-buffer'а в самом конце загрузки.
+- LM Studio AppImage внутри содержит CUDA-сборку llama.cpp как
+  `.so` библиотеки + node-binding, но без standalone `llama-server`.
+  Извлечь обёртку не получилось без раскопок electron-обёртки.
+
+**Решение (отложено в TODO):** добавить дискретную display-карту
+(GT 1030 / GTX 1050 за ~$50-100 б/у). Сейчас 1.3 GB на 5060 Ti
+занимает desktop compositor; с отдельной display-картой будут
+все 16 GB на LLM, gemma+спек влезет с запасом через Vulkan.
+Альтернативно собрать CUDA-build llama.cpp.
+
 ## MoE + спек на LM Studio: пробовали, не вышло
 
 Мы попытались включить спек для gemma-4-26b-a4b с её official
