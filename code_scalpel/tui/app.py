@@ -265,6 +265,7 @@ class ScalpelApp(App[None]):
 
             full = ""
             chunks = 0
+            tool_calls = 0
             start = time.monotonic()
             last_tick = start
             async for item in self._agent.stream_ask(task, mode=mode):
@@ -281,6 +282,7 @@ class ScalpelApp(App[None]):
                             footer.status = f"◌ streaming · {rate:.0f} tok/s"
                         last_tick = now
                 elif isinstance(item, ToolExecuted):
+                    tool_calls += 1
                     placeholder.update(full)
                     await output.finalize_streaming(placeholder, full)
                     output.add_tool_use(item.call, item.result)
@@ -315,7 +317,14 @@ class ScalpelApp(App[None]):
                 footer.status = "● reviewing"
             else:
                 rate = self._last_stream_rate
-                footer.status = f"● idle · {rate:.0f} tok/s" if rate else "● idle"
+                # Highlight ungrounded replies so the user can spot when the
+                # model answered without consulting the project — that's the
+                # common shape of a confabulated answer.
+                tool_summary = (
+                    f"🔧 {tool_calls} tools" if tool_calls else "[yellow]⚠ no tools used[/yellow]"
+                )
+                rate_str = f" · {rate:.0f} tok/s" if rate else ""
+                footer.status = f"● idle · {tool_summary}{rate_str}"
         except asyncio.CancelledError:
             output.print_status("● Cancelled.")
             footer.status = "● idle"

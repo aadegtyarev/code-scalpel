@@ -573,11 +573,14 @@ _ADMITS_MISSING = (
     "not found",
     "no such",
     "couldn't find",
+    "can't find",
     "i don't see",
     "isn't in",
     "is not in",
     "not present",
-    # Russian
+    "no method",
+    "no function",
+    # Russian — order matters less, all are substrings
     "не существует",
     "нет такого",
     "не найден",
@@ -585,7 +588,12 @@ _ADMITS_MISSING = (
     "не вижу",
     "отсутствует",
     "нет метода",
-    "нет в",
+    "нет функции",
+    "нет в проекте",
+    "там нет",
+    "тут нет",
+    "не нашёл",
+    "не нашел",
 )
 
 

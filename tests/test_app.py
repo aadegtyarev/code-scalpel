@@ -213,3 +213,48 @@ async def test_escape_cancels_streaming_worker(sandbox: Path) -> None:
         worker = getattr(app, "_step_worker", None)
         assert worker is not None
         assert worker.is_cancelled or worker.is_finished
+
+
+@pytest.mark.asyncio
+async def test_footer_flags_when_model_used_no_tools(sandbox: Path) -> None:
+    """The reply was generated without any read_file/grep — show a warning
+    in the footer so the user can spot the kind of answer the screenshot
+    bug produced ('summary_line() exists, trust me')."""
+    from code_scalpel.tui.widgets.footer import StatusFooter
+    from code_scalpel.tui.widgets.input import UserMessage
+
+    app = ScalpelApp(config=_CONFIG, cwd=sandbox)
+    mock = _StreamingMock(["plain reply, no tools"])
+    async with app.run_test(headless=True, size=(80, 24)) as pilot:
+        await pilot.pause(0.1)
+        _attach_mock(app, mock)
+
+        app.post_message(UserMessage("hi"))
+        # Let stream finish — short content, no delay.
+        await pilot.pause(0.3)
+
+        status = app.query_one(StatusFooter).status
+        assert "no tools used" in status, f"footer didn't flag ungrounded reply: {status!r}"
+
+
+@pytest.mark.asyncio
+async def test_footer_model_reactive_renders(sandbox: Path) -> None:
+    """When model is set, footer must include it in the rendered label.
+    Empty model means no dim suffix — keep the bar tidy for legacy configs."""
+    from textual.widgets import Label
+
+    from code_scalpel.tui.widgets.footer import StatusFooter
+
+    app = ScalpelApp(config=_CONFIG, cwd=sandbox)
+    async with app.run_test(headless=True, size=(120, 24)) as pilot:
+        await pilot.pause(0.1)
+        footer = app.query_one(StatusFooter)
+        label = footer.query_one("#footer-label", Label)
+
+        # Without a model set the label has no dim trailing chunk.
+        assert "dim" not in str(label.render())
+
+        footer.model = "qwen2.5-coder-14b"
+        await pilot.pause(0.05)
+        rendered = str(label.render())
+        assert "qwen2.5-coder-14b" in rendered
