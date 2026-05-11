@@ -4,6 +4,73 @@
 
 ---
 
+## Глава 0 — Почему пишем своё, когда вокруг уже всё есть
+
+Первый вопрос разумного человека: «есть Letta, OpenHands, LangGraph,
+smolagents, aider, Continue.dev — зачем ещё одно?». Я честно полез
+проверить — research-агенту в фоне, по техническим докам, лицензиям и
+зависимостям. Вывод оказался полезным сам по себе.
+
+**Не подходит:**
+
+- **Letta** (бывший MemGPT) хочет владеть **всем циклом агента**:
+  свой runtime, Postgres + pgvector, обязательная embedding-модель,
+  Docker-first. Memory не отделяется от движка — это сервер, не
+  библиотека. Lock-in несовместим с принципом «маленькое и локальное».
+- **OpenHands agent-sdk** — полноценный coding agent. Композируется
+  лучше Letta, но всё равно хочет владеть Conversation/Environment.
+  Полезен **как источник идей** (особенно `FileEditorTool` —
+  концептуально близко к нашему SEARCH/REPLACE), но не как
+  dependency.
+- **LangChain / LangGraph** — тяжёлые, тащат много мусора, и для
+  одного-агентного линейного цикла избыточны. LangGraph пригодится
+  только если будем делать branching state-machine, чего пока нет.
+- **AutoGen** — multi-agent. Мы single-agent. Wrong abstraction.
+- **aider** — best-in-class CLI для weak-LLM patch-flow. Мы у них
+  **уже взяли** самое ценное — SEARCH/REPLACE формат. Сам aider —
+  CLI, не библиотека, не для embedding.
+- **Continue.dev** — TypeScript, IDE-плагин. Не наш стек, не наш UX.
+
+**Возможно стоит — в v0.3:**
+
+- **mem0** (`pip install mem0ai`, Apache-2.0) — узкий слой памяти,
+  не агент. API из двух методов: `add(text)` / `search(query)`.
+  Под капотом — LiteLLM (поддерживает LM Studio), local Chroma,
+  семантический retrieval, дедупликация. Лёгкие зависимости,
+  никакого Postgres. Закрыл бы ~30% v0.3 memory pillar (recall и
+  persistence). Остальные 70% — AST индексация, symbol graph,
+  summaries — пишем сами, потому что **никто не делает это хорошо
+  для слабых моделей**. Это и есть наш moat.
+
+**Возможно стоит — в v0.4+:**
+
+- **smolagents** (HF, Apache-2.0) — лёгкий, philosophy «code-as-action»:
+  агент пишет Python вместо JSON tool calls. Конфликтует с нашей
+  ставкой на native function-calling для слабых моделей, но интересен
+  для iterative patch loop через год.
+- **LangGraph** — когда понадобится branching (planner-architect-
+  implementer split).
+
+**Главное наблюдение:**
+
+Все «готовые» агенты разделяются на два класса. Либо **они хотят
+владеть всем** (Letta, OpenHands) — и тогда инструмент уже не твой,
+ты живёшь в их runtime. Либо **они компонуемые** (mem0, smolagents) —
+но закрывают только узкий слой, и собирать из них агента всё равно
+тебе.
+
+Для weak-LLM кейса где **половина инженерии — это контекст** (что
+модель видит в каждом turn'е: project map, docstrings, imports,
+tool-результаты), готовые решения мало что дают. Они оптимизированы
+под frontier-модели где «правильный промт + достаточно контекста»
+хватит. У нас другая задача: компенсировать слабость модели
+**структурой данных**, не количеством параметров.
+
+Вывод: **пишем сами, mem0 спайкнем в v0.3 memory layer**, AST/symbol
+graph/summaries оставляем себе как core competency.
+
+---
+
 ## Откуда идея
 
 Хотел инструмент для работы с кодом через слабые локальные модели — qwen2.5-coder-14b в LM Studio. Не замену Claude Code, а что-то скромное: маленькая задача, минимальный патч, тест, дальше. Назвал `code-scalpel`.
