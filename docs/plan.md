@@ -1729,6 +1729,23 @@ v0.3 hooks captured in v0.2 (см. ниже):
 ### v0.3
 
 ```text
+external SDK survey 2026-05-11 (research-agent report):
+  Оценили Letta / OpenHands SDK / mem0 / smolagents / LangGraph
+  для замены частей v0.3. Вывод:
+  • **mem0 — единственный кандидат на интеграцию** в v0.3 memory layer.
+    Композируется как библиотека (pip install mem0ai), narrow API
+    add()/search(), local Chroma backend, поддерживает LM Studio через
+    OpenAI-compat. Спасает ~30% работы по recall/dedup.
+  • **Letta — игнорировать**. Хочет владеть agent loop, требует
+    Postgres+pgvector, Docker-first. Lock-in несовместим с нашим
+    "small, local, composable" principle.
+  • **OpenHands agent-sdk — читать FileEditorTool как референс**, не
+    тянуть как зависимость.
+  • **AST indexing + symbol graph + summaries — наш moat**, никто не
+    делает это хорошо для слабых моделей. Пишем сами.
+  Action: spike `mem0ai` на пол-дня когда стартуем memory layer
+  именно в v0.3.
+
 project memory + retrieval (BIG, ставит фундамент для всего ниже):
   Сейчас агент видит ТОЛЬКО project map в каждом turn'е. Map хорош но
   плоский: signatures + docstrings + imports. Нужна **многослойная

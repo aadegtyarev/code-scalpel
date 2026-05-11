@@ -603,46 +603,40 @@ async def test_ask_mode_does_not_write_tasks_md(project: Path) -> None:
 
 
 @pytest.mark.asyncio
-async def test_map_only_prepended_on_first_turn(project: Path) -> None:
-    """Map is HUGE (300+ lines for a typical project). Re-prepending it
-    on every turn drowns short follow-ups — model defaults to repeating
-    its previous answer because the new task is lost in noise. Repro for
-    the 2026-05-11 'Sonet' bug: turn 1 asks "как добавить антропик
-    моделей", turn 2 says "Sonet" → model just re-output the turn 1 list
-    instead of using the clarification.
-
-    Fix: map ONLY on turn 1 (history empty). Subsequent turns send the
-    bare task; model has the map in its turn 1 prompt within history
-    and can read_file/grep for anything new."""
+async def test_user_message_puts_task_before_map(project: Path) -> None:
+    """Task FIRST, map second. The previous "Project map:\\n<300 lines>\\n
+    Task: X" layout caused short follow-ups (e.g. "Sonet") to drown in
+    the map — model defaulted to its prior reply because the new task
+    was buried at the end of a massive block. With task on top the
+    short user input has the salient first position while the map stays
+    available as reference."""
     llm = MockLLMAdapter(["first reply", "second reply"])
     agent = StepAgent(llm=llm, cwd=project, config=_CONFIG)
 
-    await agent.ask("first question")
-    await agent.ask("Sonet")
-
-    # Turn 1 user msg: contains map prefix
-    turn1_user = llm.calls[0][-1]["content"]
-    assert "Project map" in turn1_user
-    assert "first question" in turn1_user
-
-    # Turn 2 user msg: just the bare task, NO map
-    turn2_user = llm.calls[1][-1]["content"]
-    assert turn2_user == "Sonet"
-    assert "Project map" not in turn2_user
+    await agent.ask("Sonnet")
+    user_msg = llm.calls[0][-1]["content"]
+    # Task is the very first non-empty content the model sees
+    assert user_msg.startswith("Task: Sonnet")
+    # Map still present as labelled reference
+    assert "Project map (reference):" in user_msg
+    # Map comes AFTER the task in byte order
+    assert user_msg.index("Task: Sonnet") < user_msg.index("Project map")
 
 
 @pytest.mark.asyncio
-async def test_map_returns_after_clear_history(project: Path) -> None:
-    """After /new (clear_history), the next turn is "turn 1" again —
-    map should be prepended."""
+async def test_user_message_map_present_on_every_turn(project: Path) -> None:
+    """The map is structural context the model needs for read_file/grep
+    navigation. It must be in every turn — not just turn 1 — otherwise
+    multi-turn flows like "find files" → "show code in <some file>"
+    leave the model blind on the follow-up."""
     llm = MockLLMAdapter(["a", "b", "c"])
     agent = StepAgent(llm=llm, cwd=project, config=_CONFIG)
     await agent.ask("first")
-    await agent.ask("second")  # no map (history non-empty)
-    agent.clear_history()
-    await agent.ask("third")  # map should come back
-    third_user = llm.calls[2][-1]["content"]
-    assert "Project map" in third_user
+    await agent.ask("second")
+    await agent.ask("third")
+    for i in range(3):
+        msg = llm.calls[i][-1]["content"]
+        assert "Project map" in msg, f"turn {i + 1} lost the map"
 
 
 @pytest.mark.asyncio
