@@ -470,6 +470,103 @@ def test_turn_progress_format_grows_as_data_arrives() -> None:
 
 
 @pytest.mark.asyncio
+async def test_slash_tasks_with_no_file_prints_hint(sandbox: Path) -> None:
+    """No .code-scalpel/TASKS.md → /tasks must coach the user toward plan
+    mode, not crash and not mount an empty card."""
+    app = ScalpelApp(config=_CONFIG, cwd=sandbox)
+    async with app.run_test(headless=True, size=(80, 24)) as pilot:
+        await pilot.pause(0.1)
+        output = app.query_one(OutputLog)
+        before = len(list(output.children))
+
+        app._handle_slash("/tasks")
+        await pilot.pause(0.1)
+
+        # One Static status line was added with the hint text.
+        children = [c for c in output.children if c.id != "_spacer"]
+        assert len(children) == before  # spacer is included in `before`, so equal == +1 status
+        rendered = "\n".join(str(c.render()) for c in children)
+        assert "No plan yet" in rendered
+
+
+@pytest.mark.asyncio
+async def test_slash_tasks_mounts_card_when_file_exists(sandbox: Path) -> None:
+    """With TASKS.md present, /tasks mounts a ToolUseCard so the plan is
+    visible without dumping the whole file body into the chat."""
+    from code_scalpel.tui.widgets.tool_use import ToolUseCard
+
+    tasks_dir = sandbox / ".code-scalpel"
+    tasks_dir.mkdir()
+    (tasks_dir / "TASKS.md").write_text(
+        "## T001: do the thing\n\nGoal: prove it works\nFiles: x.py\n"
+    )
+
+    app = ScalpelApp(config=_CONFIG, cwd=sandbox)
+    async with app.run_test(headless=True, size=(80, 24)) as pilot:
+        await pilot.pause(0.1)
+        output = app.query_one(OutputLog)
+
+        app._handle_slash("/tasks")
+        await pilot.pause(0.1)
+
+        cards = list(output.query(ToolUseCard))
+        assert cards, "expected /tasks to mount a ToolUseCard"
+        card = cards[-1]
+        assert card._call.name == "tasks_md"
+        assert "T001" in card._result.output
+        # Ctrl+O target updated so the full file is one keystroke away.
+        assert app._last_tool_result is card._result
+
+
+@pytest.mark.asyncio
+async def test_slash_system_mounts_card_with_prompt(sandbox: Path) -> None:
+    """/system mounts a ToolUseCard whose body is the actual system prompt —
+    the user can see what the model sees on each turn."""
+    from code_scalpel.tui.widgets.tool_use import ToolUseCard
+
+    app = ScalpelApp(config=_CONFIG, cwd=sandbox)
+    async with app.run_test(headless=True, size=(80, 24)) as pilot:
+        await pilot.pause(0.1)
+        output = app.query_one(OutputLog)
+
+        app._handle_slash("/system")
+        await pilot.pause(0.1)
+
+        cards = list(output.query(ToolUseCard))
+        assert cards, "expected /system to mount a ToolUseCard"
+        card = cards[-1]
+        assert card._call.name == "system_prompt"
+        # Anchor specific to the project's prompt — guards against accidental
+        # gutting of the system message.
+        assert "code-scalpel" in card._result.output
+
+
+@pytest.mark.asyncio
+async def test_slash_system_appends_plan_addendum_when_in_plan_mode(
+    sandbox: Path,
+) -> None:
+    """In plan mode the addendum is concatenated onto the base prompt —
+    /system must reflect that so the user sees exactly what the next turn
+    will carry."""
+    from code_scalpel.tui.widgets.tool_use import ToolUseCard
+
+    app = ScalpelApp(config=_CONFIG, cwd=sandbox)
+    async with app.run_test(headless=True, size=(80, 24)) as pilot:
+        await pilot.pause(0.1)
+        app._handle_slash("/mode plan")
+        await pilot.pause(0.05)
+
+        app._handle_slash("/system")
+        await pilot.pause(0.1)
+
+        output = app.query_one(OutputLog)
+        cards = list(output.query(ToolUseCard))
+        assert cards
+        body = cards[-1]._result.output
+        assert "PLAN mode" in body
+
+
+@pytest.mark.asyncio
 async def test_footer_model_reactive_renders(sandbox: Path) -> None:
     """When model is set, footer must include it in the rendered label.
     Empty model means no dim suffix — keep the bar tidy for legacy configs."""

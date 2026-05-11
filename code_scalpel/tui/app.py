@@ -46,6 +46,8 @@ _SLASH_COMMANDS: list[tuple[str, str]] = [
     ("/new", "start a new session — clear chat and reset state"),
     ("/compact", "summarize history to free up context (not yet)"),
     ("/map", "show the project map the model receives each turn"),
+    ("/tasks", "show the current plan from .code-scalpel/TASKS.md"),
+    ("/system", "show the system prompt the model receives each turn"),
     ("/help", "list commands"),
     ("/mode ask", "switch to ask mode"),
     ("/mode plan", "switch to plan mode"),
@@ -243,6 +245,44 @@ class ScalpelApp(App[None]):
         output.add_tool_use(call, result)
         self._last_tool_result = result
 
+    async def _do_tasks(self) -> None:
+        """Surface the current plan (.code-scalpel/TASKS.md) inline as a
+        collapsed ToolUseCard — same shape as /map so the file is right
+        there in the chat without dumping its full body into view. The
+        read is tiny but we still bounce through a worker for parity
+        with /map: keeps the UI thread free if the file ever grows."""
+        output = self.query_one(OutputLog)
+        tasks_path = self.cwd / ".code-scalpel" / "TASKS.md"
+        if not tasks_path.is_file():
+            output.print_status("No plan yet. Switch to plan mode and ask for a breakdown.")
+            return
+        # Tiny read, but keep the event loop responsive — the executor
+        # bounce is cheap and matches how /map handles its I/O.
+        loop = asyncio.get_running_loop()
+        text = await loop.run_in_executor(None, tasks_path.read_text)
+
+        call = ToolCall(name="tasks_md", body="")
+        result = ToolResult(call=call, output=text, ok=True)
+        output.add_tool_use(call, result)
+        self._last_tool_result = result
+
+    def _do_system(self) -> None:
+        """Show the system prompt the model sees on every turn. Plan-mode
+        addendum is appended when the user is currently in plan mode, so
+        what they see matches what the next call will actually carry."""
+        # Local import avoids a top-level cycle and matches how _do_map
+        # treats project_map — pull the constants only when needed.
+        from code_scalpel.agent import _PLAN_MODE_ADDENDUM, _SYSTEM_PROMPT
+
+        output = self.query_one(OutputLog)
+        text = _SYSTEM_PROMPT
+        if self._AGENT_MODES[self._mode_index] == "plan":
+            text += _PLAN_MODE_ADDENDUM
+        call = ToolCall(name="system_prompt", body="")
+        result = ToolResult(call=call, output=text, ok=True)
+        output.add_tool_use(call, result)
+        self._last_tool_result = result
+
     async def _do_compact(self) -> None:
         output = self.query_one(OutputLog)
         footer = self.query_one(StatusFooter)
@@ -314,6 +354,15 @@ class ScalpelApp(App[None]):
             # Run it on a worker so the user message + "Building…" notice
             # render instantly, then the card appears when the build returns.
             self.run_worker(self._do_map(), exclusive=False, group="map")
+            return
+        if cmd == "/tasks":
+            # Off-loop read keeps parity with /map even though the file is
+            # tiny — same UX surface, same code shape.
+            self.run_worker(self._do_tasks(), exclusive=False, group="tasks")
+            return
+        if cmd == "/system":
+            # Pure constant lookup — no I/O, no need for a worker.
+            self._do_system()
             return
         if cmd.startswith("/mode "):
             mode = cmd.removeprefix("/mode ").strip()
