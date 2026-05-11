@@ -121,9 +121,10 @@ async def test_system_prompt_carries_identity_anchor(project: Path) -> None:
     # task-words explicitly and tells the model to call tools instead.
     assert "найди" in system or "find" in system.lower()
     assert "project_map" in system or "tools" in system.lower()
-    # Absolute ban on opening task replies with "Я — code-scalpel" /
-    # "I'm code-scalpel" — that's the identity-blur regression shape.
-    assert "ABSOLUTE BAN" in system
+    # Task replies must not open with identity prefixes — phrasing
+    # softened from "ABSOLUTE BAN" to lighter language to lower the
+    # anxiety load on weak models that froze under the heavy form.
+    assert "must not start with" in system or "reserved for identity" in system
 
 
 @pytest.mark.asyncio

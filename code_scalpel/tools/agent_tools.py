@@ -80,35 +80,15 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
         "function": {
             "name": "project_map",
             "description": (
-                "Single entry for project layout — TWO modes by "
-                "argument:\n"
-                "• `project_map()` (no path) → tree of all files with "
-                "line counts, one per row. ALWAYS call this FIRST "
-                "when the task mentions anything project-shaped "
-                "without naming a specific file (e.g. 'add type "
-                "hints to both functions', 'find where X is used', "
-                "'покажи код метода'). Use the listing to pick the "
-                "candidate file.\n"
-                "• `project_map(path='foo.py')` (with path) → drill "
-                "into one file: classes, functions, methods, "
-                "signatures, first-line docstrings, intra-project "
-                "imports. Use after you've spotted the candidate "
-                "from the tree.\n"
-                "Cheaper than read_file (no bodies). NEVER ask the "
-                "user 'what file?' before calling this with no path."
+                "Look at the project — files, classes, functions, "
+                "methods. Pass a file `path` to drill into it."
             ),
             "parameters": {
                 "type": "object",
                 "properties": {
                     "path": {
                         "type": "string",
-                        "description": (
-                            "Optional relative path. Omit for the "
-                            "whole-project tree; pass a file path "
-                            "for that file's outline; pass a "
-                            "subdirectory for the tree of files "
-                            "under it."
-                        ),
+                        "description": "Optional file or directory path.",
                     },
                 },
             },
