@@ -1776,6 +1776,18 @@ project memory + retrieval (BIG, ставит фундамент для всег
     methods) с позициями, типами параметров, control-flow shape (есть
     ли try/loop/if, количество ветвей). Не только Python — JS, Go,
     Rust. Indexed at session start, invalidated by mtime.
+    **Update 2026-05-11**: spike-агент прогнал tree-sitter на нашем
+    проекте. Recommendation: **ADOPT, в 2 фазы**. Чистая установка
+    (+5.4 MB net useful), perf на Python в шуме vs ast, но ts даёт
+    multi-lang (Py/JS/Go/Rust одним walker), error recovery,
+    granular byte+line positions, incremental reparsing. Phase 1:
+    новый `code_scalpel/index/` package рядом с project_map.py
+    (parser.py / walkers.py / shape.py / model.py + tests). Phase 2:
+    cutover, swap import в agent.py, удалить ast-based код.
+    **Trap warning**: `tree-sitter-language-pack` 1.8.0 broken — на
+    project_map.py вернул empty docstrings/signatures. Использовать
+    индивидуальные пакеты (`tree-sitter-python` etc.).
+    Артефакты spike: `/tmp/ts_spike/indexer.py` (~270 LOC).
   • File-scoped summaries — для каждого файла >50 LOC хранить
     сгенерированную моделью одну-две абзаца «что этот файл делает,
     с чем связан». Дешевле чем читать body, точнее чем docstring.
