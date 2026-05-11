@@ -444,20 +444,31 @@ RichLog не справится с интерактивными карточка
 ```text
 tui/
   app.py              # App + единственный Screen
+  styles.tcss         # глобальная CSS
   widgets/
-    output.py         # OutputLog — scrollable content area (наследник RichLog)
-    input.py          # ModeInput — multiline input с mode-префиксом
-    footer.py         # StatusFooter — key hints + статус + ctx + токены
+    output.py         # OutputLog — scrollable content area
+    input.py          # ModeInput + HistoryInput (bash-style ↑/↓ history)
+    footer.py         # StatusFooter — key hints + статус + ctx + модель
+    jobs_bar.py       # JobsBar — inline «⚙ N jobs: kind1 · kind2», прячется при idle
+    jobs_modal.py     # JobsModal — Ctrl+J: список всех jobs с описаниями и возрастом
+    plan_card.py      # PlanCard — inline список T-задач из TASKS.md
+    tool_use.py       # ToolUseCard — collapsible inline-карточка read_file/grep/map_file и др.
+    tool_result_modal.py  # ToolResultModal — Ctrl+O: full view последнего tool-result
+    turn_progress.py  # TurnProgress — live tokens/sec + tool count во время стрима
+    _map_highlight.py # подсветка project_map в модалке без Pygments
     cards/
-      patch.py        # PatchCard — diff + [a]/[r]/[g]
-      plan.py         # PlanCard — task list + [r]/[a]/[e]
-      tests.py        # TestsCard — output + [n]/[q]
-      qa.py           # QACard — вопросы с вариантами + [enter]/[x]
+      tool_call.py    # ToolCallCard — диф + [a]/[r]/[g] для apply-flow
 ```
 
 `OutputLog` умеет монтировать виджеты-карточки inline наравне с текстом.
-Когда карточка готова — `app.mount_card(card)`, она появляется в потоке.
+Когда карточка готова — добавляется через `output.add_*`, появляется в потоке.
 После завершения карточки (apply/reject/confirm) — она становится read-only в истории.
+
+Слэш-команды (v0.3): `/new`, `/compact`, `/map`, `/tasks`, `/stats`,
+`/remember`, `/recall`, `/loop`, `/run`, `/help`, `/mode <name>`.
+Хоткеи: `Ctrl+T` — переключить режим, `Ctrl+O` — last tool result modal,
+`Ctrl+J` — jobs modal, `Ctrl+↑/↓` — навигация по tool-карточкам, `Esc` —
+отмена / возврат в инпут, `↑/↓` в инпуте — bash history.
 
 ### 11.3. Idle
 
