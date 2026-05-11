@@ -27,7 +27,7 @@ async def test_mock_stream_yields_chars() -> None:
     mock = MockLLMAdapter(["abc"])
     chunks = []
     async for chunk in mock.stream([{"role": "user", "content": "hi"}]):
-        chunks.append(chunk)
+        chunks.append(chunk.text)
     assert chunks == ["a", "b", "c"]
 
 
@@ -120,8 +120,9 @@ async def test_openai_adapter_stream() -> None:
             model="qwen2.5-coder-14b-instruct",
         )
         result = []
-        async for text in adapter.stream([{"role": "user", "content": "hi"}]):
-            result.append(text)
+        async for chunk in adapter.stream([{"role": "user", "content": "hi"}]):
+            if chunk.text:
+                result.append(chunk.text)
 
     assert result == ["He", "llo"]
 

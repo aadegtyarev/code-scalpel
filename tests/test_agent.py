@@ -80,23 +80,19 @@ async def test_ask_sends_system_prompt(project: Path) -> None:
 
 
 @pytest.mark.asyncio
-async def test_ask_includes_few_shot_examples(project: Path) -> None:
-    """Few-shot examples are load-bearing for weak models — verify they're sent.
-    With tool-use enabled the sequence is system + 2 (user,assistant) pairs +
-    real task = 6 messages."""
+async def test_ask_sends_system_and_task_only(project: Path) -> None:
+    """With native function calling, tools are declared via API schema —
+    no need for few-shot examples. Initial messages = system + task."""
     llm = MockLLMAdapter(["OK"])
     agent = StepAgent(llm=llm, cwd=project, config=_CONFIG)
 
     await agent.ask("do something")
 
     messages = llm.calls[0]
-    assert len(messages) == 6
+    assert len(messages) == 2
     assert messages[0]["role"] == "system"
-    # The two demonstration pairs end with an assistant SEARCH/REPLACE.
-    assert "SEARCH" in messages[4]["content"]
-    # The last message must be the real task
-    assert messages[-1]["role"] == "user"
-    assert "do something" in messages[-1]["content"]
+    assert messages[1]["role"] == "user"
+    assert "do something" in messages[1]["content"]
 
 
 @pytest.mark.asyncio
@@ -146,23 +142,26 @@ async def test_map_lists_files_in_subdirs(tmp_path: Path) -> None:
 
 @pytest.mark.asyncio
 async def test_ask_handles_tool_call_loop(project: Path) -> None:
-    """If the model emits a read_file tool call, the agent executes it and
-    feeds the result back into the conversation."""
-    tool_response = "<TOOL: read_file>\nhello.py\n</TOOL>"
-    final_response = "Done."
-    llm = MockLLMAdapter([tool_response, final_response])
+    """Native function calling: model emits structured tool_calls; agent
+    executes and appends a tool-role message with the result."""
+    from code_scalpel.llm.adapter import NativeToolCall
+
+    tool_call = NativeToolCall(
+        id="call_1", name="read_file", arguments='{"path": "hello.py"}'
+    )
+    llm = MockLLMAdapter([("", [tool_call]), "Done."])
     agent = StepAgent(llm=llm, cwd=project, config=_CONFIG)
 
     result = await agent.ask("look")
 
     assert result.reply == "Done."
-    # Two LLM calls: one with the tool call, one with the result fed back.
     assert len(llm.calls) == 2
-    # The second call's last message should be a tool result containing hello.py content
-    second_call_last = llm.calls[1][-1]
-    assert second_call_last["role"] == "user"
-    assert "RESULT" in second_call_last["content"]
-    assert "def hello" in second_call_last["content"]
+    # The second call must include a tool-role message with the file content
+    second_call = llm.calls[1]
+    tool_msgs = [m for m in second_call if m.get("role") == "tool"]
+    assert len(tool_msgs) == 1
+    assert tool_msgs[0]["tool_call_id"] == "call_1"
+    assert "def hello" in tool_msgs[0]["content"]
 
 
 @pytest.mark.asyncio
@@ -204,10 +203,103 @@ async def test_history_carries_between_turns(project: Path) -> None:
     await agent.ask("second task")
 
     second_call = llm.calls[1]
-    contents = [m["content"] for m in second_call]
+    contents = [str(m.get("content") or "") for m in second_call]
     joined = "\n".join(contents)
     assert "first task" in joined
     assert "first reply" in joined
+
+
+@pytest.mark.asyncio
+async def test_history_stores_bare_task_not_map(project: Path) -> None:
+    """History entries must contain just the user's task, not the bloated
+    'Project map:\n...\n\nTask: foo' wrapper. Otherwise every subsequent turn
+    duplicates the map in history."""
+    llm = MockLLMAdapter(["ok1", "ok2"])
+    agent = StepAgent(llm=llm, cwd=project, config=_CONFIG)
+
+    await agent.ask("first task")
+
+    # The bare task should be what's stored
+    assert agent.history[0]["role"] == "user"
+    assert agent.history[0]["content"] == "first task"
+    assert "Project map" not in agent.history[0]["content"]
+    assert agent.history[1]["role"] == "assistant"
+
+
+@pytest.mark.asyncio
+async def test_history_grows_with_each_turn(project: Path) -> None:
+    llm = MockLLMAdapter(["one", "two", "three"])
+    agent = StepAgent(llm=llm, cwd=project, config=_CONFIG)
+
+    await agent.ask("a")
+    assert len(agent.history) == 2
+
+    await agent.ask("b")
+    assert len(agent.history) == 4
+
+    await agent.ask("c")
+    assert len(agent.history) == 6
+
+
+@pytest.mark.asyncio
+async def test_history_user_messages_are_in_order(project: Path) -> None:
+    llm = MockLLMAdapter(["r1", "r2", "r3"])
+    agent = StepAgent(llm=llm, cwd=project, config=_CONFIG)
+
+    await agent.ask("first")
+    await agent.ask("second")
+    await agent.ask("third")
+
+    user_contents = [m["content"] for m in agent.history if m["role"] == "user"]
+    assert user_contents == ["first", "second", "third"]
+
+
+@pytest.mark.asyncio
+async def test_history_visible_to_next_ask_in_correct_role(project: Path) -> None:
+    """The previous turn must appear as alternating user/assistant in the next call's
+    messages, not as some opaque blob."""
+    llm = MockLLMAdapter(["first reply", "second reply"])
+    agent = StepAgent(llm=llm, cwd=project, config=_CONFIG)
+
+    await agent.ask("first")
+    await agent.ask("second")
+
+    second_call = llm.calls[1]
+    roles = [m["role"] for m in second_call]
+    # system, then history pair (user, assistant), then current user
+    assert roles == ["system", "user", "assistant", "user"]
+    assert second_call[1]["content"] == "first"
+    assert second_call[2]["content"] == "first reply"
+
+
+@pytest.mark.asyncio
+async def test_history_survives_tool_call_rounds(project: Path) -> None:
+    """Tool-call round-trips within a turn must NOT pollute history. Only
+    the final user task and final assistant text get stored."""
+    from code_scalpel.llm.adapter import NativeToolCall
+
+    tc = NativeToolCall(id="c1", name="read_file", arguments='{"path": "hello.py"}')
+    llm = MockLLMAdapter([("", [tc]), "Final answer."])
+    agent = StepAgent(llm=llm, cwd=project, config=_CONFIG)
+
+    await agent.ask("look")
+
+    # History should hold exactly 2 messages: bare task + final reply
+    assert len(agent.history) == 2
+    assert agent.history[0] == {"role": "user", "content": "look"}
+    assert agent.history[1] == {"role": "assistant", "content": "Final answer."}
+
+
+@pytest.mark.asyncio
+async def test_clear_history_removes_everything(project: Path) -> None:
+    llm = MockLLMAdapter(["r1", "r2"])
+    agent = StepAgent(llm=llm, cwd=project, config=_CONFIG)
+
+    await agent.ask("a")
+    await agent.ask("b")
+    assert len(agent.history) == 4
+    agent.clear_history()
+    assert agent.history == []
 
 
 @pytest.mark.asyncio
@@ -219,8 +311,8 @@ async def test_clear_history_drops_past_turns(project: Path) -> None:
     agent.clear_history()
     await agent.ask("second")
 
-    second_call_contents = "\n".join(m["content"] for m in llm.calls[1])
-    assert "first" not in second_call_contents.replace("first task", "")  # nothing remains
+    second_call_contents = "\n".join(str(m.get("content") or "") for m in llm.calls[1])
+    assert "first" not in second_call_contents
     assert "second" in second_call_contents
 
 

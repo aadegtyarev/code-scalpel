@@ -3,39 +3,59 @@ from __future__ import annotations
 from collections.abc import AsyncIterator
 from typing import Any
 
-from code_scalpel.llm.adapter import ChatResponse
+from code_scalpel.llm.adapter import ChatResponse, NativeToolCall, StreamChunk
 from code_scalpel.tools.shell import ShellResult
+
+# A response slot can be either a plain text string or a structured pair of
+# (text, [tool_calls]) for native function-calling tests.
+MockResponse = str | tuple[str, list[NativeToolCall]]
 
 
 class MockLLMAdapter:
     """Deterministic LLM for tests. Cycles through provided responses."""
 
-    def __init__(self, responses: list[str] | None = None) -> None:
-        self._responses = list(responses or ["OK"])
+    def __init__(self, responses: list[MockResponse] | None = None) -> None:
+        self._responses: list[MockResponse] = list(responses or ["OK"])
         self._index = 0
-        self.calls: list[list[dict[str, str]]] = []
+        self.calls: list[list[dict[str, Any]]] = []
 
-    def _next(self) -> str:
+    def _next(self) -> tuple[str, list[NativeToolCall]]:
         resp = self._responses[min(self._index, len(self._responses) - 1)]
         self._index += 1
-        return resp
+        if isinstance(resp, tuple):
+            return resp
+        return resp, []
 
-    async def chat(self, messages: list[dict[str, str]], **kwargs: Any) -> ChatResponse:
-        # Snapshot — the agent may append more messages to the same list after this call
+    async def chat(
+        self,
+        messages: list[dict[str, Any]],
+        *,
+        tools: list[dict[str, Any]] | None = None,  # noqa: ARG002 — accepted for interface parity
+        **kwargs: Any,  # noqa: ARG002
+    ) -> ChatResponse:
         self.calls.append([dict(m) for m in messages])
-        content = self._next()
+        content, tcs = self._next()
         return ChatResponse(
             content=content,
             prompt_tokens=len(str(messages)),
             completion_tokens=len(content),
             cost=None,
+            tool_calls=tuple(tcs),
         )
 
-    async def stream(self, messages: list[dict[str, str]], **kwargs: Any) -> AsyncIterator[str]:
+    async def stream(
+        self,
+        messages: list[dict[str, Any]],
+        *,
+        tools: list[dict[str, Any]] | None = None,  # noqa: ARG002
+        **kwargs: Any,  # noqa: ARG002
+    ) -> AsyncIterator[StreamChunk]:
         self.calls.append([dict(m) for m in messages])
-        content = self._next()
+        content, tcs = self._next()
         for char in content:
-            yield char
+            yield StreamChunk(text=char)
+        for tc in tcs:
+            yield StreamChunk(tool_call=tc)
 
 
 class MockShellRunner:

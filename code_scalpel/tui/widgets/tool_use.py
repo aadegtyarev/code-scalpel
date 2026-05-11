@@ -43,6 +43,8 @@ class ToolUseCard(Widget):
     }
     """
 
+    _PREVIEW_LINES = 5
+
     def __init__(self, call: ToolCall, result: ToolResult) -> None:
         super().__init__()
         self._call = call
@@ -75,6 +77,15 @@ class ToolUseCard(Widget):
             return first[:80]
         return f"{len(out)} chars"
 
+    def _preview(self) -> str:
+        out = self._result.output
+        lines = out.splitlines()
+        if len(lines) <= self._PREVIEW_LINES:
+            return out
+        head = "\n".join(lines[: self._PREVIEW_LINES])
+        hidden = len(lines) - self._PREVIEW_LINES
+        return f"{head}\n[dim]… {hidden} more lines (saved to .code-scalpel for review)[/]"
+
     def compose(self) -> ComposeResult:
         with Collapsible(title=self._title(), collapsed=True):
-            yield Static(self._result.output, classes="body")
+            yield Static(self._preview(), classes="body")

@@ -9,36 +9,26 @@ from code_scalpel.config import load_config
 
 app = typer.Typer(name="code-scalpel", help="TUI coding agent for weak local LLMs.")
 
-_PathArg = Annotated[
-    Path,
-    typer.Argument(
-        exists=True,
-        file_okay=False,
-        dir_okay=True,
-        resolve_path=True,
-        help="Working directory (default: current dir)",
-    ),
-]
-
 
 @app.command()
-def tui(path: _PathArg = Path(".")) -> None:
-    """Launch TUI."""
-    _launch(path)
-
-
-@app.command()
-def ask(path: _PathArg = Path(".")) -> None:
-    """Start interactive ask session."""
-    _launch(path)
-
-
-def _launch(path: Path) -> None:
+def main(
+    path: Annotated[
+        Path,
+        typer.Argument(
+            exists=True,
+            file_okay=False,
+            dir_okay=True,
+            resolve_path=True,
+            help="Working directory (default: current dir)",
+        ),
+    ] = Path("."),
+) -> None:
+    """Launch the TUI in the given directory (defaults to current)."""
     from code_scalpel.tui.app import ScalpelApp
 
     config = load_config()
-    app = ScalpelApp(config=config, cwd=path)
-    app.run()
-    summary = getattr(app, "_exit_summary", None)
+    scalpel = ScalpelApp(config=config, cwd=path)
+    scalpel.run()
+    summary = getattr(scalpel, "_exit_summary", None)
     if summary:
         typer.echo(summary)

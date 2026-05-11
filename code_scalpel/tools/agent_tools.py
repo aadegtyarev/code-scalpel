@@ -24,15 +24,88 @@ are next.
 
 from __future__ import annotations
 
+import json
 import re
 import shlex
 import shutil
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 from code_scalpel.tools.files import list_files, read_file
 from code_scalpel.tools.search import ripgrep
 from code_scalpel.tools.shell import AsyncShellRunner, ShellRunner
+
+# OpenAI tools schema — sent with chat() so the model can call them natively.
+TOOL_SCHEMAS: list[dict[str, Any]] = [
+    {
+        "type": "function",
+        "function": {
+            "name": "read_file",
+            "description": (
+                "Read a project file in full. Returns the file content with line "
+                "numbers. Use before producing SEARCH/REPLACE blocks for that file."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "path": {
+                        "type": "string",
+                        "description": "Relative path from the project root.",
+                    }
+                },
+                "required": ["path"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "grep",
+            "description": (
+                "Search the project (or a subdirectory) for a regex pattern. "
+                "Returns up to 30 matching lines."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "pattern": {
+                        "type": "string",
+                        "description": "Regex pattern to search for.",
+                    },
+                    "path": {
+                        "type": "string",
+                        "description": (
+                            "Optional relative path. Omit to search the whole project."
+                        ),
+                    },
+                },
+                "required": ["pattern"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "run_tests",
+            "description": (
+                "Run the project's pytest suite. Returns exit code and truncated output."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "args": {
+                        "type": "string",
+                        "description": (
+                            "Optional pytest args (e.g. 'tests/test_x.py' or '-k name'). "
+                            "Empty to run everything."
+                        ),
+                    }
+                },
+            },
+        },
+    },
+]
 
 _TOOL_RE = re.compile(
     r"<TOOL:\s*(?P<name>\w+)\s*>\n"
@@ -89,8 +162,25 @@ async def execute(
     )
 
 
+def _decode_args(body: str) -> dict[str, Any]:
+    """Tool args can come either as JSON (native function calling) or as raw
+    text (legacy <TOOL> format). Try JSON first, fall back to legacy."""
+    body = body.strip()
+    if not body:
+        return {}
+    if body.startswith("{"):
+        try:
+            obj = json.loads(body)
+            if isinstance(obj, dict):
+                return obj
+        except json.JSONDecodeError:
+            pass
+    return {"_raw": body}
+
+
 def _tool_read_file(call: ToolCall, cwd: Path, *, max_lines: int) -> ToolResult:
-    path_str = call.body.strip()
+    args = _decode_args(call.body)
+    path_str = str(args.get("path", args.get("_raw", ""))).strip()
     if not path_str:
         return ToolResult(call, output="error: missing file path", ok=False)
     # Reject absolute / parent-escaping paths
@@ -109,15 +199,20 @@ def _tool_read_file(call: ToolCall, cwd: Path, *, max_lines: int) -> ToolResult:
 
 
 async def _tool_grep(call: ToolCall, cwd: Path, runner: ShellRunner) -> ToolResult:
-    """Body: pattern, optionally followed by a relative path on the next line."""
-    body = call.body.strip()
-    if not body:
+    """args: {pattern: str, path?: str}. Legacy text body also supported:
+    first line is pattern, second is optional path."""
+    args = _decode_args(call.body)
+    if "_raw" in args:
+        lines = args["_raw"].splitlines()
+        pattern = lines[0].strip() if lines else ""
+        rel = lines[1].strip() if len(lines) > 1 else ""
+    else:
+        pattern = str(args.get("pattern", "")).strip()
+        rel = str(args.get("path", "")).strip()
+    if not pattern:
         return ToolResult(call, output="error: missing pattern", ok=False)
-    lines = body.splitlines()
-    pattern = lines[0]
     where = cwd
-    if len(lines) > 1:
-        rel = lines[1].strip()
+    if rel:
         if rel.startswith("/") or ".." in Path(rel).parts:
             return ToolResult(call, output=f"error: path must be inside project: {rel}", ok=False)
         where = cwd / rel
@@ -165,9 +260,10 @@ _MAX_TEST_OUTPUT = 4000
 
 
 async def _tool_run_tests(call: ToolCall, cwd: Path, runner: ShellRunner) -> ToolResult:
-    """Body: optional pytest args (e.g. 'tests/test_foo.py' or '-k pattern').
-    Empty body = run full test suite."""
-    args = shlex.split(call.body.strip()) if call.body.strip() else []
+    """args: {args?: str}. Legacy: raw pytest args."""
+    decoded = _decode_args(call.body)
+    raw = str(decoded.get("args", decoded.get("_raw", ""))).strip()
+    args = shlex.split(raw) if raw else []
     cmd = ["pytest", "-x", "--tb=short", "--no-header", "-q", *args]
     try:
         result = await runner.run(cmd, cwd=str(cwd), timeout=120)

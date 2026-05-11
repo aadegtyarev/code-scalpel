@@ -3,20 +3,28 @@ from __future__ import annotations
 from collections.abc import AsyncIterator
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 from code_scalpel.config import AppConfig
-from code_scalpel.llm.adapter import ChatResponse, LLMAdapter
+from code_scalpel.llm.adapter import ChatResponse, LLMAdapter, NativeToolCall
 from code_scalpel.patch.edit_block import Edit, extract_edits
 from code_scalpel.project_map import build_map
 from code_scalpel.tools.agent_tools import (
+    TOOL_SCHEMAS,
     ToolCall,
     ToolResult,
     execute,
-    format_result,
-    parse_tool_calls,
 )
 
 _MAX_TOOL_ROUNDS = 6
+
+_FORCE_ANSWER_MSG: dict[str, Any] = {
+    "role": "user",
+    "content": (
+        "You already called these tools with the same arguments. Stop calling "
+        "tools and answer the original question now, using what you have."
+    ),
+}
 
 _SYSTEM_PROMPT = """\
 You are code-scalpel, a local coding assistant powered by an open-source model.
@@ -25,21 +33,14 @@ by Anthropic, OpenAI, or any other vendor.
 
 Always reply in the same natural language the user used in their last message.
 
-You can read project files on demand. Pick a real path from the project map
-(NOT the placeholder shown below):
+You have tools available: read_file, grep, run_tests. Use them when you need
+information. The user message includes a compact MAP of the project (paths +
+top-level symbols) but NOT the full file content — call read_file before
+editing a file you haven't yet inspected.
 
-    <TOOL: read_file>
-    {actual path from the map}
-    </TOOL>
+To modify a file, output one or more SEARCH/REPLACE blocks:
 
-The system will reply with a <RESULT: read_file> block containing the file
-with line numbers. Always call read_file before editing a file you haven't
-already inspected — the project map only shows symbols, not full content.
-
-To modify a file, output one or more SEARCH/REPLACE blocks (path is also a
-real path, not a placeholder):
-
-    {actual path from the map}
+    path/from/the/map.py
     ```python
     <<<<<<< SEARCH
     <lines that currently exist in the file, EXACTLY>
@@ -53,39 +54,7 @@ Rules:
 - To create a new file, leave SEARCH empty.
 - Prefer multiple small blocks over one big block.
 - For questions or conversation that require no file changes, respond with
-  plain text only — no tools, no blocks."""
-
-_FEW_SHOT_USER = """\
-Project map:
-mathutil.py [2L]
-  def add(a, b)
-
-Task: add type hints to add(). Use int."""
-
-_FEW_SHOT_ASSISTANT_1 = """\
-<TOOL: read_file>
-mathutil.py
-</TOOL>"""
-
-_FEW_SHOT_USER_2 = """\
-<RESULT: read_file>
-path: mathutil.py
----
-1  def add(a, b):
-2      return a + b
-</RESULT>"""
-
-_FEW_SHOT_ASSISTANT_2 = """\
-mathutil.py
-```python
-<<<<<<< SEARCH
-def add(a, b):
-    return a + b
-=======
-def add(a: int, b: int) -> int:
-    return a + b
->>>>>>> REPLACE
-```"""
+  plain text only — no blocks."""
 
 
 @dataclass(frozen=True)
@@ -145,23 +114,66 @@ class StepAgent:
         profile = self._config.current_profile
 
         response: ChatResponse | None = None
+        seen: set[tuple[str, str]] = set()
         for _ in range(_MAX_TOOL_ROUNDS):
-            response = await self._llm.chat(messages, **profile.inference_kwargs())
-            messages.append({"role": "assistant", "content": response.content})
+            response = await self._llm.chat(
+                messages, tools=TOOL_SCHEMAS, **profile.inference_kwargs()
+            )
+            messages.append(self._assistant_message(response))
 
-            calls = parse_tool_calls(response.content)
-            if not calls:
+            if not response.tool_calls:
                 edits = extract_edits(response.content)
-                self._remember(user_msg, response.content)
+                # Store bare task in history, not user_msg with the project map
+                # prepended — otherwise every turn duplicates the map and the
+                # model loses track of the actual conversation.
+                self._remember(task, response.content)
                 return StepResult(reply=response.content, edits=edits, response=response)
 
-            tool_msg = await self._run_tools(calls)
-            messages.append({"role": "user", "content": tool_msg})
+            if self._is_loop(response.tool_calls, seen):
+                messages.append(_FORCE_ANSWER_MSG)
+                continue
+            for tc in response.tool_calls:
+                result = await self._execute_native(tc)
+                messages.append(
+                    {
+                        "role": "tool",
+                        "tool_call_id": tc.id,
+                        "content": result.output,
+                    }
+                )
 
         assert response is not None
         edits = extract_edits(response.content)
-        self._remember(user_msg, response.content)
+        self._remember(task, response.content)
         return StepResult(reply=response.content, edits=edits, response=response)
+
+    @staticmethod
+    def _is_loop(tcs: tuple[NativeToolCall, ...], seen: set[tuple[str, str]]) -> bool:
+        looped = False
+        for tc in tcs:
+            key = (tc.name, tc.arguments)
+            if key in seen:
+                looped = True
+            seen.add(key)
+        return looped
+
+    @staticmethod
+    def _assistant_message(response: ChatResponse) -> dict[str, Any]:
+        msg: dict[str, Any] = {"role": "assistant", "content": response.content or None}
+        if response.tool_calls:
+            msg["tool_calls"] = [
+                {
+                    "id": tc.id,
+                    "type": "function",
+                    "function": {"name": tc.name, "arguments": tc.arguments},
+                }
+                for tc in response.tool_calls
+            ]
+        return msg
+
+    async def _execute_native(self, tc: NativeToolCall) -> ToolResult:
+        call = ToolCall(name=tc.name, body=tc.arguments)
+        return await execute(call, self._cwd, max_lines=self._config.agent.max_file_lines)
 
     def _remember(self, user_msg: str, assistant_msg: str) -> None:
         self._history.append({"role": "user", "content": user_msg})
@@ -197,52 +209,70 @@ class StepAgent:
 
     async def stream_ask(self, task: str) -> AsyncIterator[StreamItem]:
         """Yield typed events: TextDelta for model output chunks, ToolExecuted
-        after each tool call resolves. The TUI dispatches per-type."""
+        after each tool call resolves. Tool calls now use native OpenAI
+        function-calling — model emits structured tool_calls instead of the
+        old <TOOL: name> text format."""
         user_msg = self._user_message(task)
         messages = self._initial_messages(user_msg)
         profile = self._config.current_profile
         final_assistant = ""
 
+        seen: set[tuple[str, str]] = set()
         for _ in range(_MAX_TOOL_ROUNDS):
             full = ""
-            async for chunk in self._llm.stream(messages, **profile.inference_kwargs()):
-                full += chunk
-                yield TextDelta(chunk)
-            messages.append({"role": "assistant", "content": full})
+            round_tool_calls: list[NativeToolCall] = []
+            async for chunk in self._llm.stream(
+                messages, tools=TOOL_SCHEMAS, **profile.inference_kwargs()
+            ):
+                if chunk.text:
+                    full += chunk.text
+                    yield TextDelta(chunk.text)
+                if chunk.tool_call is not None:
+                    round_tool_calls.append(chunk.tool_call)
 
-            calls = parse_tool_calls(full)
-            if not calls:
+            asst_msg: dict[str, Any] = {"role": "assistant", "content": full or None}
+            if round_tool_calls:
+                asst_msg["tool_calls"] = [
+                    {
+                        "id": tc.id,
+                        "type": "function",
+                        "function": {"name": tc.name, "arguments": tc.arguments},
+                    }
+                    for tc in round_tool_calls
+                ]
+            messages.append(asst_msg)
+
+            if not round_tool_calls:
                 final_assistant = full
                 break
 
-            results: list[ToolResult] = []
-            for call in calls:
-                result = await execute(call, self._cwd, max_lines=self._config.agent.max_file_lines)
-                results.append(result)
-                yield ToolExecuted(call, result)
-            tool_msg = "\n\n".join(format_result(r) for r in results)
-            messages.append({"role": "user", "content": tool_msg})
+            if self._is_loop(tuple(round_tool_calls), seen):
+                messages.append(_FORCE_ANSWER_MSG)
+                final_assistant = full
+                continue
+
+            for tc in round_tool_calls:
+                result = await self._execute_native(tc)
+                call_view = ToolCall(name=tc.name, body=tc.arguments)
+                yield ToolExecuted(call_view, result)
+                messages.append(
+                    {
+                        "role": "tool",
+                        "tool_call_id": tc.id,
+                        "content": result.output,
+                    }
+                )
             final_assistant = full
 
-        self._remember(user_msg, final_assistant)
+        self._remember(task, final_assistant)
 
-    async def _run_tools(self, calls: list[ToolCall]) -> str:
-        rendered: list[str] = []
-        for c in calls:
-            result = await execute(c, self._cwd, max_lines=self._config.agent.max_file_lines)
-            rendered.append(format_result(result))
-        return "\n\n".join(rendered)
-
-    def _initial_messages(self, user_msg: str) -> list[dict[str, str]]:
-        return [
-            {"role": "system", "content": _SYSTEM_PROMPT},
-            {"role": "user", "content": _FEW_SHOT_USER},
-            {"role": "assistant", "content": _FEW_SHOT_ASSISTANT_1},
-            {"role": "user", "content": _FEW_SHOT_USER_2},
-            {"role": "assistant", "content": _FEW_SHOT_ASSISTANT_2},
-            *self._history,
-            {"role": "user", "content": user_msg},
-        ]
+    def _initial_messages(self, user_msg: str) -> list[dict[str, Any]]:
+        # With native function-calling, tool docs come from the API schema —
+        # we don't need few-shot examples of the text <TOOL: name> format.
+        msgs: list[dict[str, Any]] = [{"role": "system", "content": _SYSTEM_PROMPT}]
+        msgs.extend(self._history)
+        msgs.append({"role": "user", "content": user_msg})
+        return msgs
 
     def _user_message(self, task: str) -> str:
         map_text = build_map(self._cwd, max_files=200)

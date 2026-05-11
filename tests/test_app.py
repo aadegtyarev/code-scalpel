@@ -11,7 +11,7 @@ import pytest
 
 from code_scalpel.agent import StepAgent
 from code_scalpel.config import AgentConfig, AppConfig, ModelProfile
-from code_scalpel.llm.adapter import ChatResponse
+from code_scalpel.llm.adapter import ChatResponse, StreamChunk
 from code_scalpel.tui.app import ScalpelApp
 from code_scalpel.tui.widgets.input import ModeInput
 from code_scalpel.tui.widgets.output import OutputLog
@@ -30,17 +30,29 @@ class _StreamingMock:
         self._delay = delay
         self.calls: list[list[dict[str, str]]] = []
 
-    async def chat(self, messages: list[dict[str, str]], **kwargs: Any) -> ChatResponse:
+    async def chat(
+        self,
+        messages: list[dict[str, Any]],
+        *,
+        tools: list[dict[str, Any]] | None = None,  # noqa: ARG002
+        **kwargs: Any,
+    ) -> ChatResponse:
         self.calls.append(messages)
         content = "".join(self._chunks)
         return ChatResponse(content=content, prompt_tokens=0, completion_tokens=0, cost=None)
 
-    async def stream(self, messages: list[dict[str, str]], **kwargs: Any) -> AsyncIterator[str]:
+    async def stream(
+        self,
+        messages: list[dict[str, Any]],
+        *,
+        tools: list[dict[str, Any]] | None = None,  # noqa: ARG002
+        **kwargs: Any,
+    ) -> AsyncIterator[StreamChunk]:
         self.calls.append(messages)
         for chunk in self._chunks:
             if self._delay:
                 await asyncio.sleep(self._delay)
-            yield chunk
+            yield StreamChunk(text=chunk)
 
 
 def _attach_mock(app: ScalpelApp, mock: _StreamingMock) -> None:

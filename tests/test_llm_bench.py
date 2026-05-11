@@ -366,6 +366,66 @@ async def test_qwen_history_remembers_previous_turn(tmp_path: Path) -> None:
 
 
 @pytest.mark.llm
+async def test_qwen_history_three_turn_topic_continuity(tmp_path: Path) -> None:
+    """Three turns about the same topic — model must stitch them together."""
+    (tmp_path / "stub.py").write_text("# noop\n")
+    agent = _make_agent(tmp_path)
+
+    await agent.ask(
+        "I'm thinking about adopting a pet. Just say 'OK', no advice yet."
+    )
+    await agent.ask("Specifically I like fluffy ones. Still just acknowledge.")
+    result = await agent.ask("Given that, what pet would you suggest?")
+    # No specific word required, but model must mention a fluffy animal
+    lower = result.reply.lower()
+    assert any(
+        kw in lower for kw in ("cat", "dog", "rabbit", "кош", "соба", "кролик", "хом")
+    ), f"third turn ignored earlier context:\n{result.reply[:400]}"
+
+
+@pytest.mark.llm
+async def test_qwen_native_tool_call_is_structured(tmp_path: Path) -> None:
+    """Native function calling: the response carries tool_calls in the
+    structured field, NOT inside the text body."""
+    (tmp_path / "hello.py").write_text("def hello():\n    return 1\n")
+    agent = _make_agent(tmp_path)
+
+    # Intercept chat() to see exactly what comes back from LM Studio
+    real_chat = agent._llm.chat
+    seen: list[object] = []
+
+    async def spy(messages: list[dict[str, object]], **kw: object) -> object:
+        resp = await real_chat(messages, **kw)  # type: ignore[arg-type]
+        seen.append(resp)
+        return resp
+
+    agent._llm.chat = spy  # type: ignore[assignment]
+
+    await agent.ask("Read hello.py and tell me one sentence about it.")
+
+    # At least one response had structured tool_calls, none used <TOOL: ...> text
+    any_native = any(getattr(r, "tool_calls", ()) for r in seen)
+    any_text_tool = any("<TOOL:" in getattr(r, "content", "") for r in seen)
+    assert any_native, "model didn't emit any native tool_calls"
+    assert not any_text_tool, "model fell back to text-based <TOOL: ...> format"
+
+
+@pytest.mark.llm
+async def test_qwen_history_after_tool_call_keeps_topic(tmp_path: Path) -> None:
+    """Turn 1: model reads a file via tool. Turn 2: ask about that file.
+    Model must still know what was discussed."""
+    (tmp_path / "magic.py").write_text("MAGIC_NUMBER = 7777\n")
+    agent = _make_agent(tmp_path)
+
+    await agent.ask("Read magic.py and tell me what constant it defines.")
+    result = await agent.ask("What was the value of that constant?")
+
+    assert "7777" in result.reply, (
+        f"model lost the constant value across turns:\n{result.reply[:400]}"
+    )
+
+
+@pytest.mark.llm
 async def test_qwen_plain_text_for_non_coding_question(tmp_path: Path) -> None:
     """A conversational question should NOT produce SEARCH/REPLACE blocks."""
     (tmp_path / "x.py").write_text("x = 1\n")
@@ -438,8 +498,10 @@ async def test_qwen_uses_grep_when_asked_to_find(tmp_path: Path) -> None:
     tool_calls_seen: list[str] = []
 
     async def spy_chat(messages: list[dict[str, str]], **kw: object) -> object:
-        resp = await real_chat(messages, **kw)
+        resp = await real_chat(messages, **kw)  # type: ignore[arg-type]
         tool_calls_seen.append(resp.content)
+        for tc in resp.tool_calls:
+            tool_calls_seen.append(f"<TOOL:{tc.name}>{tc.arguments}</TOOL>")
         return resp
 
     agent._llm.chat = spy_chat  # type: ignore[assignment]

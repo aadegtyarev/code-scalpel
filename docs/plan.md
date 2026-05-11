@@ -1669,8 +1669,12 @@ class Session:
 ✓ debug sub-mode: regen-кнопка в diff-карточке re-кормит модели
   предыдущий патч и просит другой подход
 ✓ session summary при выходе печатается в stdout (typer.echo)
-✓ Бенч: 16/16 (15 базовых + multi-file navigation) на map+tools
-✓ Тесты: 144 unit + 16 LLM
+✓ Бенч: 23/24 LLM-теста (15 базовых + multi-file + 7 поведенческих +
+  1 xfail на grep до native function calling)
+✓ Тесты: 150 unit + 23 LLM (8 на историю + tool-loop в моках,
+  4 на native function calling в реале)
+✓ native function calling: переключение на OpenAI API tools=[...]
+  с JSON Schema. Убраны few-shot из системного промта.
 ```
 
 Перенесено в v0.3:
@@ -1682,9 +1686,15 @@ class Session:
 ! <cmd> в инпуте — выполнить bash-команду напрямую (без whitelist, вывод в поток)
 ```
 
+v0.3 hooks captured in v0.2 (см. ниже):
+
 ### v0.3
 
 ```text
+tool-result viewer (HOOK): сейчас ToolUseCard при разворачивании
+  показывает первые 5 строк результата (TUI вис при попытке отрендерить
+  200+ строк). Нужен Ctrl+O попап с подсветкой синтаксиса для
+  просмотра полного содержимого вне основного потока — без блокировки.
 supervised autonomous mode (run-plan loop)
 stop conditions enforcement
 SkillRegistry (MD + Python)

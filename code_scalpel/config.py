@@ -44,9 +44,9 @@ class ModelProfile(BaseModel):
     frequency_penalty: float | None = None
     seed: int | None = None
 
-    def inference_kwargs(self) -> dict[str, float | int]:
+    def inference_kwargs(self) -> dict[str, Any]:
         """Return only explicitly set inference params for passing to LLM calls."""
-        result: dict[str, float | int] = {}
+        result: dict[str, Any] = {}
         if self.temperature is not None:
             result["temperature"] = self.temperature
         if self.top_p is not None:

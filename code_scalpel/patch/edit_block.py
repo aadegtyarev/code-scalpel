@@ -26,14 +26,16 @@ _HEAD = "<<<<<<< SEARCH"
 _SEP = "======="
 _TAIL = ">>>>>>> REPLACE"
 
-# matches: optional fence + SEARCH + body + ======= + body + REPLACE
+# matches: optional fence + SEARCH + body + ======= + body + REPLACE.
+# Tolerates uniform leading whitespace on the markers, and 5-9 angle brackets
+# (qwen sometimes drops one to 6 or pads to 8 — count is mostly decorative).
 _BLOCK_RE = re.compile(
-    r"(?:^```[a-zA-Z]*\n)?"
-    r"<<<<<<< SEARCH\n"
+    r"(?:^[ \t]*```[a-zA-Z]*\n)?"
+    r"[ \t]*<{5,9} SEARCH\n"
     r"(?P<search>.*?)"
-    r"^=======\n"
+    r"^[ \t]*={5,9}\n"
     r"(?P<replace>.*?)"
-    r"^>>>>>>> REPLACE",
+    r"^[ \t]*>{5,9} REPLACE",
     re.DOTALL | re.MULTILINE,
 )
 
@@ -84,6 +86,9 @@ def _path_before(text: str, after: int, before: int) -> str | None:
         if any(s.startswith(m) for m in _BLOCK_MARKERS):
             continue
         s = s.strip("`*_ ")
+        # qwen sometimes prepends 'path: ' or wraps in backticks
+        if s.lower().startswith("path:"):
+            s = s[len("path:") :].strip()
         if s and not any(s.startswith(m) for m in _BLOCK_MARKERS):
             return s
     return None
