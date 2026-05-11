@@ -380,6 +380,55 @@ async def test_find_references_missing_name_errors(tmp_path: Path) -> None:
     assert "missing" in result.output
 
 
+# ── execution: retrieve ──────────────────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_retrieve_happy_path_returns_ranked_row(tmp_path: Path) -> None:
+    """The output row must start with `path:line` — same shape as
+    goto_definition — so the agent can fold retrieve hits into the same
+    "click here" loop without a special parser."""
+    (tmp_path / "a.py").write_text("def compact_context():\n    pass\n")
+    call = ToolCall(name="retrieve", body='{"query": "compact"}')
+    result = await execute(call, tmp_path)
+    assert result.ok
+    first = result.output.splitlines()[0]
+    assert first.startswith("a.py:1")
+    assert "compact_context" in first
+
+
+@pytest.mark.asyncio
+async def test_retrieve_with_path_scopes_search(tmp_path: Path) -> None:
+    (tmp_path / "a.py").write_text("def needle(): pass\n")
+    (tmp_path / "b.py").write_text("def needle(): pass\n")
+    call = ToolCall(name="retrieve", body='{"query": "needle", "path": "a.py"}')
+    result = await execute(call, tmp_path)
+    assert result.ok
+    assert "a.py" in result.output
+    assert "b.py" not in result.output
+
+
+@pytest.mark.asyncio
+async def test_retrieve_no_match_returns_helpful_message(tmp_path: Path) -> None:
+    (tmp_path / "a.py").write_text("def alpha(): pass\n")
+    call = ToolCall(name="retrieve", body='{"query": "zzz_no_such_thing"}')
+    result = await execute(call, tmp_path)
+    assert result.ok
+    assert "no symbol hits" in result.output
+    assert "grep" in result.output
+
+
+@pytest.mark.asyncio
+async def test_retrieve_rejects_absolute_path(tmp_path: Path) -> None:
+    call = ToolCall(
+        name="retrieve",
+        body='{"query": "foo", "path": "/etc/passwd"}',
+    )
+    result = await execute(call, tmp_path)
+    assert not result.ok
+    assert "inside the project" in result.output
+
+
 # ── symlink escape guard (security fix from session review) ──────────────────
 
 

@@ -1890,10 +1890,14 @@ mandatory tests: для каждой задачи в plan'е модель дол
   если задача implement/refactor. Конфликтует с simple `code` mode
   где юзер просит просто patch — нужен toggle.
 
-file-scoped retrieval: вместо «дай k chunks из всего проекта»
+✓ file-scoped retrieval: вместо «дай k chunks из всего проекта»
   иногда лучше «из этого файла». Полезно когда юзер уже выбрал
   файл (через map или предыдущий turn). API: `retrieve(query,
   path=...)`. Имплементируется поверх tree-sitter индекса.
+  (`code_scalpel/index/retrieve.py` — keyword-ranked поиск по
+  FileIndex; name-hit +2, docstring-hit +1, top-10 hits;
+  tool-обёртка `retrieve` в `agent_tools`. Без эмбеддингов и
+  лишних зависимостей.)
 
 model bench когда агент допишется (TODO, прямое сравнение на нашей
   v0.3+ сюите, не v0.2):
@@ -2200,6 +2204,12 @@ dual-model setup — ОТЛОЖЕНО ДО ПОСЛЕ v0.4 (см. ниже).
     делать одиночный локальный путь хорошо. Целевая позиция —
     «локальный jr.dev для compliance-сегмента». Dual-model
     (особенно (A)) — добавка для тех кто может, не дефолт.
+✓ system prompt diet (2026-05-11): `_SYSTEM_PROMPT` 2062 → 1310
+  approx-tokens (~36% cut). Свернули identity / tone / navigation
+  / diagrams / SEARCH-блок до anchor-фраз; "read_file перед
+  показом кода" теперь держится enforce-read-before-show HOOK,
+  поэтому объяснение в промте свернулось до одной строки. Все 9
+  prompt-anchor тестов в `tests/test_agent.py` зелёные.
 self-clarify loop (HOOK, экспериментально): когда модель в ходе задачи
   задаёт уточняющий вопрос пользователю — попробовать перехватить и
   скормить тот же вопрос ей же с другим контекстом. Два варианта:

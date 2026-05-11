@@ -12,7 +12,7 @@ a fallback for older / non-function-calling models — see
 `parse_tool_calls` and `_TOOL_RE`. Don't write new code against it.
 
 Current tools: read_file, map_file, goto_definition, find_references,
-grep, run_tests. Schemas with normative descriptions live in
+grep, retrieve, run_tests. Schemas with normative descriptions live in
 TOOL_SCHEMAS below.
 """
 
@@ -197,6 +197,44 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
     {
         "type": "function",
         "function": {
+            "name": "retrieve",
+            "description": (
+                "Search the project for symbols (classes, functions, methods) "
+                "whose name or docstring matches keywords from `query`. "
+                "Returns top-10 ranked hits as "
+                "`path:line  kind  qualified_name  · docstring`. Use when "
+                "you know roughly WHAT you want but not the exact symbol "
+                "name — fuzzier than `goto_definition`, more structured "
+                "than `grep`. Optional `path` narrows the search to one "
+                "file."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "query": {
+                        "type": "string",
+                        "description": (
+                            "Free-text keywords. Split on whitespace + "
+                            "punctuation; tokens are matched case-"
+                            "insensitively against symbol names and "
+                            "docstrings."
+                        ),
+                    },
+                    "path": {
+                        "type": "string",
+                        "description": (
+                            "Optional relative path to scope the search "
+                            "to one file. Omit to search the whole project."
+                        ),
+                    },
+                },
+                "required": ["query"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "run_tests",
             "description": (
                 "Run the project's test suite via the active SkillRegistry skill "
@@ -270,6 +308,8 @@ async def execute(
         return _tool_find_references(call, cwd)
     if call.name == "grep":
         return await _tool_grep(call, cwd, runner or AsyncShellRunner())
+    if call.name == "retrieve":
+        return _tool_retrieve(call, cwd)
     if call.name == "run_tests":
         return await _tool_run_tests(call, cwd, runner or AsyncShellRunner())
     return ToolResult(
@@ -379,6 +419,47 @@ def _tool_find_references(call: ToolCall, cwd: Path) -> ToolResult:
     if not refs:
         return ToolResult(call, output=f"no references found for {name!r}.", ok=True)
     lines = [f"{r.rel_path}:{r.line}: {r.text}" for r in refs]
+    return ToolResult(call, output="\n".join(lines), ok=True)
+
+
+def _tool_retrieve(call: ToolCall, cwd: Path) -> ToolResult:
+    """args: {query: str, path?: str}. Returns top-10 ranked symbol hits
+    as `path:line  kind  qualified_name  · docstring`. Empty result is
+    `ok=True` with a hint to fall back to grep — same shape as
+    goto_definition so the agent treats it uniformly."""
+    from code_scalpel.index.retrieve import search
+
+    args = _decode_args(call.body)
+    query = str(args.get("query") or args.get("_raw", "")).strip()
+    if not query:
+        return ToolResult(call, output="error: missing 'query'", ok=False)
+    rel = str(args.get("path", "")).strip()
+    if rel:
+        if rel.startswith("/") or ".." in Path(rel).parts:
+            return ToolResult(
+                call, output=f"error: path must be inside the project: {rel}", ok=False
+            )
+        if not _is_inside_project(cwd / rel, cwd):
+            return ToolResult(
+                call, output=f"error: path must be inside the project: {rel}", ok=False
+            )
+    try:
+        hits = search(cwd, query, path=rel or None)
+    except OSError as e:
+        return ToolResult(call, output=f"error: {e}", ok=False)
+    if not hits:
+        return ToolResult(
+            call,
+            output=(f"no symbol hits for {query!r}. Try grep for textual matches."),
+            ok=True,
+        )
+    lines = [
+        (
+            f"{h.rel_path}:{h.lineno}  {h.kind}  {h.qualified_name}"
+            + (f"  · {h.docstring}" if h.docstring else "")
+        )
+        for h in hits
+    ]
     return ToolResult(call, output="\n".join(lines), ok=True)
 
 
