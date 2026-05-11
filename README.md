@@ -137,6 +137,21 @@ TUI откроется в текущей папке. Слева футер:
 | `grep(pattern, path?)` | До 30 совпадений по regex. |
 | `run_tests(args?)` | `pytest`, exit code + truncated output. |
 
+## Диаграммы
+
+Если модель возвращает ```` ```mermaid ``` ```` блок — в TUI поверх ответа
+появляется `MermaidCard`. Три яруса рендера, offline-first:
+
+- **Pure-Python ASCII** *(по умолчанию)* — рендерит flowchart-семью
+  (`flowchart TD/LR`, `graph TD/LR`) без внешних бинарников и сети.
+  Подходит для compliance-сегмента где npm недопустим.
+- **mmdc + rich-pixels** *(опционально)* — `npm i -g @mermaid-js/mermaid-cli`
+  плюс `pip install -e ".[diagrams]"`, тогда нерафлчартовые типы
+  (`sequenceDiagram`, `classDiagram`, …) рендерятся в PNG и встраиваются
+  как Unicode half-blocks.
+- **Raw text** — если ни один ярус не сработал, блок показывается как
+  syntax-highlighted текст с подсказкой что установить.
+
 ## Архитектура — коротко
 
 ```

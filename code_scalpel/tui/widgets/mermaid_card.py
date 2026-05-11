@@ -1,12 +1,17 @@
 """Inline card that renders a ```mermaid ... ``` block from the model's reply.
 
-Three-tier fallback:
+Three-tier fallback (offline-first):
 
+0. Pure-Python ASCII renderer (`code_scalpel.mermaid`) — рендерит
+   flowchart-семью без единого внешнего бинарника. Это дефолт; работает
+   в compliance-сегменте где npm / Node вообще не положен.
 1. `mmdc` (Mermaid CLI) on PATH AND `rich-pixels` importable → render to
-   PNG and draw via Unicode half-blocks inside a Static.
+   PNG and draw via Unicode half-blocks inside a Static. Используется
+   только если pure-Python вернул None (не-flowchart диаграмма).
 2. mmdc available but invocation fails (bad mermaid syntax, etc.) →
    show the raw source plus a one-line error hint.
-3. Neither dep available → show the raw source plus an install hint.
+3. Neither tier 0 nor tier 1 нет → show the raw source plus an install hint
+   (с подсказкой что pure-Python поддерживает только flowchart).
 
 Никакой malformed mermaid (или сетевой пакет, или капризы npm-обёртки)
 не должен валить TUI. Все исключения ловим, fallback всегда — текст
@@ -25,9 +30,12 @@ from typing import Any
 
 from rich.markup import escape
 from rich.syntax import Syntax
+from rich.text import Text
 from textual.app import ComposeResult
 from textual.widget import Widget
 from textual.widgets import Collapsible, Static
+
+from code_scalpel.mermaid import render_mermaid
 
 # rich-pixels — optional. Если пакет не установлен, мы остаёмся в
 # текстовом фоллбэке. Импорт под try/except, чтобы отсутствие пакета
@@ -41,6 +49,12 @@ except ImportError:  # pragma: no cover - exercised by env without rich-pixels
 _INSTALL_HINT = (
     "[dim]Install [b]mmdc[/b] (npm i -g @mermaid-js/mermaid-cli) + "
     "[b]rich-pixels[/b] to render diagrams inline.[/]"
+)
+
+# Подсказка, когда pure-Python renderer не смог (sequenceDiagram и т.п.).
+_UNSUPPORTED_HINT = (
+    "[dim]Pure-Python renderer supports flowchart only; "
+    "install [b]mmdc[/b] for full Mermaid support.[/]"
 )
 
 
@@ -118,10 +132,29 @@ class MermaidCard(Widget):
     # ── render pipeline ───────────────────────────────────────────────────
 
     async def _render_mermaid(self) -> None:
-        """Attempt mmdc → PNG → rich-pixels. Mutates `self._rendered` /
-        `self._error` and calls `_swap_body`. Любая ошибка — silent
-        fallback на текст; никакой crash."""
+        """Attempt pure-Python first, then mmdc → PNG → rich-pixels.
+
+        Mutates `self._rendered` / `self._error` and calls `_swap_body`.
+        Любая ошибка — silent fallback на текст; никакой crash."""
+        # Tier 0: pure-Python ASCII. Полностью оффлайн, нулевые
+        # внешние зависимости. Возвращает str для flowchart, None для
+        # остальных типов (sequenceDiagram, classDiagram, …).
+        try:
+            ascii_art = await asyncio.to_thread(render_mermaid, self._source)
+        except Exception as e:  # pragma: no cover - defensive
+            ascii_art = None
+            self._error = f"pure-python renderer crashed: {e}"
+        if ascii_art:
+            self._rendered = ascii_art
+            await self._swap_body()
+            return
+        # Tier 1+: mmdc fallback for unsupported diagram types (or если
+        # pure-Python вернул "" для пустого flowchart — нет смысла идти
+        # в mmdc дальше).
         if shutil.which("mmdc") is None:
+            # Раз pure-Python не смог и mmdc нет — поменяем подсказку на
+            # более точную: "renderer supports flowchart only".
+            await self._set_unsupported_hint()
             return  # tier 3: hint + raw source, уже отрисовано в compose
         try:
             png_path = await asyncio.to_thread(_mmdc_render, self._source)
@@ -159,10 +192,17 @@ class MermaidCard(Widget):
         except Exception:
             return
         if self._rendered is not None:
-            # Успех: убираем hint, заменяем тело на picture.
+            # Успех: убираем hint, заменяем тело на picture / ASCII art.
             try:
                 await hint.remove()
-                body.update(self._rendered)
+                if isinstance(self._rendered, str):
+                    # ASCII renderer: чистый текст с `|`, `<`, `>` и
+                    # прочими символами, которые Rich пытается парсить
+                    # как markup. Оборачиваем в Text — это гарантирует
+                    # литеральный рендер без интерпретации.
+                    body.update(Text(self._rendered))
+                else:
+                    body.update(self._rendered)
             except Exception:
                 pass
             return
@@ -171,6 +211,15 @@ class MermaidCard(Widget):
             # строку ошибки (escape — текст может содержать `[`).
             with contextlib.suppress(Exception):
                 hint.update(f"[#bf6060]mmdc error:[/] {escape(self._error)}")
+
+    async def _set_unsupported_hint(self) -> None:
+        """Заменить дефолтный install-hint на 'flowchart-only' подсказку."""
+        try:
+            hint = self.query_one(".mermaid-hint", Static)
+        except Exception:
+            return
+        with contextlib.suppress(Exception):
+            hint.update(_UNSUPPORTED_HINT)
 
 
 # ── mmdc shell-out ────────────────────────────────────────────────────────

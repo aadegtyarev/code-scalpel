@@ -58,22 +58,42 @@ def _all_text(card: MermaidCard) -> str:
 
 
 @pytest.mark.asyncio
-async def test_card_mounts_with_raw_source_when_mmdc_missing(
+async def test_card_renders_flowchart_via_pure_python_when_mmdc_missing(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """No mmdc on PATH → tier-3 fallback: install hint + raw source. Card
-    must NOT crash and must contain the mermaid source verbatim."""
+    """No mmdc on PATH but flowchart source → tier-0 pure-Python renderer
+    takes over. Card shows the ASCII rendering, no install hint, no crash."""
     monkeypatch.setattr(mc_module.shutil, "which", lambda _name: None)
     card = MermaidCard(_SOURCE)
     app = _Harness(card)
     async with app.run_test(headless=True, size=(80, 24)) as pilot:
-        await pilot.pause(0.1)
+        await pilot.pause(0.2)
         text = _all_text(card)
-        # Hint advertising the upgrade path is present.
-        assert "Install" in text
-        # Source is rendered (via Syntax) — substring check on a token
-        # that's unique to mermaid flowcharts.
-        assert "flowchart TD" in text
+        # ASCII rendering: характерные `+---+` borders должны быть.
+        assert "+---+" in text
+        # Узлы flowchart-а присутствуют.
+        assert "A" in text
+        assert "B" in text
+        # И install-hint больше не показываем — рендер успешен.
+        assert "Install" not in text
+
+
+@pytest.mark.asyncio
+async def test_card_shows_unsupported_hint_for_sequence_without_mmdc(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """sequenceDiagram + нет mmdc → pure-Python вернул None, показываем
+    подсказку про flowchart-only + raw source."""
+    monkeypatch.setattr(mc_module.shutil, "which", lambda _name: None)
+    card = MermaidCard("sequenceDiagram\nAlice->>John: Hello")
+    app = _Harness(card)
+    async with app.run_test(headless=True, size=(80, 24)) as pilot:
+        await pilot.pause(0.2)
+        text = _all_text(card)
+        # Уточнённая подсказка про flowchart-only.
+        assert "flowchart only" in text or "flowchart" in text
+        # Source виден.
+        assert "sequenceDiagram" in text
 
 
 @pytest.mark.asyncio
