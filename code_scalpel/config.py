@@ -53,15 +53,24 @@ class AgentConfig(BaseModel):
 
 
 class ModeTemperatures(BaseModel):
-    """Per-mode sampling temperature. ask/review default low (retrieval,
-    analytical), plan moderate, code low-mid (single-shot patch generation),
-    debug higher to give the retry diversity when the first patch fails."""
+    """Per-mode sampling temperature.
 
-    ask: float = 0.1
-    plan: float = 0.4
-    code: float = 0.2
-    review: float = 0.1
-    debug: float = 0.5
+    `ask` was 0.1 — too deterministic for a weak local model. Probe
+    showed it bouncing query-tasks with "Извините, не могу найти X"
+    instead of calling `project_map()`. At higher temperature the
+    same model picks exploration over the "I don't know" reflex.
+    Bumped to 0.3 — still well under "creative" but enough to break
+    the consistent-refusal pattern.
+
+    plan stays moderate (creative breakdown). code stays low-mid
+    (single-shot patch precision). debug high (retry diversity).
+    """
+
+    ask: float = 0.7
+    plan: float = 0.6
+    code: float = 0.3
+    review: float = 0.3
+    debug: float = 0.7
 
     def for_mode(self, mode: str) -> float:
         # Unknown modes fall back to ask — safest default for surprising callers.

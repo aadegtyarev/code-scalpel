@@ -120,21 +120,28 @@ def test_inference_kwargs_defaults_to_ask_temperature() -> None:
     profile = ModelProfile(provider="lmstudio", model="qwen")
     kwargs = profile.inference_kwargs()
     # ask mode is the default; top_p ships always.
-    assert kwargs == {"temperature": 0.1, "top_p": 0.9}
+    # Default `ask` temperature was bumped from 0.1 → 0.7 (closer to
+    # the model's own default of ~0.8). At 0.1 the weak local model
+    # consistently bounced query-tasks with "Извините не могу найти"
+    # instead of calling project_map; higher temperature breaks the
+    # deterministic-refusal pattern.
+    assert kwargs == {"temperature": 0.7, "top_p": 0.9}
 
 
 def test_inference_kwargs_per_mode_temperature() -> None:
     profile = ModelProfile(provider="lmstudio", model="qwen")
-    assert profile.inference_kwargs("ask")["temperature"] == 0.1
-    assert profile.inference_kwargs("plan")["temperature"] == 0.4
-    assert profile.inference_kwargs("code")["temperature"] == 0.2
-    assert profile.inference_kwargs("review")["temperature"] == 0.1
-    assert profile.inference_kwargs("debug")["temperature"] == 0.5
+    # New defaults — closer to model-native ~0.8. Probe confirmed
+    # the deterministic-refusal pattern at 0.1 disappears at 0.7.
+    assert profile.inference_kwargs("ask")["temperature"] == 0.7
+    assert profile.inference_kwargs("plan")["temperature"] == 0.6
+    assert profile.inference_kwargs("code")["temperature"] == 0.3
+    assert profile.inference_kwargs("review")["temperature"] == 0.3
+    assert profile.inference_kwargs("debug")["temperature"] == 0.7
 
 
 def test_inference_kwargs_unknown_mode_falls_back_to_ask() -> None:
     profile = ModelProfile(provider="lmstudio", model="qwen")
-    assert profile.inference_kwargs("nonsense")["temperature"] == 0.1
+    assert profile.inference_kwargs("nonsense")["temperature"] == 0.7
 
 
 def test_inference_kwargs_top_p_overridable() -> None:
@@ -169,8 +176,8 @@ def test_temperature_explicit_per_mode_via_dict() -> None:
     assert profile.inference_kwargs("ask")["temperature"] == 0.0
     assert profile.inference_kwargs("code")["temperature"] == 0.5
     # Unspecified modes keep their defaults.
-    assert profile.inference_kwargs("debug")["temperature"] == 0.5  # default
-    assert profile.inference_kwargs("plan")["temperature"] == 0.4  # default
+    assert profile.inference_kwargs("debug")["temperature"] == 0.7  # default
+    assert profile.inference_kwargs("plan")["temperature"] == 0.6  # default
 
 
 def test_provider_base_url_default() -> None:

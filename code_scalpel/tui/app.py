@@ -53,8 +53,8 @@ class _UpwardAutoComplete(AutoComplete):
 _SLASH_COMMANDS: list[tuple[str, str]] = [
     ("/new", "start a new session — clear chat and reset state"),
     ("/compact", "summarize history to free up context (not yet)"),
-    ("/map", "show the project map the model receives each turn"),
-    ("/tasks", "show the current plan from .code-scalpel/TASKS.md"),
+    ("/map", "project tree; /map foo.py → file outline; /map subdir → subdir tree"),
+    ("/tasks", "show plan; /tasks rm T### drops one; /tasks clear wipes the file"),
     ("/stats", "show this session's token/cost/timing stats"),
     ("/context", "breakdown of context budget by category"),
     ("/skills", "list available tools and slash commands"),
@@ -262,32 +262,113 @@ class ScalpelApp(App[None]):
             )
         )
 
-    async def _do_map(self) -> None:
-        """Build the project map off the event loop and surface progress
-        inline. UI must NEVER freeze — even fast paths route through here
-        so /map feels the same on a 5-file repo and a 500-file one."""
+    async def _do_map(self, arg: str = "") -> None:
+        """Same view the model gets from `project_map()`:
+          /map           — tree of project files
+          /map foo.py    — outline of foo.py (classes, functions,
+                            methods, imports)
+          /map subdir    — tree of files under subdir
+        Inline "● Building project map…" lands before the work
+        starts; the build itself runs off the event loop so a
+        large repo doesn't freeze the UI."""
         output = self.query_one(OutputLog)
+        output.print_status("● Building project map…", markup=True)
+        await asyncio.sleep(0)
+        from code_scalpel.project_map import build_file_map, build_map_overview
+
+        arg = arg.strip()
+        loop = asyncio.get_running_loop()
         with self.jobs.track("map", "Building project map"):
-            output.print_status("● Building project map…", markup=True)
-            # Give the event loop a chance to paint the notice before we go
-            # CPU-bound on AST parsing.
-            await asyncio.sleep(0)
-            from code_scalpel.project_map import build_map
+            if not arg:
+                try:
+                    text = await loop.run_in_executor(
+                        None, lambda: build_map_overview(self.cwd, max_files=200)
+                    )
+                except OSError as e:
+                    output.print_error(f"project_map failed: {e}")
+                    return
+                body_arg = ""
+            else:
+                target = self.cwd / arg
+                if not target.exists():
+                    output.print_error(f"path not found: {arg}")
+                    return
+                if target.is_dir():
+                    try:
+                        text = await loop.run_in_executor(
+                            None, lambda: build_map_overview(target, max_files=200)
+                        )
+                    except OSError as e:
+                        output.print_error(f"project_map failed: {e}")
+                        return
+                else:
+                    try:
+                        text = await loop.run_in_executor(None, build_file_map, self.cwd, arg)
+                    except OSError as e:
+                        output.print_error(f"project_map failed: {e}")
+                        return
+                body_arg = f'{{"path": "{arg}"}}'
+        text = text or "(no files)"
+        call = ToolCall(name="project_map", body=body_arg)
+        result = ToolResult(call=call, output=text, ok=True)
+        output.add_tool_use(call, result)
+        self._last_tool_result = result
 
-            loop = asyncio.get_running_loop()
-            text = await loop.run_in_executor(None, build_map, self.cwd)
+    def _do_tasks(self, arg: str = "") -> None:
+        """Surface the current plan (.code-scalpel/TASKS.md) inline.
 
-            call = ToolCall(name="project_map", body="")
-            result = ToolResult(call=call, output=text, ok=True)
-            output.add_tool_use(call, result)
-            self._last_tool_result = result
-
-    def _do_tasks(self) -> None:
-        """Surface the current plan (.code-scalpel/TASKS.md) inline as
-        a collapsed ToolUseCard. The file is tiny (rarely >5KB); a
-        synchronous read is cheaper than the worker-bounce latency."""
+        Subcommands:
+          /tasks           — show the plan
+          /tasks clear     — delete the file
+          /tasks rm T001   — drop one task by id (keeps the rest)
+        """
         output = self.query_one(OutputLog)
         tasks_path = self.cwd / ".code-scalpel" / "TASKS.md"
+        arg = arg.strip()
+
+        if arg == "clear":
+            if tasks_path.is_file():
+                try:
+                    tasks_path.unlink()
+                except OSError as e:
+                    output.print_error(f"TASKS.md delete failed: {e}")
+                    return
+                output.print_status("● TASKS.md cleared.")
+            else:
+                output.print_status("No plan to clear.")
+            return
+
+        if arg.startswith("rm "):
+            target = arg.removeprefix("rm").strip()
+            if not target:
+                output.print_error("Usage: /tasks rm T###")
+                return
+            if not tasks_path.is_file():
+                output.print_status("No plan yet.")
+                return
+            try:
+                from code_scalpel.plan import parse_tasks_md, serialize_tasks
+            except Exception as e:
+                output.print_error(f"plan parser unavailable: {e}")
+                return
+            original = tasks_path.read_text()
+            tasks = list(parse_tasks_md(original))
+            kept = tuple(t for t in tasks if t.id != target)
+            if len(kept) == len(tasks):
+                output.print_error(f"task {target!r} not found.")
+                return
+            new_text = serialize_tasks(kept, original)
+            tmp = tasks_path.with_suffix(".md.tmp")
+            try:
+                tmp.write_text(new_text)
+                tmp.replace(tasks_path)
+            except OSError as e:
+                output.print_error(f"TASKS.md write failed: {e}")
+                return
+            output.print_status(f"● Dropped {target}.")
+            return
+
+        # Default: show the plan.
         if not tasks_path.is_file():
             output.print_status("No plan yet. Switch to plan mode and ask for a breakdown.")
             return
@@ -657,16 +738,19 @@ class ScalpelApp(App[None]):
             lines = "Commands:\n" + "\n".join(f"  {c}  — {d}" for c, d in _SLASH_COMMANDS)
             output.print_status(lines)
             return
-        if cmd == "/map":
-            # build_map walks the project (up to 200 files, AST-parses each)
-            # and would block the event loop for seconds on larger trees.
-            # Run it on a worker so the user message + "Building…" notice
-            # render instantly, then the card appears when the build returns.
-            self.run_worker(self._do_map(), exclusive=False, group="map")
+        if cmd == "/map" or cmd.startswith("/map "):
+            # Off-loop build so a large repo doesn't freeze the UI;
+            # subcommand parses to /map [path]. Empty path → tree,
+            # file path → outline, subdir → tree under it.
+            arg = cmd.removeprefix("/map").strip()
+            self.run_worker(self._do_map(arg), exclusive=False, group="map")
             return
-        if cmd == "/tasks":
-            # Sync — TASKS.md is rarely >5KB, no worker bounce needed.
-            self._do_tasks()
+        if cmd == "/tasks" or cmd.startswith("/tasks "):
+            # /tasks            — show plan
+            # /tasks clear      — delete TASKS.md
+            # /tasks rm T###    — drop one task
+            arg = cmd.removeprefix("/tasks").strip()
+            self._do_tasks(arg)
             return
         if cmd == "/stats":
             # Pure in-memory render — no I/O, no need for a worker.
