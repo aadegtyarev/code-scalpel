@@ -1755,9 +1755,22 @@ project memory + retrieval (BIG, ставит фундамент для всег
   плоский: signatures + docstrings + imports. Нужна **многослойная
   память** проекта чтобы агент не зависел от того что юзер помнит
   сказать «прочитай файл X» каждый раз.
-  **Перед стартом** — полудневной spike `mem0ai` (см. external SDK
-  survey выше): закрывает recall/dedup, экономит 30%. AST/symbols/
-  summaries — пишем сами, наш moat.
+  **Update 2026-05-11**: spike-агент прогнал mem0ai 2.0.2 на нашем
+  стеке. **Recommendation: SKIP**. Причины:
+    1. API instability — mem0 сломал свою же документацию между
+       версиями (`search(user_id=...)` → `search(filters={...})`)
+    2. LM Studio совместимость требует monkey-patch (mem0 хардкодит
+       `response_format={"type": "json_object"}` — LM Studio такое
+       не поддерживает, требует `"text"`)
+    3. Дедупликация **не работает** в 2.0.2 в vector-пути — главная
+       причина брать mem0, а её и нет
+    4. +138 MB зависимостей (numpy, grpcio, sqlalchemy, qdrant)
+  Альтернатива: thin `code_scalpel/memory.py` (~150 LOC):
+    • sqlite для fact rows (persist)
+    • Chroma или Qdrant через abstract interface (не lock-in)
+    • Используем существующий LLMAdapter для contradiction-check
+  Полный отчёт spike: `/tmp/mem0_spike_report.md`.
+  AST/symbols/summaries — наш moat в любом случае.
   Слои:
   • Tree-sitter / AST индекс — granular nodes (functions, classes,
     methods) с позициями, типами параметров, control-flow shape (есть

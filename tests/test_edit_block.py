@@ -245,6 +245,50 @@ def test_apply_tolerates_expanded_blank_lines(tmp_path: Path) -> None:
     assert ok, err
 
 
+def test_apply_one_strips_spurious_leading_blank_in_search(tmp_path: Path) -> None:
+    """Strategy 4 in _apply_one: when SEARCH starts with `\\n` and that bare
+    leading newline is the only thing keeping it from matching, the stripped
+    form is tried. Aider issue #25 — qwen sometimes emits a spurious blank
+    line between SEARCH and the first content line."""
+    src = "def foo():\n    return 1\n"
+    (tmp_path / "f.py").write_text(src)
+    edits = [
+        Edit(
+            path="f.py",
+            # Leading \n is the spurious one — file doesn't have it
+            search="\ndef foo():\n    return 1\n",
+            replace="def foo():\n    return 2\n",
+        ),
+    ]
+    ok, err = apply_edits(edits, tmp_path)
+    assert ok, err
+    assert (tmp_path / "f.py").read_text() == "def foo():\n    return 2\n"
+
+
+def test_apply_one_indents_replace_to_match_file(tmp_path: Path) -> None:
+    """_try_whitespace_outdent's 'found outdented' branch (lines 236-248):
+    model emits SEARCH/REPLACE without the file's leading indent (e.g.
+    method body without class indent). Applier finds the dedented match,
+    then re-indents REPLACE to match the file's actual indent at the
+    match site. This is the path that lets the user paste a method body
+    as if it were standalone without copying the class indent."""
+    src = "class C:\n    def m(self):\n        return self.x\n"
+    (tmp_path / "c.py").write_text(src)
+    edits = [
+        Edit(
+            path="c.py",
+            # Dedented (no 4-space class indent)
+            search="def m(self):\n    return self.x\n",
+            replace="def m(self):\n    return self.x + 1\n",
+        ),
+    ]
+    ok, err = apply_edits(edits, tmp_path)
+    assert ok, err
+    out = (tmp_path / "c.py").read_text()
+    # Class indent preserved
+    assert out == "class C:\n    def m(self):\n        return self.x + 1\n"
+
+
 def test_apply_tolerates_indent_AND_blank_mismatch(tmp_path: Path) -> None:
     """The actual 2026-05-11 rename_function regression: model emits SEARCH
     with BOTH a uniform 4-space leading prefix (copied from the prompt

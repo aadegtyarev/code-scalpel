@@ -128,6 +128,85 @@ async def test_openai_adapter_stream() -> None:
 
 
 @pytest.mark.asyncio
+async def test_stream_accumulates_tool_call_across_chunks() -> None:
+    """OpenAI streaming delivers tool_call fields incrementally: id+name
+    arrive in one chunk, arguments are split across N subsequent chunks.
+    The adapter must accumulate `function.arguments` into one
+    NativeToolCall yielded at end-of-stream. Otherwise tool-using turns
+    fail mid-flight."""
+
+    def make_chunk(
+        text: str | None = None,
+        tc_index: int | None = None,
+        tc_id: str | None = None,
+        tc_name: str | None = None,
+        tc_args: str | None = None,
+    ) -> MagicMock:
+        chunk = MagicMock()
+        chunk.choices = [MagicMock()]
+        chunk.choices[0].delta.content = text
+        if tc_index is None:
+            chunk.choices[0].delta.tool_calls = None
+        else:
+            tc = MagicMock()
+            tc.index = tc_index
+            tc.id = tc_id
+            tc.function = MagicMock()
+            tc.function.name = tc_name
+            tc.function.arguments = tc_args
+            chunk.choices[0].delta.tool_calls = [tc]
+        return chunk
+
+    class _AsyncIter:
+        def __init__(self, items: list[MagicMock]) -> None:
+            self._items = iter(items)
+
+        def __aiter__(self) -> _AsyncIter:
+            return self
+
+        async def __anext__(self) -> MagicMock:
+            try:
+                return next(self._items)
+            except StopIteration as exc:
+                raise StopAsyncIteration from exc
+
+    # Sequence: id+name once, then arguments in three pieces, then a final
+    # text chunk (model decided to comment after the call).
+    raw = [
+        make_chunk(tc_index=0, tc_id="call_42", tc_name="read_file"),
+        make_chunk(tc_index=0, tc_args='{"pa'),
+        make_chunk(tc_index=0, tc_args='th":'),
+        make_chunk(tc_index=0, tc_args=' "x.py"}'),
+        make_chunk(text="ok"),
+    ]
+    with patch("code_scalpel.llm.adapter.AsyncOpenAI") as mock_cls:
+        mock_client = MagicMock()
+        mock_client.chat.completions.create = AsyncMock(return_value=_AsyncIter(raw))
+        mock_cls.return_value = mock_client
+
+        adapter = OpenAICompatibleAdapter(
+            base_url="http://localhost:1234/v1",
+            api_key="lm-studio",
+            model="qwen2.5-coder-14b-instruct",
+        )
+        text_parts: list[str] = []
+        tool_calls = []
+        async for chunk in adapter.stream([{"role": "user", "content": "hi"}]):
+            if chunk.text:
+                text_parts.append(chunk.text)
+            if chunk.tool_call is not None:
+                tool_calls.append(chunk.tool_call)
+
+    assert text_parts == ["ok"]
+    assert len(tool_calls) == 1
+    tc = tool_calls[0]
+    assert tc.id == "call_42"
+    assert tc.name == "read_file"
+    # Args were assembled correctly across three delta chunks
+    assert tc.arguments == '{"path": "x.py"}'
+
+
+@pytest.mark.asyncio
 async def test_openai_adapter_cost_per_1k() -> None:
     mock_usage = MagicMock()
     mock_usage.prompt_tokens = 1000
