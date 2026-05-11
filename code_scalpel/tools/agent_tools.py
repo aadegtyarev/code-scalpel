@@ -199,7 +199,8 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
         "function": {
             "name": "run_tests",
             "description": (
-                "Run the project's pytest suite. Returns exit code and truncated output."
+                "Run the project's test suite via the active SkillRegistry skill "
+                "(pytest, docker, …). Returns exit code + truncated output."
             ),
             "parameters": {
                 "type": "object",
@@ -471,19 +472,36 @@ _MAX_TEST_OUTPUT = 4000
 
 
 async def _tool_run_tests(call: ToolCall, cwd: Path, runner: ShellRunner) -> ToolResult:
-    """args: {args?: str}. Legacy: raw pytest args."""
+    """args: {args?: str}. Legacy: raw pytest args.
+
+    Dispatches through `default_skill(cwd)` so the active stack picks
+    its own test runner (PythonSkill → pytest, DockerSkill → compose).
+    If no skill detects the project shape, falls back to the historical
+    hardcoded `pytest -x --tb=short --no-header -q …` so the tool still
+    works on bare scratch directories (most tests, demos, fresh clones).
+    """
+    from code_scalpel.skills import default_skill
+
     decoded = _decode_args(call.body)
     raw = str(decoded.get("args", decoded.get("_raw", ""))).strip()
-    args = shlex.split(raw) if raw else []
-    cmd = ["pytest", "-x", "--tb=short", "--no-header", "-q", *args]
+
+    skill = default_skill(cwd)
+    if skill is not None:
+        cmd = skill.test_cmd(raw)
+        skill_label = skill.name
+    else:
+        args = shlex.split(raw) if raw else []
+        cmd = ["pytest", "-x", "--tb=short", "--no-header", "-q", *args]
+        skill_label = "pytest (fallback)"
+
     try:
         result = await runner.run(cmd, cwd=str(cwd), timeout=120)
     except Exception as e:
-        return ToolResult(call, output=f"error: {e}", ok=False)
+        return ToolResult(call, output=f"using skill: {skill_label}\nerror: {e}", ok=False)
     text = result.stdout
     if len(text) > _MAX_TEST_OUTPUT:
         text = (
             text[:_MAX_TEST_OUTPUT] + f"\n... ({len(text) - _MAX_TEST_OUTPUT} more bytes truncated)"
         )
-    summary = f"exit code: {result.returncode}\n---\n{text}"
+    summary = f"using skill: {skill_label}\nexit code: {result.returncode}\n---\n{text}"
     return ToolResult(call, output=summary, ok=result.returncode == 0)

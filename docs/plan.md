@@ -2077,8 +2077,10 @@ gemma+спек retry (TODO с следующей сессии): сейчас з�
   Dockerfile / docker-compose.yml). `/skills` TUI view extended with
   a "Skills (detected)" section that lists each active skill with
   its token cost. Out of scope this commit (next passes):
-    - wiring `_tool_run_tests` / lint to `default_skill().test_cmd`
-      instead of hardcoded pytest;
+    ✓ wiring `_tool_run_tests` / lint to `default_skill().test_cmd`
+      instead of hardcoded pytest (run_tests now dispatches through
+      `default_skill(cwd)`; fallback `pytest (fallback)` for projects
+      with no skill marker; result header announces `using skill: …`);
     - `learn` command generating MD skills from URL/docs.
 learn command (из знаний модели)
 session summary при выходе

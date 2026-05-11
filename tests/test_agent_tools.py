@@ -214,6 +214,8 @@ async def test_run_tests_passes_when_clean(tmp_path: Path) -> None:
     result = await execute(call, tmp_path)
     assert result.ok
     assert "exit code: 0" in result.output
+    # tmp_path has no skill marker → fallback path is announced
+    assert "using skill: pytest (fallback)" in result.output
 
 
 @pytest.mark.asyncio
@@ -224,6 +226,56 @@ async def test_run_tests_reports_failure(tmp_path: Path) -> None:
     assert not result.ok
     assert "exit code:" in result.output
     assert "1" in result.output  # non-zero exit code
+    assert "using skill: pytest (fallback)" in result.output
+
+
+@pytest.mark.asyncio
+async def test_run_tests_uses_python_skill_when_pyproject_present(tmp_path: Path) -> None:
+    """A project with pyproject.toml routes through PythonSkill.test_cmd,
+    so the recorded shell command must be exactly its pytest argv and
+    the header must announce the active skill name."""
+    from code_scalpel.tools.shell import ShellResult
+    from tests.mocks import MockShellRunner
+
+    (tmp_path / "pyproject.toml").write_text("[project]\nname='x'\n")
+    runner = MockShellRunner([ShellResult("1 passed", 0)])
+    call = ToolCall(name="run_tests", body="")
+    result = await execute(call, tmp_path, runner=runner)
+    assert result.ok
+    assert result.output.startswith("using skill: python\n")
+    assert runner.calls == [["pytest", "-x", "--tb=short", "--no-header", "-q"]]
+
+
+@pytest.mark.asyncio
+async def test_run_tests_uses_docker_skill_on_docker_only_project(tmp_path: Path) -> None:
+    """A Dockerfile-only project (no pyproject.toml) routes through
+    DockerSkill — `docker compose run --rm app pytest`. The header must
+    say `using skill: docker`."""
+    from code_scalpel.tools.shell import ShellResult
+    from tests.mocks import MockShellRunner
+
+    (tmp_path / "Dockerfile").write_text("FROM python:3.12\n")
+    runner = MockShellRunner([ShellResult("1 passed", 0)])
+    call = ToolCall(name="run_tests", body="")
+    result = await execute(call, tmp_path, runner=runner)
+    assert result.ok
+    assert result.output.startswith("using skill: docker\n")
+    assert runner.calls == [["docker", "compose", "run", "--rm", "app", "pytest"]]
+
+
+@pytest.mark.asyncio
+async def test_run_tests_falls_back_to_pytest_on_unrecognised_project(tmp_path: Path) -> None:
+    """Empty tmp_path has no skill marker → fallback pytest argv,
+    annotated with `(fallback)` so the user knows no skill detected."""
+    from code_scalpel.tools.shell import ShellResult
+    from tests.mocks import MockShellRunner
+
+    runner = MockShellRunner([ShellResult("", 0)])
+    call = ToolCall(name="run_tests", body="")
+    result = await execute(call, tmp_path, runner=runner)
+    assert result.ok
+    assert result.output.startswith("using skill: pytest (fallback)\n")
+    assert runner.calls == [["pytest", "-x", "--tb=short", "--no-header", "-q"]]
 
 
 @pytest.mark.asyncio
