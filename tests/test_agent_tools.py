@@ -135,11 +135,15 @@ async def test_map_file_handles_legacy_text_body(tmp_path: Path) -> None:
 
 
 @pytest.mark.asyncio
-async def test_map_file_rejects_missing_path(tmp_path: Path) -> None:
+async def test_map_file_empty_arg_returns_project_tree(tmp_path: Path) -> None:
+    """`map_file` is a legacy alias for `project_map`; with no path
+    argument it falls into tree-mode (was an error in the old
+    standalone map_file)."""
+    (tmp_path / "x.py").write_text("x = 1\n")
     call = ToolCall(name="map_file", body="")
     result = await execute(call, tmp_path)
-    assert not result.ok
-    assert "missing" in result.output
+    assert result.ok
+    assert "x.py" in result.output
 
 
 @pytest.mark.asyncio

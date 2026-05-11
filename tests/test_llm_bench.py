@@ -310,18 +310,15 @@ _PATCH_XFAILS: dict[str, str] = {
         "but leaves the `compute(5)` call site untouched, so 'everywhere' part "
         "of the prompt is dropped. Real patch-precision regression."
     ),
-    "add_missing_import": (
-        "v0.3 navigation refactor: model wraps SEARCH/REPLACE in a markdown "
-        "list and prefixes every line with 4 spaces, so apply_edits can't "
-        "match the SEARCH block against the un-indented source. Real "
-        "format-precision regression."
-    ),
     "remove_unused_import": (
         "v0.3 navigation refactor: model replies 'uses.py contains no imports' "
         "without reading the file (which does have `import os` and `import "
         "sys`). Real grounding regression — model skips read_file and "
         "fabricates from intent."
     ),
+    # Removed `add_missing_import` xfail — XPASS on 2026-05-12 run after
+    # enforce-read-before-show HOOK + ban-identity-prefix + project_map
+    # rename. Markdown-list-indent bug no longer reproduces.
 }
 
 
@@ -394,14 +391,6 @@ async def test_qwen_history_remembers_previous_turn(tmp_path: Path) -> None:
     )
 
 
-@pytest.mark.xfail(
-    reason="v0.3 navigation refactor: model over-applies the turn-2 'still "
-    "just acknowledge' instruction into turn 3 and replies with bare 'OK' to "
-    "'what pet would you suggest?'. Context is retained (it IS still "
-    "acknowledging) but instruction-following pivots too late. Tracked in "
-    "plan.md as a recalibration follow-up.",
-    strict=False,
-)
 @pytest.mark.llm
 async def test_qwen_history_three_turn_topic_continuity(tmp_path: Path) -> None:
     """Three turns about the same topic — model must stitch them together."""

@@ -120,7 +120,7 @@ async def test_system_prompt_carries_identity_anchor(project: Path) -> None:
     # identity-blurb reply with zero tool calls. The block now names
     # task-words explicitly and tells the model to call tools instead.
     assert "найди" in system or "find" in system.lower()
-    assert "list_files" in system or "tools" in system.lower()
+    assert "project_map" in system or "tools" in system.lower()
     # Absolute ban on opening task replies with "Я — code-scalpel" /
     # "I'm code-scalpel" — that's the identity-blur regression shape.
     assert "ABSOLUTE BAN" in system
@@ -175,9 +175,9 @@ async def test_ask_records_response_stats(project: Path) -> None:
 
 
 @pytest.mark.asyncio
-async def test_list_files_tool_walks_subdirs(tmp_path: Path) -> None:
-    """The list_files tool returns paths from nested directories, not
-    just top-level. This is the model's main orientation entry point
+async def test_project_map_tool_walks_subdirs(tmp_path: Path) -> None:
+    """project_map() (no path) returns a tree across nested
+    directories. This is the model's main orientation entry point
     since user_message no longer auto-injects the project listing."""
     from code_scalpel.tools.agent_tools import ToolCall, execute
 
@@ -187,7 +187,7 @@ async def test_list_files_tool_walks_subdirs(tmp_path: Path) -> None:
     (tmp_path / "pkg" / "sub").mkdir()
     (tmp_path / "pkg" / "sub" / "deeper.py").write_text("def g():\n    pass\n")
 
-    call = ToolCall(name="list_files", body="{}")
+    call = ToolCall(name="project_map", body="{}")
     result = await execute(call, tmp_path)
     assert result.ok
     out = result.output

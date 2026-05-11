@@ -78,16 +78,24 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
     {
         "type": "function",
         "function": {
-            "name": "list_files",
+            "name": "project_map",
             "description": (
-                "List project files with line counts: `path [N L]` per "
-                "row. Use FIRST when the user's task mentions the "
-                "project without a specific file name — you need to "
-                "know what files exist before you can pick which one "
-                "to read. Optional `path` narrows to a subdirectory. "
-                "Cheaper than map_file (no symbols, no imports) — only "
-                "use this for orientation. Once you spot the right "
-                "file, call map_file or read_file on it."
+                "Single entry for project layout — TWO modes by "
+                "argument:\n"
+                "• `project_map()` (no path) → tree of all files with "
+                "line counts, one per row. ALWAYS call this FIRST "
+                "when the task mentions anything project-shaped "
+                "without naming a specific file (e.g. 'add type "
+                "hints to both functions', 'find where X is used', "
+                "'покажи код метода'). Use the listing to pick the "
+                "candidate file.\n"
+                "• `project_map(path='foo.py')` (with path) → drill "
+                "into one file: classes, functions, methods, "
+                "signatures, first-line docstrings, intra-project "
+                "imports. Use after you've spotted the candidate "
+                "from the tree.\n"
+                "Cheaper than read_file (no bodies). NEVER ask the "
+                "user 'what file?' before calling this with no path."
             ),
             "parameters": {
                 "type": "object",
@@ -95,42 +103,14 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
                     "path": {
                         "type": "string",
                         "description": (
-                            "Optional relative subdirectory. Omit to list the whole project."
+                            "Optional relative path. Omit for the "
+                            "whole-project tree; pass a file path "
+                            "for that file's outline; pass a "
+                            "subdirectory for the tree of files "
+                            "under it."
                         ),
                     },
                 },
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "map_file",
-            "description": (
-                "Drill into ONE file's structural details: top-level "
-                "classes, functions, methods with their signatures, "
-                "first-sentence docstrings, and intra-project imports. "
-                "This is the per-file table-of-contents — what was on "
-                "the bigger MAP before we switched to navigation. "
-                "Call this when you need to decide which file to read "
-                "for the user's question: look at file's outline first, "
-                "then read_file the body if needed. Cheaper than "
-                "read_file (signatures only, no bodies) and gives the "
-                "imports line so you can trace the dependency graph."
-            ),
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "path": {
-                        "type": "string",
-                        "description": (
-                            "Relative path from the project root, exactly "
-                            "as it appears in the OVERVIEW. No leading "
-                            "'path/' prefix."
-                        ),
-                    },
-                },
-                "required": ["path"],
             },
         },
     },
@@ -327,10 +307,16 @@ async def execute(
     """Dispatch a tool call by name. Returns a ToolResult — never raises."""
     if call.name == "read_file":
         return _tool_read_file(call, cwd, max_lines=max_lines)
+    # `project_map` is the unified entry — empty path → tree, path → file
+    # outline. Legacy `list_files` and `map_file` names stay routed for
+    # one cycle of backwards compatibility (some early bench fixtures /
+    # external scripts may still call them by old names).
+    if call.name == "project_map":
+        return _tool_project_map(call, cwd)
     if call.name == "list_files":
-        return _tool_list_files(call, cwd)
+        return _tool_project_map(call, cwd)  # legacy alias → tree mode
     if call.name == "map_file":
-        return _tool_map_file(call, cwd)
+        return _tool_project_map(call, cwd)  # legacy alias → drilldown mode
     if call.name == "goto_definition":
         return _tool_goto_definition(call, cwd)
     if call.name == "find_references":
@@ -492,52 +478,50 @@ def _tool_retrieve(call: ToolCall, cwd: Path) -> ToolResult:
     return ToolResult(call, output="\n".join(lines), ok=True)
 
 
-def _tool_list_files(call: ToolCall, cwd: Path) -> ToolResult:
-    """args: {path?: str}. Returns one row per file: `path [N L]`.
-    Uses the lightweight overview builder from project_map — same
-    output shape the user gets from /map but tool-callable."""
-    from code_scalpel.project_map import build_map_overview
+def _tool_project_map(call: ToolCall, cwd: Path) -> ToolResult:
+    """args: {path?: str}. Two modes:
+      - no path → tree: `path [N L]` per row (whole project)
+      - path → file outline (symbols + imports), OR subdir tree if
+        the path is a directory.
+
+    A single tool with mode-by-argument was preferred over two
+    separate names — weak models split attention across "two tools
+    that sound similar" and the unified entry pushes them toward
+    the right call shape.
+    """
+    from code_scalpel.project_map import build_file_map, build_map_overview
 
     args = _decode_args(call.body)
     rel = str(args.get("path") or args.get("_raw", "")).strip()
-    where = cwd
-    if rel:
-        if rel.startswith("/") or ".." in Path(rel).parts:
-            return ToolResult(call, output=f"error: path must be inside project: {rel}", ok=False)
-        where = cwd / rel
-        if not where.exists():
-            return ToolResult(call, output=f"error: path not found: {rel}", ok=False)
-        if not _is_inside_project(where, cwd):
-            return ToolResult(call, output=f"error: path must be inside project: {rel}", ok=False)
+
+    if not rel:
+        # Tree mode: whole project listing.
+        try:
+            listing = build_map_overview(cwd, max_files=200)
+        except OSError as e:
+            return ToolResult(call, output=f"error: {e}", ok=False)
+        return ToolResult(call, output=listing or "(no files)", ok=True)
+
+    # Path provided — share path-safety with read_file et al.
+    if rel.startswith("/") or ".." in Path(rel).parts:
+        return ToolResult(call, output=f"error: path must be inside the project: {rel}", ok=False)
+    target = cwd / rel
+    if not target.exists():
+        return ToolResult(call, output=f"error: path not found: {rel}", ok=False)
+    if not _is_inside_project(target, cwd):
+        return ToolResult(call, output=f"error: path must be inside the project: {rel}", ok=False)
+
+    if target.is_dir():
+        # Subdir mode: tree under the directory.
+        try:
+            listing = build_map_overview(target, max_files=200)
+        except OSError as e:
+            return ToolResult(call, output=f"error: {e}", ok=False)
+        return ToolResult(call, output=listing or "(no files)", ok=True)
+
+    # File mode: outline.
     try:
-        listing = build_map_overview(where, max_files=200)
-    except OSError as e:
-        return ToolResult(call, output=f"error: {e}", ok=False)
-    if not listing:
-        return ToolResult(call, output="(no files)", ok=True)
-    return ToolResult(call, output=listing, ok=True)
-
-
-def _tool_map_file(call: ToolCall, cwd: Path) -> ToolResult:
-    """args: {path: str}. Returns the per-file outline block from
-    build_file_map — signatures + docstrings + intra-project imports."""
-    from code_scalpel.project_map import build_file_map
-
-    args = _decode_args(call.body)
-    path_str = str(args.get("path") or args.get("_raw", "")).strip()
-    if not path_str:
-        return ToolResult(call, output="error: missing file path", ok=False)
-    if path_str.startswith("/") or ".." in Path(path_str).parts:
-        return ToolResult(
-            call, output=f"error: path must be inside the project: {path_str}", ok=False
-        )
-    # Symlink gate — same reasoning as _tool_read_file.
-    if not _is_inside_project(cwd / path_str, cwd):
-        return ToolResult(
-            call, output=f"error: path must be inside the project: {path_str}", ok=False
-        )
-    try:
-        block = build_file_map(cwd, path_str)
+        block = build_file_map(cwd, rel)
     except OSError as e:
         return ToolResult(call, output=f"error: {e}", ok=False)
     ok = not block.endswith(": file not found") and not block.endswith(": unreadable")

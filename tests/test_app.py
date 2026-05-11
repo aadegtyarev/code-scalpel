@@ -1701,7 +1701,7 @@ async def test_slash_skills_lists_tools_and_slashes(sandbox: Path) -> None:
         body = cards[-1]._result.output
         # Tools section
         assert "Tools" in body
-        for tool in ("read_file", "map_file", "goto_definition", "find_references", "grep"):
+        for tool in ("read_file", "project_map", "goto_definition", "find_references", "grep"):
             assert tool in body
         # Skills section (detected; sandbox has no markers → "none detected")
         assert "Skills (detected)" in body
