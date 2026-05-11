@@ -567,6 +567,131 @@ async def test_slash_system_appends_plan_addendum_when_in_plan_mode(
 
 
 @pytest.mark.asyncio
+async def test_tab_does_not_leave_input_when_chat_is_empty(sandbox: Path) -> None:
+    """Pressing Tab from the input on a fresh session must not move focus
+    anywhere visible. Before the fix VerticalScroll (OutputLog) was
+    focusable and Tab would silently land there — the user saw the input
+    cursor disappear with no feedback. After the fix the scroll is out
+    of the Tab cycle and focus simply stays put."""
+    app = ScalpelApp(config=_CONFIG, cwd=sandbox)
+    async with app.run_test(headless=True, size=(80, 24)) as pilot:
+        await pilot.pause(0.1)
+        # Sanity: input is the initial focus target.
+        assert app.focused is not None
+        assert app.focused.__class__.__name__ == "Input"
+
+        for _ in range(3):
+            await pilot.press("tab")
+            await pilot.pause(0.05)
+
+        # Focus never wandered off the input — no ghost stop on the scroll.
+        assert app.focused is not None
+        assert app.focused.__class__.__name__ == "Input"
+
+
+@pytest.mark.asyncio
+async def test_output_log_is_not_focusable(sandbox: Path) -> None:
+    """OutputLog (a VerticalScroll subclass) must opt out of focus. The
+    base class defaults to ``can_focus=True``, and that was the root of
+    the 'Tab goes nowhere visible' confusion the user reported."""
+    app = ScalpelApp(config=_CONFIG, cwd=sandbox)
+    async with app.run_test(headless=True, size=(80, 24)) as pilot:
+        await pilot.pause(0.1)
+        assert app.query_one(OutputLog).can_focus is False
+
+
+@pytest.mark.asyncio
+async def test_tab_skips_history_tool_use_cards(sandbox: Path) -> None:
+    """Tool-use cards in the scroll history are read-only — Tab must
+    skip past them. Before the fix every collapsed card's title was a
+    Tab stop, so pressing Tab paged the user through their entire chat
+    history before reaching anything actionable."""
+    from code_scalpel.tools.agent_tools import ToolCall, ToolResult
+
+    app = ScalpelApp(config=_CONFIG, cwd=sandbox)
+    async with app.run_test(headless=True, size=(80, 24)) as pilot:
+        await pilot.pause(0.1)
+        output = app.query_one(OutputLog)
+        for _ in range(3):
+            call = ToolCall(name="read_file", body='{"path": "x.py"}')
+            result = ToolResult(call=call, output="line\n" * 10, ok=True)
+            output.add_tool_use(call, result)
+        await pilot.pause(0.2)
+
+        # No actionable widget exists outside the input, so Tab is a no-op.
+        for _ in range(5):
+            await pilot.press("tab")
+            await pilot.pause(0.05)
+            assert app.focused is not None
+            assert app.focused.__class__.__name__ == "Input"
+
+
+@pytest.mark.asyncio
+async def test_tab_cycles_between_input_and_review_card(sandbox: Path) -> None:
+    """When a patch-review card is mounted, Tab must cycle between just
+    two widgets: the input and the review card. History tool-use cards
+    remain off the cycle so the user reaches the actionable card in one
+    keystroke regardless of how long the chat is."""
+    from code_scalpel.tools.agent_tools import ToolCall, ToolResult
+    from code_scalpel.tui.widgets.cards.tool_call import ToolCallCard
+
+    app = ScalpelApp(config=_CONFIG, cwd=sandbox)
+    async with app.run_test(headless=True, size=(80, 24)) as pilot:
+        await pilot.pause(0.1)
+        output = app.query_one(OutputLog)
+        # Long chat history to make sure size doesn't matter.
+        for _ in range(5):
+            call = ToolCall(name="read_file", body='{"path": "x.py"}')
+            result = ToolResult(call=call, output="line\n" * 10, ok=True)
+            output.add_tool_use(call, result)
+        await pilot.pause(0.2)
+
+        # Mount a review card the same way the agent does on a patch.
+        card = ToolCallCard("Apply", "")
+        await app.mount(card, before=app.query_one(ModeInput))
+        card.set_reviewing("--- a/x.py\n+++ b/x.py\n@@ -1 +1 @@\n-a\n+b\n")
+        await pilot.pause(0.1)
+
+        # set_reviewing already focuses the card.
+        assert isinstance(app.focused, ToolCallCard)
+
+        # One Tab gets us back to the input — no detour through history.
+        await pilot.press("tab")
+        await pilot.pause(0.05)
+        assert app.focused is not None
+        assert app.focused.__class__.__name__ == "Input"
+
+        # Another Tab returns to the review card.
+        await pilot.press("tab")
+        await pilot.pause(0.05)
+        assert isinstance(app.focused, ToolCallCard)
+
+
+@pytest.mark.asyncio
+async def test_tool_use_card_collapsible_is_not_focusable(sandbox: Path) -> None:
+    """Direct check on ToolUseCard's internal CollapsibleTitle — keeping
+    the assertion close to the fix so a future refactor that drops the
+    ``can_focus = False`` line is caught with a targeted failure."""
+    from textual.widgets._collapsible import CollapsibleTitle
+
+    from code_scalpel.tools.agent_tools import ToolCall, ToolResult
+
+    app = ScalpelApp(config=_CONFIG, cwd=sandbox)
+    async with app.run_test(headless=True, size=(80, 24)) as pilot:
+        await pilot.pause(0.1)
+        output = app.query_one(OutputLog)
+        call = ToolCall(name="read_file", body='{"path": "x.py"}')
+        result = ToolResult(call=call, output="x = 1\n", ok=True)
+        output.add_tool_use(call, result)
+        await pilot.pause(0.2)
+
+        titles = list(app.query(CollapsibleTitle))
+        assert titles, "expected the tool-use card to mount a CollapsibleTitle"
+        for t in titles:
+            assert t.can_focus is False
+
+
+@pytest.mark.asyncio
 async def test_footer_model_reactive_renders(sandbox: Path) -> None:
     """When model is set, footer must include it in the rendered label.
     Empty model means no dim suffix — keep the bar tidy for legacy configs."""

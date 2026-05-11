@@ -11,7 +11,18 @@ from code_scalpel.tui.widgets.turn_progress import TurnProgress
 
 
 class OutputLog(VerticalScroll):
-    """Output stream: messages mount at bottom and grow upward as more are added."""
+    """Output stream: messages mount at bottom and grow upward as more are added.
+
+    Not focusable: VerticalScroll defaults to ``can_focus=True``, which
+    inserts a ghost stop in the Tab cycle — pressing Tab from the input
+    moves focus to the scroll container with no visible effect, then the
+    next Tab dives into a history ToolUseCard's CollapsibleTitle. Both
+    are confusing. The scroll container still responds to PageUp/PageDown
+    and the mouse wheel when the cursor hovers over it; keyboard scroll
+    just isn't part of the Tab cycle anymore.
+    """
+
+    can_focus = False
 
     DEFAULT_CSS = """
     OutputLog {

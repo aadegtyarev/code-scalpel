@@ -1646,6 +1646,10 @@ class Session:
 ✓ TUI: цвет режима + Ctrl+T (Shift+Tab перехватывался Input для focus_previous)
   • prompt prefix красится цветом mode, mini-hint в footer
   • ask=cyan, plan=gold, step=green, review=coral
+✓ Tab focus: VerticalScroll (OutputLog) и CollapsibleTitle ToolUseCard
+  выведены из focus-цикла. Cycle = только Input ↔ актуальная
+  ToolCallCard (review/apply). История tool-карточек тихая, Ctrl+O —
+  единственный путь к last result.
 ✓ map-as-context + tool-calls-for-reads:
   • static map: AST-символы (path → classes/funcs/constants), кеш в
     .code-scalpel/INDEX.json с mtime-инвалидацией

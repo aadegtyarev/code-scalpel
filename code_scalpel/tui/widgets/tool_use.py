@@ -184,3 +184,16 @@ class ToolUseCard(Widget):
                     f"[dim]… {hidden} more lines (Ctrl+O for full view)[/]",
                     classes="body",
                 )
+
+    def on_mount(self) -> None:
+        # CollapsibleTitle is focusable by default, which means every
+        # history tool card lands a Tab stop. The user complaint: Tab from
+        # the input pages through past tool cards before reaching anything
+        # actionable. Strip the title (and any child widget — read-only
+        # bodies don't need keyboard focus either) out of the Tab cycle.
+        # Mouse-click on the chevron still toggles expansion because
+        # Collapsible handles that via its own click event, not focus.
+        from textual.widgets._collapsible import CollapsibleTitle
+
+        for title in self.query(CollapsibleTitle):
+            title.can_focus = False
