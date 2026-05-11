@@ -18,12 +18,16 @@ class StatusFooter(Widget):
     }
     """
 
-    # Footer is intentionally minimal — just current state, key hints, and
-    # the active model. Per-turn metrics (tools, tokens, speed, ctx) are
-    # printed inline in the chat as a turn-summary line, Claude-Code style.
+    # Footer carries current state, key hints, model, and a context bar.
+    # Per-turn metrics (tools, tokens, speed) stay inline in the chat as
+    # a turn-summary line. Ctx is in the footer because it's continuous
+    # state — every keystroke moves you toward the limit, not just turns.
     status: reactive[str] = reactive("● idle")
     hints: reactive[str] = reactive("[tab] mode · [q] quit")
     model: reactive[str] = reactive("")
+    # "4k/16k (26%)" — pre-formatted so the footer doesn't need to know
+    # about Session/state internals. Empty string hides the segment.
+    ctx: reactive[str] = reactive("")
 
     def compose(self) -> ComposeResult:
         yield Label("", id="footer-label")
@@ -40,8 +44,13 @@ class StatusFooter(Widget):
     def watch_model(self, _: str) -> None:
         self._refresh_label()
 
+    def watch_ctx(self, _: str) -> None:
+        self._refresh_label()
+
     def _refresh_label(self) -> None:
         parts = [self.hints, self.status]
+        if self.ctx:
+            parts.append(f"ctx {self.ctx}")
         if self.model:
             parts.append(f"[dim]{self.model}[/dim]")
         text = " · ".join(parts)
