@@ -116,9 +116,11 @@ def test_imports_filtered_to_internal() -> None:
     assert "code_scalpel.config.Config" in imports
     # aliased: project_map records the source-side name, not the alias
     assert "code_scalpel.config.Other" in imports
-    # relative imports surface bare
+    # relative imports surface with the module portion stripped of leading
+    # dots (mirrors `ast.ImportFrom.module`): `from . import x` → "x",
+    # `from .relative import z` → "relative.z".
     assert "x" in imports
-    assert "z" in imports
+    assert "relative.z" in imports
     # external imports skipped
     assert all("typing" not in i for i in imports)
     assert "os" not in imports

@@ -10,8 +10,9 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from code_scalpel.index.model import Symbol
+from code_scalpel.index.model import Constant, Symbol
 from code_scalpel.index.parser import python_parser
+from code_scalpel.index.signatures import render_signature
 
 if TYPE_CHECKING:
     from tree_sitter import Node
@@ -55,6 +56,7 @@ def _top_level_symbols(root: Node, source: bytes) -> list[Symbol]:
                     lineno=raw_child.start_point[0] + 1,
                     end_lineno=raw_child.end_point[0] + 1,
                     docstring=_docstring_for(child, source),
+                    signature="",
                 )
             )
             out.extend(_class_methods(child, source, cls_name))
@@ -62,14 +64,17 @@ def _top_level_symbols(root: Node, source: bytes) -> list[Symbol]:
             fn_name = _name_text(child, source)
             if not fn_name:
                 continue
+            is_async = _is_async(child)
+            prefix = "async def " if is_async else "def "
             out.append(
                 Symbol(
                     name=fn_name,
-                    kind="async function" if _is_async(child) else "function",
+                    kind="async function" if is_async else "function",
                     qualified_name=fn_name,
                     lineno=raw_child.start_point[0] + 1,
                     end_lineno=raw_child.end_point[0] + 1,
                     docstring=_docstring_for(child, source),
+                    signature=render_signature(child, source, prefix=prefix),
                 )
             )
     return out
@@ -87,17 +92,54 @@ def _class_methods(class_node: Node, source: bytes, class_name: str) -> list[Sym
         m_name = _name_text(m, source)
         if not m_name:
             continue
+        is_async = _is_async(m)
+        prefix = "async def " if is_async else "def "
         out.append(
             Symbol(
                 name=m_name,
-                kind="async method" if _is_async(m) else "method",
+                kind="async method" if is_async else "method",
                 qualified_name=f"{class_name}.{m_name}",
                 lineno=raw_m.start_point[0] + 1,
                 end_lineno=raw_m.end_point[0] + 1,
                 docstring=_docstring_for(m, source),
+                signature=render_signature(m, source, prefix=prefix),
             )
         )
     return out
+
+
+def walk_top_level_constants(source: bytes) -> tuple[Constant, ...]:
+    """Top-level uppercase assignments: `API_URL = '...'` → constant.
+
+    Filter rules:
+      * top-level only (not inside a class — class-level UPPER attrs are
+        configuration of the class instance, not module constants).
+      * `.isupper()` semantics — every cased letter must be uppercase.
+      * leading underscore drops the name (`_PRIV` skipped) — Phase 3
+        tightens this beyond the old ast helper, which `.isupper()` alone
+        kept. Project map output stays compatible because there was never
+        a test asserting `_PRIV` should appear; private-by-convention
+        constants are noise in the MAP.
+
+    Returns deterministic source-order tuples so the project map's
+    rendering stays stable.
+    """
+    tree = python_parser().parse(source)
+    root = tree.root_node
+    out: list[Constant] = []
+    for node in root.children:
+        if node.type != "expression_statement":
+            continue
+        for ch in node.children:
+            if ch.type != "assignment":
+                continue
+            target = ch.child_by_field_name("left")
+            if target is None or target.type != "identifier":
+                continue
+            name = source[target.start_byte : target.end_byte].decode("utf-8", errors="replace")
+            if name.isupper() and not name.startswith("_"):
+                out.append(Constant(name=name, lineno=ch.start_point[0] + 1))
+    return tuple(out)
 
 
 def _unwrap_decorated(node: Node) -> Node:
@@ -202,7 +244,15 @@ def _internal_imports(root: Node, source: bytes, internal: frozenset[str]) -> li
         elif node.type == "import_from_statement":
             module_node = node.child_by_field_name("module_name")
             is_relative = module_node is not None and module_node.type == "relative_import"
-            base = _dotted_text(module_node, source) if module_node is not None else ""
+            # For absolute `from foo.bar import X`, base = "foo.bar".
+            # For relative `from .helpers import h`, we mirror ast's
+            # ImportFrom.module = "helpers" — the dotted_name inside the
+            # relative_import without the leading dots. `from . import x`
+            # has no dotted_name, so base = "" and the alias surfaces bare.
+            if is_relative and module_node is not None:
+                base = _relative_module_text(module_node, source)
+            else:
+                base = _dotted_text(module_node, source) if module_node is not None else ""
             base_top = base.split(".", 1)[0] if base else ""
             if not is_relative and base_top not in internal:
                 continue
@@ -210,10 +260,7 @@ def _internal_imports(root: Node, source: bytes, internal: frozenset[str]) -> li
                 alias = _import_target_name(name_node, source)
                 if not alias:
                     continue
-                if is_relative:
-                    _add(alias)
-                else:
-                    _add(f"{base}.{alias}" if base else alias)
+                _add(f"{base}.{alias}" if base else alias)
     return seen
 
 
@@ -242,6 +289,22 @@ def _dotted_text(node: Node | None, source: bytes) -> str:
     if node.type == "relative_import":
         return ""
     return source[node.start_byte : node.end_byte].decode("utf-8", errors="replace")
+
+
+def _relative_module_text(relative_node: Node, source: bytes) -> str:
+    """Return the module-name portion of a `relative_import` node.
+
+    `from . import x` → ""  (no dotted_name child).
+    `from .helpers import x` → "helpers".
+    `from ..foo.bar import x` → "foo.bar".
+
+    Matches `ast.ImportFrom.module` exactly — the leading dots are
+    consumed into `level` rather than the module name.
+    """
+    for ch in relative_node.children:
+        if ch.type == "dotted_name":
+            return source[ch.start_byte : ch.end_byte].decode("utf-8", errors="replace")
+    return ""
 
 
 def _import_target_name(node: Node, source: bytes) -> str:

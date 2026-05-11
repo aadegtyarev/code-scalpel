@@ -1624,7 +1624,7 @@ async def test_slash_context_mounts_breakdown_card(sandbox: Path) -> None:
         assert "Context Usage" in body
         assert "System prompt" in body
         assert "Tools schema" in body
-        assert "Overview" in body
+        assert "Project files" in body
 
 
 @pytest.mark.asyncio
@@ -1681,9 +1681,10 @@ async def test_mermaid_block_in_reply_mounts_card(sandbox: Path) -> None:
 
 @pytest.mark.asyncio
 async def test_slash_skills_lists_tools_and_slashes(sandbox: Path) -> None:
-    """/skills mounts a placeholder catalog of built-in tools + slash
-    commands. Anchors the surface so reshuffling slash names or tool
-    schemas surfaces in this one test, not silently in user-facing UX."""
+    """/skills mounts a catalog of built-in tools + slash commands +
+    detected SkillRegistry entries. Anchors the surface so reshuffling
+    slash names or tool schemas surfaces in this one test, not silently
+    in user-facing UX."""
     from code_scalpel.tui.widgets.tool_use import ToolUseCard
 
     app = ScalpelApp(config=_CONFIG, cwd=sandbox)
@@ -1698,9 +1699,34 @@ async def test_slash_skills_lists_tools_and_slashes(sandbox: Path) -> None:
         assert "Tools" in body
         for tool in ("read_file", "map_file", "goto_definition", "find_references", "grep"):
             assert tool in body
+        # Skills section (detected; sandbox has no markers → "none detected")
+        assert "Skills (detected)" in body
         # Slashes section
         assert "Slash commands" in body
         for slash in ("/new", "/map", "/stats", "/context", "/remember", "/loop", "/run"):
             assert slash in body
-        # Forward-looking note that SkillRegistry is the real /skills target
-        assert "SkillRegistry" in body
+        # Trailing note about pluggable skills
+        assert "register_skill" in body
+
+
+@pytest.mark.asyncio
+async def test_slash_skills_shows_detected_python_skill(tmp_path: Path) -> None:
+    """When cwd contains pyproject.toml, /skills lists PythonSkill in
+    the Skills (detected) section with its description and token cost."""
+    from code_scalpel.tui.widgets.tool_use import ToolUseCard
+
+    (tmp_path / "pyproject.toml").write_text("[project]\nname = 'fixture'\n")
+    app = ScalpelApp(config=_CONFIG, cwd=tmp_path)
+    async with app.run_test(headless=True, size=(80, 24)) as pilot:
+        await pilot.pause(0.1)
+        app._handle_slash("/skills")
+        await pilot.pause(0.1)
+        cards = list(app.query_one(OutputLog).query(ToolUseCard))
+        assert cards
+        body = cards[-1]._result.output
+        assert "Skills (detected)" in body
+        # The PythonSkill row — name and a fragment of its description.
+        assert "python" in body
+        assert "pytest" in body  # description mentions pytest
+        # Token-cost column (the "t" suffix from the formatter).
+        assert "t  " in body

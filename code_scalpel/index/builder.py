@@ -1,7 +1,9 @@
 """Compose parser + walker into a `FileIndex` for one file.
 
-Phase 2 will swap project_map.py consumers to call this; Phase 1 keeps the
-two paths in parallel so we can A/B without risking regressions in the TUI.
+Phase 3 cutover: project_map.py's consumers (build_file_map, build_map,
+find_definitions) all route here. The index carries everything they
+need — signatures, docstrings, imports, constants, parse-error flag —
+so project_map.py is pure rendering.
 """
 
 from __future__ import annotations
@@ -9,7 +11,9 @@ from __future__ import annotations
 from pathlib import Path
 
 from code_scalpel.index.model import FileIndex
-from code_scalpel.index.walkers import walk_python
+from code_scalpel.index.parser import python_parser
+from code_scalpel.index.walkers import walk_python, walk_top_level_constants
+from code_scalpel.workspace import internal_packages
 
 
 def build_file_index(root: Path, rel_path: str) -> FileIndex | None:
@@ -26,8 +30,15 @@ def build_file_index(root: Path, rel_path: str) -> FileIndex | None:
         source_bytes = target.read_bytes()
     except OSError:
         return None
-    internal = _internal_packages(root)
+    internal = internal_packages(root)
     symbols, imports = walk_python(source_bytes, internal=internal)
+    constants = walk_top_level_constants(source_bytes)
+    # `has_error` is set when tree-sitter encountered any ERROR or MISSING
+    # node during recovery. That's the same signal ast.parse() raising
+    # SyntaxError used to give us — the file didn't fully parse — but we
+    # still got partial symbols out of the recovery, which is what we want
+    # to render to the user.
+    parse_error = python_parser().parse(source_bytes).root_node.has_error
     loc = source_bytes.count(b"\n")
     if source_bytes and not source_bytes.endswith(b"\n"):
         loc += 1
@@ -36,25 +47,6 @@ def build_file_index(root: Path, rel_path: str) -> FileIndex | None:
         symbols=symbols,
         imports=imports,
         loc=loc,
+        constants=constants,
+        parse_error=parse_error,
     )
-
-
-def _internal_packages(root: Path) -> frozenset[str]:
-    """Same shape as `project_map._internal_packages`.
-
-    Duplicated rather than imported so this package stays self-contained for
-    the Phase 2 cutover (when project_map.py goes away, nothing in `index/`
-    breaks). Cheap: one `iterdir`.
-    """
-    names: set[str] = set()
-    try:
-        for child in root.iterdir():
-            if child.is_dir() and (child / "__init__.py").is_file():
-                names.add(child.name)
-            elif child.is_file() and child.suffix == ".py":
-                stem = child.stem
-                if stem != "__init__":
-                    names.add(stem)
-    except OSError:
-        pass
-    return frozenset(names)

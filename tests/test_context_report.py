@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from code_scalpel.context_report import (
-    ContextSegment,
     _tokens,
     build,
 )
@@ -121,13 +120,16 @@ def test_render_contains_model_and_used_line() -> None:
     )
     out = report.render()
     assert "qwen2.5-coder-14b" in out
-    assert "1k / 16k tokens" in out
-    assert "Estimated breakdown" in out
-    # All six segments visible
+    # New format uses thousand-separated comma + full number.
+    assert "1,000 / 16,000 tokens" in out
+    assert "What's in context right now:" in out
+    # All segments visible (Skills/Recipes added)
     for name in (
         "System prompt",
         "Tools schema",
-        "Overview",
+        "Skills",
+        "Recipes",
+        "Project files",
         "Memory recall",
         "Conversation",
         "Free space",
@@ -169,10 +171,83 @@ def test_render_progress_bar_uses_unicode_blocks() -> None:
     assert "░" in out
 
 
-def test_segment_render_aligns_label_column() -> None:
-    """Labels right-padded to a common width so the token-count column
-    lines up visually. Anchor test on a synthetic segment so the
-    expectations don't drift with new categories."""
-    seg = ContextSegment("Short", 100, 5.0)
-    out = seg.render(label_width=20)
-    assert out.startswith("  Short" + " " * 15)  # 20 - len("Short") = 15
+def test_render_groups_used_with_explicit_subtotal() -> None:
+    """The breakdown isn't just a flat list — used categories are
+    grouped under "What's in context right now:" with an explicit
+    subtotal row, and Free space sits separately under "Available:".
+    Anchors the visual grouping so a future re-render doesn't
+    silently lose the structure the user asked for."""
+    report = build(
+        model="m",
+        ctx_limit=16000,
+        system_prompt="x" * 4000,
+        tools_schema_text="",
+        overview_text="",
+        recall_text="",
+        history_text="",
+    )
+    out = report.render()
+    assert "What's in context right now:" in out
+    assert "Available:" in out
+    # Tree-style elbows for the grouped list, not bare columns
+    assert "┌─" in out and "└─" in out
+    # Subtotal row mentions "used" with the sum
+    assert "used" in out
+
+
+def test_render_carries_short_notes_per_segment() -> None:
+    """Each row should ship a short explanation note so the user
+    sees WHAT and WHY at a glance, not just the absolute number."""
+    report = build(
+        model="m",
+        ctx_limit=16000,
+        system_prompt="x" * 4000,
+        tools_schema_text="y" * 1000,
+        overview_text="",
+        recall_text="",
+        history_text="",
+    )
+    out = report.render()
+    # Sample notes appear (substring matches — full phrasing may shift)
+    assert "static rules" in out
+    assert "function-calling" in out
+    # No Russian leaks in the UI surface
+    assert "осталось" not in out
+    assert "ужима" not in out
+
+
+def test_render_includes_skills_and_recipes_segments() -> None:
+    """Skills and Recipes are new categories — counters are 0 until
+    SkillRegistry / learn are wired into the model prompt, but the
+    slots exist in the breakdown so the user sees them."""
+    report = build(
+        model="m",
+        ctx_limit=16000,
+        system_prompt="",
+        tools_schema_text="",
+        overview_text="",
+        recall_text="",
+        history_text="",
+    )
+    out = report.render()
+    assert "Skills" in out
+    assert "Recipes" in out
+
+
+def test_build_accepts_skills_and_recipes_text() -> None:
+    """When the wiring lands, callers pass skills_text / recipes_text
+    and those segments take their token cost. Defaults are empty."""
+    report = build(
+        model="m",
+        ctx_limit=16000,
+        system_prompt="",
+        tools_schema_text="",
+        overview_text="",
+        recall_text="",
+        history_text="",
+        skills_text="x" * 400,  # 100t
+        recipes_text="y" * 800,  # 200t
+    )
+    by_name = {s.name: s for s in report.segments}
+    assert by_name["Skills"].tokens == 100
+    assert by_name["Recipes"].tokens == 200
