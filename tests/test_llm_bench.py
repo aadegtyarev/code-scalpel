@@ -336,6 +336,123 @@ async def test_qwen_produces_applicable_patch(task: BenchTask, tmp_path: Path) -
     task.check(tmp_path)
 
 
+# ── behavioral checks ────────────────────────────────────────────────────────
+
+
+def _make_agent(cwd: Path) -> StepAgent:
+    llm = OpenAICompatibleAdapter(
+        base_url=f"{_PROFILE.provider_base_url()}/v1",
+        api_key=_PROFILE.api_key(),
+        model=_PROFILE.model,
+    )
+    return StepAgent(llm=llm, cwd=cwd, config=_CONFIG)
+
+
+@pytest.mark.llm
+async def test_qwen_history_remembers_previous_turn(tmp_path: Path) -> None:
+    """Second turn should see the first one. Asks a value, then asks to
+    reuse it — the model can only succeed if history was sent."""
+    (tmp_path / "hello.py").write_text("def hello():\n    pass\n")
+    agent = _make_agent(tmp_path)
+
+    await agent.ask(
+        "Remember the number 4242. Just acknowledge, don't write any code yet."
+    )
+    result = await agent.ask("What number did I just ask you to remember?")
+
+    assert "4242" in result.reply, (
+        f"model didn't recall the value across turns:\n{result.reply[:400]}"
+    )
+
+
+@pytest.mark.llm
+async def test_qwen_plain_text_for_non_coding_question(tmp_path: Path) -> None:
+    """A conversational question should NOT produce SEARCH/REPLACE blocks."""
+    (tmp_path / "x.py").write_text("x = 1\n")
+    agent = _make_agent(tmp_path)
+    result = await agent.ask("In one sentence: what does this project do?")
+    assert not result.edits, (
+        f"model emitted edit blocks for a casual question:\n{result.reply[:400]}"
+    )
+    assert len(result.reply.strip()) > 10
+
+
+@pytest.mark.llm
+async def test_qwen_does_not_claim_to_be_claude_or_openai(tmp_path: Path) -> None:
+    """Identity pin: ask 'who are you' — model must NOT claim a commercial AI."""
+    (tmp_path / "x.py").write_text("# noop\n")
+    agent = _make_agent(tmp_path)
+    result = await agent.ask("Who are you? One sentence.")
+    lower = result.reply.lower()
+    assert "anthropic" not in lower, f"model claimed Anthropic:\n{result.reply[:400]}"
+    assert "openai" not in lower, f"model claimed OpenAI:\n{result.reply[:400]}"
+    assert "claude" not in lower, f"model claimed Claude:\n{result.reply[:400]}"
+    assert "chatgpt" not in lower and "gpt" not in lower, (
+        f"model claimed GPT:\n{result.reply[:400]}"
+    )
+
+
+@pytest.mark.llm
+async def test_qwen_replies_in_russian_when_asked_in_russian(tmp_path: Path) -> None:
+    """Bench harness doesn't go through the TUI's language pinning, so we
+    add the hint here the same way ScalpelApp._run_step does."""
+    (tmp_path / "x.py").write_text("x = 1\n")
+    agent = _make_agent(tmp_path)
+    result = await agent.ask("Объясни одним предложением что делает этот файл.\n\n(Reply in Russian.)")
+    # Pretty robust check: response must contain Cyrillic characters
+    has_cyrillic = any("Ѐ" <= ch <= "ӿ" for ch in result.reply)
+    assert has_cyrillic, f"model replied without Cyrillic:\n{result.reply[:400]}"
+
+
+@pytest.mark.llm
+async def test_qwen_creates_new_file_via_empty_search(tmp_path: Path) -> None:
+    """Asking to create a new file should produce an empty SEARCH block."""
+    (tmp_path / "existing.py").write_text("x = 1\n")
+    agent = _make_agent(tmp_path)
+    result = await agent.ask("Create a new file `greet.py` containing exactly: def greet(): print('hi')")
+    assert result.edits, f"no edits:\n{result.reply[:400]}"
+
+    ok, err = apply_edits(result.edits, tmp_path)
+    assert ok, f"apply failed: {err}"
+    assert (tmp_path / "greet.py").exists()
+    assert "def greet" in (tmp_path / "greet.py").read_text()
+
+
+@pytest.mark.xfail(
+    reason="System prompt only documents read_file. Model knows grep exists in our "
+    "code but isn't told it can call it. Will pass once v0.3 switches to native "
+    "function calling that exposes all tools via the API.",
+    strict=False,
+)
+@pytest.mark.llm
+async def test_qwen_uses_grep_when_asked_to_find(tmp_path: Path) -> None:
+    """When asked 'where in the project is X used', model should reach for
+    grep rather than reading every file."""
+    (tmp_path / "main.py").write_text("from helpers import compute\nprint(compute(1))\n")
+    (tmp_path / "helpers.py").write_text("def compute(x):\n    return x * 2\n")
+    (tmp_path / "other.py").write_text("x = 1\n")
+    agent = _make_agent(tmp_path)
+
+    # Intercept the LLM to see what tool calls are made
+    real_chat = agent._llm.chat
+    tool_calls_seen: list[str] = []
+
+    async def spy_chat(messages: list[dict[str, str]], **kw: object) -> object:
+        resp = await real_chat(messages, **kw)
+        tool_calls_seen.append(resp.content)
+        return resp
+
+    agent._llm.chat = spy_chat  # type: ignore[assignment]
+
+    await agent.ask("Where in the project is the function `compute` used? Don't change anything, just tell me.")
+    combined = "\n".join(tool_calls_seen)
+    # Either grep was called, or read_file on multiple files. Both are
+    # reasonable, but grep is the smarter choice.
+    assert "<TOOL: grep>" in combined or "<TOOL: read_file>" in combined, (
+        f"model didn't use any tool to look:\n{combined[:600]}"
+    )
+
+
 # ── multi-file navigation ────────────────────────────────────────────────────
 
 

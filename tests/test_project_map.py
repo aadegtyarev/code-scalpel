@@ -78,7 +78,7 @@ def test_map_caches_unchanged_files(tmp_path: Path) -> None:
     import json
 
     (tmp_path / "x.py").write_text("def f():\n    pass\n")
-    first = build_map(tmp_path)
+    build_map(tmp_path)
     cache_path = tmp_path / ".code-scalpel" / "INDEX.json"
     assert cache_path.is_file()
     cache = json.loads(cache_path.read_text())
