@@ -144,6 +144,30 @@ async def test_mode_switch_updates_cursor_class(sandbox: Path) -> None:
 
 
 @pytest.mark.asyncio
+async def test_slash_map_prints_project_map(sandbox: Path) -> None:
+    """The user can't see the map otherwise — /map dumps it into the chat
+    so you can tell exactly what context the model gets each turn."""
+    # Add a recognisable symbol so we can verify the map renders it.
+    (sandbox / "marker.py").write_text("def unique_marker():\n    return 42\n")
+
+    app = ScalpelApp(config=_CONFIG, cwd=sandbox)
+    async with app.run_test(headless=True, size=(80, 24)) as pilot:
+        await pilot.pause(0.1)
+        output = app.query_one(OutputLog)
+        before = [c.id for c in output.children]
+
+        app._handle_slash("/map")
+        await pilot.pause(0.1)
+
+        added = [c for c in output.children if c.id not in before]
+        assert added, "expected /map to mount a new output widget"
+        rendered = "\n".join(str(c.render()) for c in added)
+        assert "Project map" in rendered
+        assert "marker.py" in rendered
+        assert "def unique_marker" in rendered
+
+
+@pytest.mark.asyncio
 async def test_slash_help_lists_commands(sandbox: Path) -> None:
     app = ScalpelApp(config=_CONFIG, cwd=sandbox)
     async with app.run_test(headless=True, size=(80, 24)) as pilot:

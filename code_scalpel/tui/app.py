@@ -43,6 +43,7 @@ class _UpwardAutoComplete(AutoComplete):
 _SLASH_COMMANDS: list[tuple[str, str]] = [
     ("/new", "start a new session — clear chat and reset state"),
     ("/compact", "summarize history to free up context (not yet)"),
+    ("/map", "show the project map the model receives each turn"),
     ("/help", "list commands"),
     ("/mode ask", "switch to ask mode"),
     ("/mode plan", "switch to plan mode"),
@@ -255,6 +256,17 @@ class ScalpelApp(App[None]):
         if cmd == "/help":
             lines = "Commands:\n" + "\n".join(f"  {c}  — {d}" for c, d in _SLASH_COMMANDS)
             output.print_status(lines)
+            return
+        if cmd == "/map":
+            from code_scalpel.project_map import build_map
+
+            text = build_map(self.cwd)
+            line_count = text.count("\n") + 1 if text else 0
+            char_count = len(text)
+            output.print_status(
+                f"● Project map ({line_count} lines, {char_count} chars — "
+                f"sent to the model on every turn):\n{text}"
+            )
             return
         if cmd.startswith("/mode "):
             mode = cmd.removeprefix("/mode ").strip()
