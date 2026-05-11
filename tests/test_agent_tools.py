@@ -247,3 +247,82 @@ def test_format_result_round_trip() -> None:
     assert rendered.startswith("<RESULT: read_file>")
     assert rendered.endswith("</RESULT>")
     assert "hello world" in rendered
+
+
+# ── execution: goto_definition ───────────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_goto_definition_finds_class(tmp_path: Path) -> None:
+    (tmp_path / "a.py").write_text("class Widget:\n    pass\n")
+    call = ToolCall(name="goto_definition", body='{"name": "Widget"}')
+    result = await execute(call, tmp_path)
+    assert result.ok
+    assert "a.py:1" in result.output
+    assert "class" in result.output
+    assert "Widget" in result.output
+
+
+@pytest.mark.asyncio
+async def test_goto_definition_disambiguates_method(tmp_path: Path) -> None:
+    (tmp_path / "a.py").write_text(
+        "class Foo:\n    def run(self):\n        pass\n\n"
+        "class Bar:\n    def run(self):\n        pass\n"
+    )
+    call = ToolCall(name="goto_definition", body='{"name": "run"}')
+    result = await execute(call, tmp_path)
+    assert result.ok
+    assert "Foo.run" in result.output
+    assert "Bar.run" in result.output
+
+
+@pytest.mark.asyncio
+async def test_goto_definition_no_match_returns_helpful_message(tmp_path: Path) -> None:
+    """Empty result is ok=True with a hint — the agent should fall back
+    to grep, not error out."""
+    (tmp_path / "a.py").write_text("def alpha(): pass\n")
+    call = ToolCall(name="goto_definition", body='{"name": "beta"}')
+    result = await execute(call, tmp_path)
+    assert result.ok
+    assert "no definition" in result.output.lower()
+    assert "grep" in result.output  # hint to the agent
+
+
+@pytest.mark.asyncio
+async def test_goto_definition_missing_name_errors(tmp_path: Path) -> None:
+    call = ToolCall(name="goto_definition", body="")
+    result = await execute(call, tmp_path)
+    assert not result.ok
+    assert "missing" in result.output
+
+
+# ── execution: find_references ───────────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_find_references_returns_path_line_text(tmp_path: Path) -> None:
+    (tmp_path / "a.py").write_text("def widget():\n    pass\n\nwidget()\n")
+    call = ToolCall(name="find_references", body='{"name": "widget"}')
+    result = await execute(call, tmp_path)
+    assert result.ok
+    # Two refs: definition + call site
+    lines = result.output.splitlines()
+    assert any("a.py:1:" in ln and "def widget" in ln for ln in lines)
+    assert any("a.py:4:" in ln and "widget()" in ln for ln in lines)
+
+
+@pytest.mark.asyncio
+async def test_find_references_no_match(tmp_path: Path) -> None:
+    (tmp_path / "a.py").write_text("def alpha(): pass\n")
+    call = ToolCall(name="find_references", body='{"name": "beta"}')
+    result = await execute(call, tmp_path)
+    assert result.ok
+    assert "no references" in result.output.lower()
+
+
+@pytest.mark.asyncio
+async def test_find_references_missing_name_errors(tmp_path: Path) -> None:
+    call = ToolCall(name="find_references", body="")
+    result = await execute(call, tmp_path)
+    assert not result.ok
+    assert "missing" in result.output

@@ -116,6 +116,64 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
     {
         "type": "function",
         "function": {
+            "name": "goto_definition",
+            "description": (
+                "Find where a top-level name is defined: class, function, "
+                "or method. Returns each definition site as "
+                "`path:line  kind  qualified_name` — straight pointer "
+                "with no body, no signature dump. Call this when the "
+                "user asks WHERE a specific symbol is defined / lives. "
+                "Cheaper and more precise than grep — grep returns "
+                "every textual mention; this returns only the def. "
+                "If nothing matches, fall back to grep for a broader "
+                "lexical search."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "name": {
+                        "type": "string",
+                        "description": (
+                            "Exact identifier to look up. No dots, no "
+                            "parens. For 'where is Class.method', pass "
+                            "just `method` and read the qualified_name "
+                            "column to disambiguate which class owns it."
+                        ),
+                    }
+                },
+                "required": ["name"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "find_references",
+            "description": (
+                "List every line in the project that mentions `name` as a "
+                "whole word. Returns `path:line: code` rows, capped to "
+                "50. This is the 'where is X USED?' tool — paired with "
+                "goto_definition (the 'where is X DEFINED?' tool). "
+                "Includes imports and comments because users routinely "
+                "ask 'where does X get imported' or 'who has a TODO "
+                "about X' — both legitimate references that AST-only "
+                "search would miss."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "name": {
+                        "type": "string",
+                        "description": "Exact identifier; word-bounded match.",
+                    }
+                },
+                "required": ["name"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "grep",
             "description": (
                 "Search the project (or a subdirectory) for a regex pattern. "
@@ -211,6 +269,10 @@ async def execute(
         return _tool_read_file(call, cwd, max_lines=max_lines)
     if call.name == "map_file":
         return _tool_map_file(call, cwd)
+    if call.name == "goto_definition":
+        return _tool_goto_definition(call, cwd)
+    if call.name == "find_references":
+        return _tool_find_references(call, cwd)
     if call.name == "grep":
         return await _tool_grep(call, cwd, runner or AsyncShellRunner())
     if call.name == "run_tests":
@@ -256,6 +318,49 @@ def _tool_read_file(call: ToolCall, cwd: Path, *, max_lines: int) -> ToolResult:
     except OSError as e:
         return ToolResult(call, output=f"error: {e}", ok=False)
     return ToolResult(call, output=f"path: {path_str}\n---\n{content}", ok=True)
+
+
+def _tool_goto_definition(call: ToolCall, cwd: Path) -> ToolResult:
+    """args: {name: str}. Returns one row per definition site —
+    `path:line  kind  qualified_name`. Empty result is `ok=True` but
+    with a clear "no definition found" message so the model knows to
+    fall back to grep rather than re-asking with a typo."""
+    from code_scalpel.project_map import find_definitions
+
+    args = _decode_args(call.body)
+    name = str(args.get("name") or args.get("_raw", "")).strip()
+    if not name:
+        return ToolResult(call, output="error: missing 'name'", ok=False)
+    try:
+        defs = find_definitions(cwd, name)
+    except OSError as e:
+        return ToolResult(call, output=f"error: {e}", ok=False)
+    if not defs:
+        return ToolResult(
+            call,
+            output=f"no definition found for {name!r}. Try `find_references` or `grep`.",
+            ok=True,
+        )
+    lines = [f"{d.rel_path}:{d.line}  {d.kind}  {d.qualified_name}" for d in defs]
+    return ToolResult(call, output="\n".join(lines), ok=True)
+
+
+def _tool_find_references(call: ToolCall, cwd: Path) -> ToolResult:
+    """args: {name: str}. Returns `path:line: code` rows, capped to 50."""
+    from code_scalpel.project_map import find_references
+
+    args = _decode_args(call.body)
+    name = str(args.get("name") or args.get("_raw", "")).strip()
+    if not name:
+        return ToolResult(call, output="error: missing 'name'", ok=False)
+    try:
+        refs = find_references(cwd, name)
+    except OSError as e:
+        return ToolResult(call, output=f"error: {e}", ok=False)
+    if not refs:
+        return ToolResult(call, output=f"no references found for {name!r}.", ok=True)
+    lines = [f"{r.rel_path}:{r.line}: {r.text}" for r in refs]
+    return ToolResult(call, output="\n".join(lines), ok=True)
 
 
 def _tool_map_file(call: ToolCall, cwd: Path) -> ToolResult:

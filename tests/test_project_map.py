@@ -5,7 +5,13 @@ from __future__ import annotations
 import textwrap
 from pathlib import Path
 
-from code_scalpel.project_map import build_file_map, build_map, build_map_overview
+from code_scalpel.project_map import (
+    build_file_map,
+    build_map,
+    build_map_overview,
+    find_definitions,
+    find_references,
+)
 
 
 def test_python_file_shows_classes_and_functions(tmp_path: Path) -> None:
@@ -392,3 +398,111 @@ def test_file_map_handles_syntax_error(tmp_path: Path) -> None:
     block = build_file_map(tmp_path, "broken.py")
     assert "broken.py" in block
     assert "parse error" in block
+
+
+# ── find_definitions / find_references ───────────────────────────────────────
+
+
+def test_find_definitions_locates_class_function_method(tmp_path: Path) -> None:
+    """One symbol can resolve to multiple kinds — class Foo, function Foo,
+    method Foo. The agent needs all of them to disambiguate."""
+    (tmp_path / "a.py").write_text(
+        textwrap.dedent("""\
+            def widget():
+                pass
+
+            class Widget:
+                def widget(self):
+                    pass
+            """)
+    )
+    defs = find_definitions(tmp_path, "widget")
+    kinds = {(d.kind, d.qualified_name) for d in defs}
+    assert ("function", "widget") in kinds
+    assert ("method", "Widget.widget") in kinds
+
+
+def test_find_definitions_async_function_kind() -> None:
+    """Async functions/methods get a distinct kind label so the agent
+    can mention `await` correctly without re-reading the source."""
+    import tempfile
+
+    with tempfile.TemporaryDirectory() as d:
+        root = Path(d)
+        (root / "a.py").write_text("async def fetch():\n    pass\n")
+        defs = find_definitions(root, "fetch")
+    assert len(defs) == 1
+    assert defs[0].kind == "async function"
+
+
+def test_find_definitions_empty_when_no_match(tmp_path: Path) -> None:
+    (tmp_path / "a.py").write_text("def alpha():\n    pass\n")
+    assert find_definitions(tmp_path, "beta") == []
+
+
+def test_find_definitions_empty_name_returns_empty(tmp_path: Path) -> None:
+    """Defensive guard — an empty name as a regex anchor would match
+    every word boundary in the project."""
+    (tmp_path / "a.py").write_text("def x(): pass\n")
+    assert find_definitions(tmp_path, "") == []
+
+
+def test_find_definitions_skips_syntax_errors(tmp_path: Path) -> None:
+    """A half-typed file mid-edit should not crash navigation. Other
+    files still get scanned."""
+    (tmp_path / "broken.py").write_text("def f(:\n    pass\n")
+    (tmp_path / "good.py").write_text("def target():\n    pass\n")
+    defs = find_definitions(tmp_path, "target")
+    assert len(defs) == 1
+    assert defs[0].rel_path == "good.py"
+
+
+def test_find_definitions_line_is_one_based(tmp_path: Path) -> None:
+    (tmp_path / "a.py").write_text("# header\n# header\ndef target():\n    pass\n")
+    defs = find_definitions(tmp_path, "target")
+    assert defs[0].line == 3
+
+
+def test_find_references_word_bounded(tmp_path: Path) -> None:
+    """Whole-word match — `target_method` must NOT match a query for
+    `target`. Substring matching would flood the agent with noise."""
+    (tmp_path / "a.py").write_text(
+        textwrap.dedent("""\
+            def target():
+                pass
+
+            def target_method():
+                pass
+
+            target()
+            """)
+    )
+    refs = find_references(tmp_path, "target")
+    matched = [r.text.strip() for r in refs]
+    assert any("def target():" in t for t in matched)
+    assert any(t == "target()" for t in matched)
+    # The other definition must NOT slip in
+    assert not any(t == "def target_method():" for t in matched)
+
+
+def test_find_references_includes_imports_and_comments(tmp_path: Path) -> None:
+    """Comments / strings are legitimate references — users routinely
+    ask "where do we mention X" expecting the TODO comment to show up."""
+    (tmp_path / "a.py").write_text("# TODO: rewrite logger\nlogger = 1\n")
+    refs = find_references(tmp_path, "logger")
+    assert any("# TODO" in r.text for r in refs)
+    assert any("logger = 1" in r.text for r in refs)
+
+
+def test_find_references_caps_results(tmp_path: Path) -> None:
+    """Past 50 matches the result is noise. Cap enforced even when the
+    grep would otherwise return hundreds (renaming a popular symbol)."""
+    body = "\n".join(f"x_{i} = popular  # ref {i}" for i in range(200))
+    (tmp_path / "a.py").write_text(body)
+    refs = find_references(tmp_path, "popular", max_results=50)
+    assert len(refs) == 50
+
+
+def test_find_references_empty_name_returns_empty(tmp_path: Path) -> None:
+    (tmp_path / "a.py").write_text("x = 1\n")
+    assert find_references(tmp_path, "") == []

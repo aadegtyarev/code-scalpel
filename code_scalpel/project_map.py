@@ -16,6 +16,8 @@ from __future__ import annotations
 
 import ast
 import json
+import re
+from dataclasses import dataclass
 from pathlib import Path
 
 from code_scalpel.tools.files import list_files
@@ -109,6 +111,119 @@ def build_file_map(root: Path, rel_path: str) -> str:
         return f"{rel_path}: unreadable"
     internal = _internal_packages(root)
     return _python_block(rel_path, source, internal)
+
+
+@dataclass(frozen=True)
+class Definition:
+    """One symbol definition site discovered by `find_definitions`.
+
+    `kind` is one of `class`, `function`, `method`, `async function`,
+    `async method` — enough for the agent's "where is X?" answer to
+    say *what* X is without re-reading the file. `line` is 1-based to
+    match every editor and pytest in the world.
+    """
+
+    rel_path: str
+    line: int
+    kind: str
+    qualified_name: str  # "ClassName.method" or just "function_name"
+
+
+def find_definitions(root: Path, name: str, *, max_files: int = 200) -> list[Definition]:
+    """Walk every Python file under `root` and return all definition
+    sites whose top-level identifier matches `name`. Looks at classes,
+    top-level functions, and methods — anything else (variables,
+    constants) would balloon the result set without much value for the
+    agent's "where is X defined?" use case.
+
+    Returns matches in deterministic order (file walk order from
+    list_files, then class-internal order). Empty list when nothing
+    matched — caller decides if that's a not-found message or a hint
+    to call `grep` for a wider search.
+    """
+    if not name:
+        return []
+    out: list[Definition] = []
+    files = list_files(root, max_files=max_files)
+    for rel in files:
+        if rel.suffix != ".py":
+            continue
+        path = root / rel
+        try:
+            source = path.read_text(errors="replace")
+        except OSError:
+            continue
+        try:
+            tree = ast.parse(source)
+        except SyntaxError:
+            continue
+        out.extend(_definitions_in(tree, str(rel), name))
+    return out
+
+
+def _definitions_in(tree: ast.Module, rel: str, name: str) -> list[Definition]:
+    out: list[Definition] = []
+    for node in tree.body:
+        if isinstance(node, ast.ClassDef):
+            if node.name == name:
+                out.append(Definition(rel, node.lineno, "class", node.name))
+            for m in node.body:
+                if isinstance(m, ast.FunctionDef | ast.AsyncFunctionDef) and m.name == name:
+                    prefix = "async method" if isinstance(m, ast.AsyncFunctionDef) else "method"
+                    out.append(Definition(rel, m.lineno, prefix, f"{node.name}.{m.name}"))
+        elif isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef) and node.name == name:
+            prefix = "async function" if isinstance(node, ast.AsyncFunctionDef) else "function"
+            out.append(Definition(rel, node.lineno, prefix, node.name))
+    return out
+
+
+@dataclass(frozen=True)
+class Reference:
+    """One textual reference site found by `find_references`.
+
+    Intentionally textual rather than AST-based: imports, comments,
+    docstrings, string literals — they all count as "where X gets
+    mentioned in this project". Models routinely ask "where is X
+    used" expecting that grep-level answer. AST-only resolution would
+    miss the comment in `# TODO: stop calling X here` that the user
+    explicitly wants surfaced.
+    """
+
+    rel_path: str
+    line: int
+    text: str
+
+
+def find_references(
+    root: Path,
+    name: str,
+    *,
+    max_files: int = 200,
+    max_results: int = 50,
+) -> list[Reference]:
+    """Scan the project for word-bounded matches of `name`. Skips
+    binary-looking files and the same paths `list_files` filters out
+    (gitignore + hidden dirs). Results are truncated to `max_results`
+    — for the typical "where is X used" question, anything past ~50
+    hits is just noise the user has to scroll through anyway.
+    """
+    if not name:
+        return []
+    pattern = re.compile(rf"\b{re.escape(name)}\b")
+    out: list[Reference] = []
+    files = list_files(root, max_files=max_files)
+    for rel in files:
+        path = root / rel
+        try:
+            text = path.read_text(errors="replace")
+        except OSError:
+            continue
+        for i, line in enumerate(text.splitlines(), start=1):
+            if pattern.search(line):
+                out.append(Reference(str(rel), i, line.rstrip()))
+                if len(out) >= max_results:
+                    return out
+    return out
 
 
 def _internal_packages(root: Path) -> frozenset[str]:
