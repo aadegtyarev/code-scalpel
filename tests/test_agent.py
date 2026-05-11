@@ -425,9 +425,11 @@ async def test_history_visible_to_next_ask_in_correct_role(project: Path) -> Non
 
 
 @pytest.mark.asyncio
-async def test_history_survives_tool_call_rounds(project: Path) -> None:
-    """Tool-call round-trips within a turn must NOT pollute history. Only
-    the final user task and final assistant text get stored."""
+async def test_history_records_tool_round_trips(project: Path) -> None:
+    """Tool-call round-trips within a turn are persisted into history so
+    the next turn sees the full conversation shape (and so the
+    compression hook has tool messages to act on). The transcript layout
+    is: user task → assistant(tool_calls) → tool result → final assistant."""
     from code_scalpel.llm.adapter import NativeToolCall
 
     tc = NativeToolCall(id="c1", name="read_file", arguments='{"path": "hello.py"}')
@@ -436,10 +438,15 @@ async def test_history_survives_tool_call_rounds(project: Path) -> None:
 
     await agent.ask("look")
 
-    # History should hold exactly 2 messages: bare task + final reply
-    assert len(agent.history) == 2
-    assert agent.history[0] == {"role": "user", "content": "look"}
-    assert agent.history[1] == {"role": "assistant", "content": "Final answer."}
+    history = agent.history
+    assert len(history) == 4
+    assert history[0] == {"role": "user", "content": "look"}
+    assert history[1]["role"] == "assistant"
+    assert history[1]["tool_calls"][0]["function"]["name"] == "read_file"
+    assert history[2]["role"] == "tool"
+    assert history[2]["tool_call_id"] == "c1"
+    # Final reply.
+    assert history[-1] == {"role": "assistant", "content": "Final answer."}
 
 
 @pytest.mark.asyncio
@@ -1651,3 +1658,138 @@ async def test_hook_does_not_fire_on_bare_python_fence_when_task_is_generic(
 
     assert len(llm.calls) == 1
     assert "list comp" in result.reply
+
+
+# --- Tool-result compression hook -------------------------------------------
+#
+# These tests exercise the cross-turn compression pass: when a tool
+# message in `agent.history` is old enough (turn-age > threshold) AND
+# long enough (content >= min_chars), the hook rewrites its content
+# with a one-line marker. Recent / short / non-tool messages stay
+# untouched. The toggle on AgentConfig must disable the pass entirely.
+
+_COMPRESS_CONFIG = AppConfig(
+    profiles={"local": ModelProfile(provider="lmstudio", model="m")},
+    agent=AgentConfig(
+        max_files=2,
+        max_file_lines=50,
+        enforce_read_before_show=False,
+        compress_tool_results=True,
+        compress_tool_results_after_turns=1,
+        compress_tool_results_min_chars=50,
+    ),
+)
+
+
+@pytest.mark.asyncio
+async def test_compress_rewrites_old_long_tool_result(project: Path) -> None:
+    """Turn 1: model reads hello.py (long output). Turn 2+: that result
+    is older than the threshold and longer than min_chars — replaced
+    with a marker. Round-trip shape (tool role, tool_call_id) stays
+    intact so the model still sees a valid conversation."""
+    from code_scalpel.llm.adapter import NativeToolCall
+
+    tc = NativeToolCall(id="c1", name="read_file", arguments='{"path": "hello.py"}')
+    # Long tool output: we mock-trigger by making hello.py larger.
+    big_body = "def hello():\n" + "    x = 1  # padding line\n" * 100
+    (project / "hello.py").write_text(big_body)
+
+    llm = MockLLMAdapter([("", [tc]), "read it", "follow up", "third"])
+    agent = StepAgent(llm=llm, cwd=project, config=_COMPRESS_CONFIG)
+
+    await agent.ask("read hello")  # turn 0 — produces a tool message
+    # Sanity: the tool result is currently a raw long blob.
+    tool_msg = next(m for m in agent.history if m.get("role") == "tool")
+    assert "padding line" in tool_msg["content"]
+    assert len(tool_msg["content"]) > 200
+
+    await agent.ask("anything else?")  # turn 1 — still recent, must NOT compress
+    tool_msg = next(m for m in agent.history if m.get("role") == "tool")
+    assert "padding line" in tool_msg["content"]
+
+    await agent.ask("third question")  # turn 2 — age > threshold, fire
+    tool_msg = next(m for m in agent.history if m.get("role") == "tool")
+    assert tool_msg["content"].startswith("[compressed:")
+    assert "read_file(path=hello.py)" in tool_msg["content"]
+    assert "see turn 0" in tool_msg["content"]
+    # Round-trip shape preserved.
+    assert tool_msg["tool_call_id"] == "c1"
+
+
+@pytest.mark.asyncio
+async def test_compress_leaves_recent_tool_result_untouched(project: Path) -> None:
+    """A tool result from the just-completed turn (age 0) is still
+    actively load-bearing — must NOT be rewritten on the next turn."""
+    from code_scalpel.llm.adapter import NativeToolCall
+
+    tc = NativeToolCall(id="c1", name="read_file", arguments='{"path": "hello.py"}')
+    big_body = "def hello():\n" + "    x = 1  # padding line\n" * 100
+    (project / "hello.py").write_text(big_body)
+
+    llm = MockLLMAdapter([("", [tc]), "read it", "follow up"])
+    agent = StepAgent(llm=llm, cwd=project, config=_COMPRESS_CONFIG)
+
+    await agent.ask("read hello")  # turn 0
+    await agent.ask("anything else?")  # turn 1 — age = 1, not yet > threshold (=1)
+
+    tool_msg = next(m for m in agent.history if m.get("role") == "tool")
+    assert "padding line" in tool_msg["content"]
+    assert not tool_msg["content"].startswith("[compressed:")
+
+
+@pytest.mark.asyncio
+async def test_compress_leaves_short_tool_result_untouched(project: Path) -> None:
+    """A 20-byte run_tests verdict ("0 failed, 12 passed") is shorter
+    than its replacement marker would be. Compression must respect the
+    `min_chars` floor regardless of age."""
+    from code_scalpel.llm.adapter import NativeToolCall
+
+    tc = NativeToolCall(id="c1", name="read_file", arguments='{"path": "hello.py"}')
+    # Default project fixture hello.py is ~22 bytes — well below the 50-char min.
+    llm = MockLLMAdapter([("", [tc]), "read it", "more", "more again", "yet more"])
+    agent = StepAgent(llm=llm, cwd=project, config=_COMPRESS_CONFIG)
+
+    await agent.ask("read hello")  # turn 0
+    await agent.ask("two")
+    await agent.ask("three")
+    await agent.ask("four")  # plenty of age now
+
+    tool_msg = next(m for m in agent.history if m.get("role") == "tool")
+    # Short payload — survives every compression pass.
+    assert not tool_msg["content"].startswith("[compressed:")
+    assert "def hello" in tool_msg["content"]
+
+
+@pytest.mark.asyncio
+async def test_compress_disabled_by_config(project: Path) -> None:
+    """compress_tool_results=False short-circuits the entire pass —
+    long old tool results stay verbatim, the marker is never built."""
+    from code_scalpel.llm.adapter import NativeToolCall
+
+    cfg = AppConfig(
+        profiles={"local": ModelProfile(provider="lmstudio", model="m")},
+        agent=AgentConfig(
+            max_files=2,
+            max_file_lines=50,
+            enforce_read_before_show=False,
+            compress_tool_results=False,  # the switch
+            compress_tool_results_after_turns=1,
+            compress_tool_results_min_chars=50,
+        ),
+    )
+
+    tc = NativeToolCall(id="c1", name="read_file", arguments='{"path": "hello.py"}')
+    big_body = "def hello():\n" + "    x = 1  # padding line\n" * 100
+    (project / "hello.py").write_text(big_body)
+
+    llm = MockLLMAdapter([("", [tc]), "read it", "f1", "f2", "f3"])
+    agent = StepAgent(llm=llm, cwd=project, config=cfg)
+
+    await agent.ask("read hello")
+    await agent.ask("turn 1")
+    await agent.ask("turn 2")
+    await agent.ask("turn 3")  # age 3, would normally compress
+
+    tool_msg = next(m for m in agent.history if m.get("role") == "tool")
+    assert "padding line" in tool_msg["content"]
+    assert "[compressed:" not in tool_msg["content"]

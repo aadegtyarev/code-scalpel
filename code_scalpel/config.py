@@ -37,6 +37,15 @@ class AgentConfig(BaseModel):
     # avoid fabricating from training-data shape; capable models don't lose
     # anything because they'd have read the file anyway.
     enforce_read_before_show: bool = True
+    # Opt-out: when on, the agent walks history at the end of each turn
+    # and replaces long, stale tool-role messages with a one-line
+    # marker that keeps the round-trip shape but drops the payload.
+    # Default ON — weak local models with a 16-32k context budget
+    # benefit most. The two knobs below decide what "stale" and "long"
+    # mean: a tool message is rewritten only if BOTH conditions hold.
+    compress_tool_results: bool = True
+    compress_tool_results_after_turns: int = 3
+    compress_tool_results_min_chars: int = 800
     answer_reserve_tokens: int = 4000
     context_budget_warn: float = 0.70
     context_budget_critical: float = 0.90

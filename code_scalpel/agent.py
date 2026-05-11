@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from code_scalpel.config import AppConfig
+from code_scalpel.context_compress import compress_tool_message, should_compress
 
 if TYPE_CHECKING:
     from code_scalpel.memory import MemoryStore
@@ -361,6 +362,53 @@ def _hash_text(text: str) -> str:
     return hashlib.sha256(text.encode("utf-8", errors="replace")).hexdigest()
 
 
+# Cap on the args-summary segment inside a compression marker. A
+# `grep(pattern="...500 chars...")` would otherwise blow past a sane
+# terminal line. We truncate; the model still has the tool name + first
+# output line to recognise what was compressed.
+_ARGS_SUMMARY_MAX = 80
+
+
+def _summarize_tool_args(raw_args: str) -> str:
+    """Render a tool-call's JSON arguments as a brief `k=v, k=v` string.
+
+    Tool args arrive from the LLM as a JSON string ("native function
+    calling" pass-through). We parse leniently — a malformed payload
+    falls back to the raw string so the marker still carries SOMETHING
+    identifying. Long values are truncated; nested structures are
+    rendered as `<dict>` / `<list>` rather than dumped verbatim (a
+    nested payload in a marker is its own bloat).
+    """
+    if not raw_args:
+        return ""
+    try:
+        parsed = json.loads(raw_args)
+    except json.JSONDecodeError:
+        return _truncate_args(raw_args, _ARGS_SUMMARY_MAX)
+    if not isinstance(parsed, dict):
+        return _truncate_args(str(parsed), _ARGS_SUMMARY_MAX)
+    parts: list[str] = []
+    for k, v in parsed.items():
+        if isinstance(v, str):
+            rendered = v
+        elif isinstance(v, int | float | bool) or v is None:
+            rendered = str(v)
+        elif isinstance(v, dict):
+            rendered = "<dict>"
+        elif isinstance(v, list):
+            rendered = "<list>"
+        else:
+            rendered = str(v)
+        parts.append(f"{k}={rendered}")
+    return _truncate_args(", ".join(parts), _ARGS_SUMMARY_MAX)
+
+
+def _truncate_args(text: str, limit: int) -> str:
+    if len(text) <= limit:
+        return text
+    return text[: limit - 1] + "…"
+
+
 def _atomic_write(path: Path, content: str) -> None:
     """Write through a `.tmp` sibling then rename. Mirrors AgentState.save —
     a partial write during cancel must NOT leave TASKS.md half-rewritten."""
@@ -431,7 +479,14 @@ class StepAgent:
         # past decisions) ride along automatically. None disables it
         # entirely so tests / lightweight callers don't take the cost.
         self._memory = memory
-        self._history: list[dict[str, str]] = []
+        # Mixed-role transcript: user / assistant / tool / assistant-with-
+        # tool_calls. The list flows straight into the next turn's
+        # `_initial_messages`, so the shape must be a valid OpenAI-style
+        # conversation (every `tool` message preceded by an assistant
+        # message that emitted the matching tool_call id). The
+        # `compress_tool_results` hook rewrites stale tool entries in
+        # place; the round-trip shape is preserved.
+        self._history: list[dict[str, Any]] = []
         # Cross-turn record of every relative path the model has called
         # `read_file` on. Used by the enforce-read-before-show HOOK so a
         # turn-2 patch on file X is grounded if X was read in turn-1.
@@ -441,7 +496,7 @@ class StepAgent:
         self._read_files_history: set[str] = set()
 
     @property
-    def history(self) -> list[dict[str, str]]:
+    def history(self) -> list[dict[str, Any]]:
         return list(self._history)
 
     def clear_history(self) -> None:
@@ -695,7 +750,8 @@ class StepAgent:
         return result.output, result.ok
 
     async def _chat_loop_with_hook(self, task: str, *, mode: str = "ask") -> StepResult:
-        """Run `_chat_loop`, then apply the enforce-read-before-show HOOK.
+        """Run `_chat_loop`, then apply the enforce-read-before-show HOOK
+        and the tool-result-compression hook.
 
         If the model produced a SEARCH/REPLACE block (or fenced python
         body for a project file the user named) without ever calling
@@ -703,23 +759,93 @@ class StepAgent:
         re-prompt once asking it to read first. The second pass is
         returned regardless of whether it satisfied the rule; the cap
         keeps a confused model from looping indefinitely.
+
+        After the turn settles (whether via the first pass or the HOOK
+        retry), walk history and replace long, stale `tool` messages
+        with a one-line marker. The model's own assistant reply from
+        the turn that owned each tool call already distills what
+        mattered; preserving the raw bytes burns context budget on
+        every subsequent turn.
         """
         result = await self._chat_loop(task, mode=mode)
-        if not self._config.agent.enforce_read_before_show:
-            return result
-        reprompt = self._check_read_before_show(task, result.reply)
-        if reprompt is None:
-            return result
-        # One retry. We drop the unread reply from history first — the
-        # _chat_loop just appended it via _remember, and we don't want
-        # the model's hallucinated patch to look like a committed turn.
-        self._rollback_last_turn()
-        return await self._chat_loop(reprompt, mode=mode)
+        if self._config.agent.enforce_read_before_show:
+            reprompt = self._check_read_before_show(task, result.reply)
+            if reprompt is not None:
+                # One retry. We drop the unread reply from history first
+                # so the hallucinated patch doesn't look like a
+                # committed turn.
+                self._rollback_last_turn()
+                result = await self._chat_loop(reprompt, mode=mode)
+        # Compression last — must NEVER break the turn, so any failure
+        # in the marker construction is swallowed. We trade exact
+        # recall of an old tool output for a kilo-tokens of headroom.
+        if self._config.agent.compress_tool_results:
+            with suppress(Exception):
+                self._compress_old_tool_results()
+        return result
+
+    def _compress_old_tool_results(self) -> int:
+        """Walk `self._history` and replace stale tool-role messages
+        with a compact marker. Returns the number of messages rewritten
+        — useful for tests and for future telemetry.
+
+        Turn-boundary tracking: history is a flat list. A "turn" begins
+        at every user-role entry. We label each tool message with the
+        index of the user-turn it belongs to (0-based — the first user
+        message starts turn 0). The CURRENT turn is the highest-numbered
+        one; `age = current_turn - message_turn`. Compression fires
+        when age strictly exceeds the configured threshold AND the
+        payload meets the size minimum.
+        """
+        cfg = self._config.agent
+        # Assign each entry its owning turn index.
+        turn_idx = -1
+        entry_turns: list[int] = []
+        for entry in self._history:
+            if entry.get("role") == "user":
+                turn_idx += 1
+            entry_turns.append(turn_idx)
+        if turn_idx < 0:
+            return 0
+        current_turn = turn_idx
+        compressed = 0
+        for i, entry in enumerate(self._history):
+            if entry.get("role") != "tool":
+                continue
+            content = entry.get("content")
+            if not isinstance(content, str):
+                continue
+            age = current_turn - entry_turns[i]
+            if not should_compress(
+                content,
+                age,
+                threshold_turns=cfg.compress_tool_results_after_turns,
+                min_chars=cfg.compress_tool_results_min_chars,
+            ):
+                continue
+            tool_name = entry.get("_tool_name", "tool")
+            tool_args = entry.get("_tool_args", "")
+            args_summary = _summarize_tool_args(tool_args)
+            entry["content"] = compress_tool_message(
+                content,
+                tool_name=str(tool_name),
+                args_summary=args_summary,
+                turn=entry_turns[i],
+            )
+            compressed += 1
+        return compressed
 
     async def _chat_loop(self, task: str, *, mode: str = "ask") -> StepResult:
         user_msg = self._user_message(task)
         messages = self._initial_messages(user_msg, mode=mode)
         profile = self._config.current_profile
+
+        # Commit the bare task to history up-front so any tool messages
+        # we record below have their "owning" user-turn boundary in
+        # place. The full user_msg (task + project overview) goes to
+        # the LLM only — history keeps the bare task to avoid
+        # duplicating the overview on every subsequent turn.
+        turn_history: list[dict[str, Any]] = [{"role": "user", "content": task}]
 
         response: ChatResponse | None = None
         seen: set[tuple[str, str]] = set()
@@ -727,15 +853,18 @@ class StepAgent:
             response = await self._llm.chat(
                 messages, tools=TOOL_SCHEMAS, **profile.inference_kwargs(mode)
             )
-            messages.append(self._assistant_message(response))
+            asst_msg = self._assistant_message(response)
+            messages.append(asst_msg)
 
             if not response.tool_calls:
                 edits = extract_edits(response.content)
-                # Store bare task in history, not user_msg with the project map
-                # prepended — otherwise every turn duplicates the map and the
-                # model loses track of the actual conversation.
-                self._remember(task, response.content)
+                turn_history.append({"role": "assistant", "content": response.content})
+                self._history.extend(turn_history)
                 return StepResult(reply=response.content, edits=edits, response=response)
+
+            # Record the intermediate assistant message (carries tool_calls
+            # — the matching `tool` messages below depend on it).
+            turn_history.append(asst_msg)
 
             if self._is_loop(response.tool_calls, seen):
                 messages.append(_FORCE_ANSWER_MSG)
@@ -743,6 +872,17 @@ class StepAgent:
             for tc in response.tool_calls:
                 result = await self._execute_native(tc)
                 self._note_read_file(tc, result)
+                tool_msg = {
+                    "role": "tool",
+                    "tool_call_id": tc.id,
+                    "content": result.output,
+                    # Stash name/args so compress_tool_message can build
+                    # an informative marker without re-parsing the
+                    # matching assistant tool_calls entry. These extras
+                    # are ignored by the OpenAI-compat API.
+                    "_tool_name": tc.name,
+                    "_tool_args": tc.arguments,
+                }
                 messages.append(
                     {
                         "role": "tool",
@@ -750,10 +890,12 @@ class StepAgent:
                         "content": result.output,
                     }
                 )
+                turn_history.append(tool_msg)
 
         assert response is not None
         edits = extract_edits(response.content)
-        self._remember(task, response.content)
+        turn_history.append({"role": "assistant", "content": response.content})
+        self._history.extend(turn_history)
         return StepResult(reply=response.content, edits=edits, response=response)
 
     @staticmethod
@@ -794,12 +936,16 @@ class StepAgent:
         self._history.append({"role": "assistant", "content": assistant_msg})
 
     def _rollback_last_turn(self) -> None:
-        """Drop the most recent user+assistant pair from history. Used by
-        the enforce-read-before-show HOOK so the unread reply we're about
-        to retry doesn't end up in the official conversation trail."""
-        if len(self._history) >= 2:
-            self._history.pop()
-            self._history.pop()
+        """Drop everything from the most recent user-role entry onward.
+        Used by the enforce-read-before-show HOOK so the unread reply
+        we're about to retry doesn't end up in the official conversation
+        trail. A turn may contain user + assistant only, OR user +
+        assistant(tool_calls) + tool* + assistant — both shapes are
+        handled by walking back to the last user boundary."""
+        for i in range(len(self._history) - 1, -1, -1):
+            if self._history[i].get("role") == "user":
+                del self._history[i:]
+                return
 
     def _note_read_file(self, tc: NativeToolCall, result: ToolResult) -> None:
         """Record a successful `read_file(path)` call so the HOOK knows the
@@ -916,6 +1062,10 @@ class StepAgent:
         profile = self._config.current_profile
         final_assistant = ""
 
+        # Same shape as `_chat_loop`: user task first, intermediate
+        # assistant+tool round-trips, then the final assistant reply.
+        turn_history: list[dict[str, Any]] = [{"role": "user", "content": task}]
+
         seen: set[tuple[str, str]] = set()
         for _ in range(_MAX_TOOL_ROUNDS):
             full = ""
@@ -945,6 +1095,11 @@ class StepAgent:
                 final_assistant = full
                 break
 
+            # Intermediate assistant message goes into the cross-turn
+            # transcript — its tool_calls own the tool messages we
+            # append next.
+            turn_history.append(asst_msg)
+
             if self._is_loop(tuple(round_tool_calls), seen):
                 messages.append(_FORCE_ANSWER_MSG)
                 final_assistant = full
@@ -962,9 +1117,19 @@ class StepAgent:
                         "content": result.output,
                     }
                 )
+                turn_history.append(
+                    {
+                        "role": "tool",
+                        "tool_call_id": tc.id,
+                        "content": result.output,
+                        "_tool_name": tc.name,
+                        "_tool_args": tc.arguments,
+                    }
+                )
             final_assistant = full
 
-        self._remember(task, final_assistant)
+        turn_history.append({"role": "assistant", "content": final_assistant})
+        self._history.extend(turn_history)
         if mode == "plan":
             self._maybe_save_plan(final_assistant)
 
@@ -996,7 +1161,12 @@ class StepAgent:
         if mode == "plan":
             system += _PLAN_MODE_ADDENDUM
         msgs: list[dict[str, Any]] = [{"role": "system", "content": system}]
-        msgs.extend(self._history)
+        # History may carry internal bookkeeping fields (`_tool_name`,
+        # `_tool_args`) on tool messages for the compression pass. Strip
+        # underscore-prefixed keys before handing the list to the LLM —
+        # OpenAI-compat backends reject unknown fields on `tool` role.
+        for entry in self._history:
+            msgs.append({k: v for k, v in entry.items() if not k.startswith("_")})
         msgs.append({"role": "user", "content": user_msg})
         return msgs
 
