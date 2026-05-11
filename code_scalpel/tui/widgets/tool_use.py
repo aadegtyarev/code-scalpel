@@ -46,6 +46,26 @@ _LEXER_BY_EXT: dict[str, str] = {
 }
 
 
+def _infer_lexer_for(call: ToolCall) -> str | None:
+    """Pygments lexer name for a tool call's output, if known. Currently
+    only `read_file` is highlightable — we derive the lexer from the
+    `path` argument's extension. Returns None for everything else so the
+    caller falls back to plain text."""
+    if call.name != "read_file":
+        return None
+    try:
+        args = json.loads(call.body)
+    except (json.JSONDecodeError, TypeError):
+        return None
+    path = args.get("path") if isinstance(args, dict) else None
+    if not isinstance(path, str):
+        return None
+    dot = path.rfind(".")
+    if dot == -1:
+        return None
+    return _LEXER_BY_EXT.get(path[dot:].lower())
+
+
 class ToolUseCard(Widget):
     DEFAULT_CSS = """
     ToolUseCard {
@@ -137,21 +157,7 @@ class ToolUseCard(Widget):
         return head
 
     def _infer_lexer(self) -> str | None:
-        """Look up a Pygments lexer for read_file output via the path
-        argument. Other tools return None — keep their output as plain text."""
-        if self._call.name != "read_file":
-            return None
-        try:
-            args = json.loads(self._call.body)
-        except (json.JSONDecodeError, TypeError):
-            return None
-        path = args.get("path") if isinstance(args, dict) else None
-        if not isinstance(path, str):
-            return None
-        dot = path.rfind(".")
-        if dot == -1:
-            return None
-        return _LEXER_BY_EXT.get(path[dot:].lower())
+        return _infer_lexer_for(self._call)
 
     def compose(self) -> ComposeResult:
         with Collapsible(title=self._title(), collapsed=True):

@@ -17,11 +17,13 @@ from code_scalpel.llm.adapter import ChatResponse, OpenAICompatibleAdapter
 from code_scalpel.patch.edit_block import Edit, apply_edits, edits_to_diff, extract_edits
 from code_scalpel.session import Session
 from code_scalpel.state import AgentState
+from code_scalpel.tools.agent_tools import ToolResult
 from code_scalpel.tools.shell import AsyncShellRunner
 from code_scalpel.tui.widgets.cards.tool_call import PatchDecision, ToolCallCard
 from code_scalpel.tui.widgets.footer import StatusFooter
 from code_scalpel.tui.widgets.input import ModeInput, UserMessage
 from code_scalpel.tui.widgets.output import OutputLog
+from code_scalpel.tui.widgets.tool_result_modal import ToolResultModal
 
 
 class _UpwardAutoComplete(AutoComplete):
@@ -71,6 +73,7 @@ class ScalpelApp(App[None]):
     BINDINGS = [
         Binding("ctrl+q", "quit", "Quit"),
         Binding("ctrl+t", "cycle_mode", "Mode", show=False),
+        Binding("ctrl+o", "show_last_tool_result", "Open last tool result", show=False),
         Binding("escape", "cancel_step", "Cancel", show=False),
     ]
 
@@ -87,6 +90,8 @@ class ScalpelApp(App[None]):
         self._last_stream_rate: float = 0.0
         self._runner = AsyncShellRunner()
         self._agent: StepAgent | None = None
+        # Latest tool round-trip from the agent — Ctrl+O opens it in a modal.
+        self._last_tool_result: ToolResult | None = None
 
     # ── compose ───────────────────────────────────────────────────────────────
 
@@ -225,6 +230,14 @@ class ScalpelApp(App[None]):
         if w is not None and not w.is_finished:
             w.cancel()
 
+    def action_show_last_tool_result(self) -> None:
+        """Ctrl+O: open the most recent tool result in a modal with full
+        content and syntax highlighting. Plan §v0.3 hook."""
+        if self._last_tool_result is None:
+            self.query_one(OutputLog).print_status("● No tool result yet in this session.")
+            return
+        self.push_screen(ToolResultModal(self._last_tool_result))
+
     def on_key(self, event: events.Key) -> None:
         """textual-autocomplete sometimes swallows Escape even when its
         dropdown is hidden. Catch it at the App level as a fallback."""
@@ -308,6 +321,7 @@ class ScalpelApp(App[None]):
                         last_tick = now
                 elif isinstance(item, ToolExecuted):
                     tool_calls += 1
+                    self._last_tool_result = item.result
                     placeholder.update(full)
                     await output.finalize_streaming(placeholder, full)
                     output.add_tool_use(item.call, item.result)
