@@ -79,6 +79,13 @@ class HistoryInput(Input):
             self._draft = ""
         self.cursor_position = len(self.value)
 
+    @property
+    def history(self) -> list[str]:
+        """Defensive copy of the in-memory submitted-command history.
+        Mutating the returned list does NOT affect future ↑/↓
+        navigation — internal state stays the authoritative source."""
+        return list(self._history)
+
 
 class UserMessage(Message):
     def __init__(self, text: str) -> None:
@@ -190,7 +197,7 @@ class ModeInput(Widget):
     @property
     def history(self) -> list[str]:
         """In-memory submitted-command history. Empty until first submit."""
-        return list(self.query_one("#textarea", HistoryInput)._history)
+        return self.query_one("#textarea", HistoryInput).history
 
     @property
     def prefix(self) -> str:
