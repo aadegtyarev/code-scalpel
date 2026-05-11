@@ -71,7 +71,7 @@ async def test_app_starts_with_input_focused(sandbox: Path) -> None:
     async with app.run_test(headless=True, size=(80, 24)) as pilot:
         await pilot.pause(0.1)
         assert app.focused is not None
-        assert app.focused.__class__.__name__ == "Input"
+        assert app.focused.__class__.__name__ in ("Input", "HistoryInput")
 
 
 @pytest.mark.asyncio
@@ -635,7 +635,7 @@ async def test_tab_does_not_leave_input_when_chat_is_empty(sandbox: Path) -> Non
         await pilot.pause(0.1)
         # Sanity: input is the initial focus target.
         assert app.focused is not None
-        assert app.focused.__class__.__name__ == "Input"
+        assert app.focused.__class__.__name__ in ("Input", "HistoryInput")
 
         for _ in range(3):
             await pilot.press("tab")
@@ -643,7 +643,7 @@ async def test_tab_does_not_leave_input_when_chat_is_empty(sandbox: Path) -> Non
 
         # Focus never wandered off the input — no ghost stop on the scroll.
         assert app.focused is not None
-        assert app.focused.__class__.__name__ == "Input"
+        assert app.focused.__class__.__name__ in ("Input", "HistoryInput")
 
 
 @pytest.mark.asyncio
@@ -680,7 +680,7 @@ async def test_tab_skips_history_tool_use_cards(sandbox: Path) -> None:
             await pilot.press("tab")
             await pilot.pause(0.05)
             assert app.focused is not None
-            assert app.focused.__class__.__name__ == "Input"
+            assert app.focused.__class__.__name__ in ("Input", "HistoryInput")
 
 
 @pytest.mark.asyncio
@@ -716,7 +716,7 @@ async def test_tab_cycles_between_input_and_review_card(sandbox: Path) -> None:
         await pilot.press("tab")
         await pilot.pause(0.05)
         assert app.focused is not None
-        assert app.focused.__class__.__name__ == "Input"
+        assert app.focused.__class__.__name__ in ("Input", "HistoryInput")
 
         # Another Tab returns to the review card.
         await pilot.press("tab")
