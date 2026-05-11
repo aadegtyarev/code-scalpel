@@ -8,7 +8,6 @@ from typing import Any
 from code_scalpel.config import AppConfig
 from code_scalpel.llm.adapter import ChatResponse, LLMAdapter, NativeToolCall
 from code_scalpel.patch.edit_block import Edit, apply_edits, extract_edits
-from code_scalpel.project_map import build_map
 from code_scalpel.tools.agent_tools import (
     TOOL_SCHEMAS,
     ToolCall,
@@ -61,37 +60,48 @@ Tone: you're talking to a colleague, not a customer. Be direct and alive.
 You have tools: read_file, grep, run_tests. Each tool's own description
 tells you when to call it — READ THOSE DESCRIPTIONS, they are normative.
 
-The user message includes a compact project MAP. Each file's block has:
-  • path and line count
-  • `imports: ...` line — intra-project imports only (use this to trace
-    flow and to verify "X uses Y" claims; if Y isn't listed in X's
-    imports, X does not use Y)
-  • top-level symbol signatures with first-sentence docstrings
-The MAP is NOT the file content: it has no function bodies, no class
-attribute defaults, no decorators. Anytime you need something beyond a
-signature (a body, a field value, the inside of a method, an algorithm
-description), the MAP is not enough — call read_file.
+The user message includes a project OVERVIEW: just paths + line counts.
+This is intentional — it scales to projects with thousands of files
+without blowing your context budget. For any file you need to reason
+about, call `map_file(path)` first — it returns that file's outline
+(classes, signatures, first-line docstrings, intra-project imports).
+Then call `read_file(path)` if you need the actual body.
+
+Navigation order, like a human dev would:
+  1. OVERVIEW (in this message) — pick the candidate file by path
+  2. `map_file(path)` — see what's defined inside, decide if it's
+     really the one
+  3. `read_file(path)` — read the body when you need to quote or edit
+  4. `grep(pattern)` — find a symbol by name when you don't know
+     which file it lives in
+
+The OVERVIEW shows file paths + line counts only. It has NO symbols,
+NO docstrings, NO imports. If a user asks about a symbol, you don't
+yet know which file holds it — call grep or map_file the most likely
+candidate, don't guess.
 
 Grounding rules — do NOT make things up:
-- The MAP lists every top-level symbol. Before you NAME a specific
-  class, method, function, or attribute in your answer, verify that
-  exact name appears in the MAP's block for the relevant file. If it
-  isn't there, do NOT use that name. Pick a name that IS in the MAP,
-  or say "I only see X, Y, Z under that class — which did you mean?".
-- A similar-looking method name in the MAP does NOT justify inventing
-  the one the user implied. Example: if the MAP shows `mark_compacted`
-  on a class, do not answer with `compact` — those are different names.
-- The `imports: ...` line in each file's block is GROUND TRUTH for
-  intra-project dependencies. If file X's imports line doesn't list
-  module/symbol Y, then X does NOT use Y. Never claim "X uses Y" or
-  write code showing X calling Y when Y isn't in X's imports. If you
+- Before you NAME a specific class, method, function, or attribute in
+  your answer, verify that exact name appears in `map_file(...)`'s
+  output for the relevant file. If it isn't there, do NOT use that
+  name. Either call grep to locate the symbol elsewhere, or say
+  "the only things I see in that file are X, Y, Z — which did you
+  mean?".
+- A similar-looking method name does NOT justify inventing the one
+  the user implied. Example: if `map_file` shows `mark_compacted` on
+  a class, do not answer with `compact` — those are different names.
+- The `imports: ...` line in `map_file` output is GROUND TRUTH for
+  that file's intra-project dependencies. If file X's imports don't
+  list module/symbol Y, then X does NOT use Y. Never claim "X uses
+  Y" or write code showing X calling Y when Y isn't imported. If you
   need to find where Y IS used, call grep — don't guess.
-- Pattern recognition is NOT a source of truth. If a class looks like
-  a dataclass / BaseModel / typical CRUD shape, you might "know" the
-  body — you do not. Call read_file every single time you reproduce
-  more than a signature. The same applies when describing an algorithm:
-  the signature + docstring let you LOCATE the function; you need
-  read_file to describe what it actually does step by step.
+- Pattern recognition is NOT a source of truth. If a class looks
+  like a dataclass / BaseModel / typical CRUD shape, you might
+  "know" the body — you do not. Call read_file every single time
+  you reproduce more than a signature. The same applies when
+  describing an algorithm: the signature + docstring let you LOCATE
+  the function; you need read_file to describe what it actually
+  does step by step.
 - If you're not sure which file/symbol the user means, ask. If you
   know, call the tool first, answer second.
 
@@ -540,13 +550,19 @@ class StepAgent:
         return msgs
 
     def _user_message(self, task: str) -> str:
-        # Task FIRST, map second. The previous "Project map:\n<300 lines>\n\nTask: X"
-        # layout caused short follow-ups (e.g. "Sonet") to drown in the
-        # map — model defaulted to its prior reply because the new task
-        # was buried at the end of a massive block.
-        # Putting the task first gives it salience while still attaching
-        # the structural context the model needs for read_file/grep
-        # navigation. The map is wrapped in a clearly labelled section so
-        # the model treats it as reference, not as input.
-        map_text = build_map(self._cwd, max_files=200)
-        return f"Task: {task}\n\nProject map (reference):\n{map_text}"
+        # Task FIRST, lightweight OVERVIEW second. The full map (signatures +
+        # docstrings + imports per file) was ~14k tokens on the real project
+        # and blew the 16k context window. Now we send a project skeleton
+        # (paths + line counts only, ~500 tokens for 80 files) and let the
+        # model call `map_file(path)` for per-file outline on demand. Scales
+        # to projects 10× larger without context redesign.
+        from code_scalpel.project_map import build_map_overview
+
+        overview = build_map_overview(self._cwd, max_files=200)
+        return (
+            f"Task: {task}\n\n"
+            f"Project overview — paths + line counts only. Call "
+            f"`map_file(path)` for one file's outline (classes / "
+            f"functions / imports), `read_file` for content, `grep` "
+            f"to find symbols by name:\n{overview}"
+        )

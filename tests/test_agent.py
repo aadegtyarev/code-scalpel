@@ -96,18 +96,22 @@ async def test_ask_sends_system_and_task_only(project: Path) -> None:
 
 
 @pytest.mark.asyncio
-async def test_ask_includes_project_map_not_file_content(project: Path) -> None:
-    """v0.2: the user message carries a compact map, not full file bodies."""
+async def test_ask_includes_project_overview_not_file_content(project: Path) -> None:
+    """v0.3: the user message carries a lightweight overview (paths + line
+    counts), not full file bodies and not the symbol-level map. Per-file
+    drilldown happens on demand via the `map_file` tool."""
     llm = MockLLMAdapter(["OK"])
     agent = StepAgent(llm=llm, cwd=project, config=_CONFIG)
 
     await agent.ask("do something")
 
     real_task_msg = llm.calls[0][-1]["content"]
-    assert "Project map" in real_task_msg
-    assert "hello.py" in real_task_msg  # path appears in map
+    assert "Project overview" in real_task_msg
+    assert "hello.py" in real_task_msg  # path appears in overview
     # Full file body should NOT be there
     assert "def hello():\n    pass" not in real_task_msg
+    # Symbols are NOT in the overview either — model calls map_file/read_file
+    assert "def hello(" not in real_task_msg
 
 
 @pytest.mark.asyncio
@@ -603,13 +607,14 @@ async def test_ask_mode_does_not_write_tasks_md(project: Path) -> None:
 
 
 @pytest.mark.asyncio
-async def test_user_message_puts_task_before_map(project: Path) -> None:
-    """Task FIRST, map second. The previous "Project map:\\n<300 lines>\\n
+async def test_user_message_puts_task_before_overview(project: Path) -> None:
+    """Task FIRST, overview second. The previous "Project map:\\n<300 lines>\\n
     Task: X" layout caused short follow-ups (e.g. "Sonet") to drown in
     the map — model defaulted to its prior reply because the new task
     was buried at the end of a massive block. With task on top the
-    short user input has the salient first position while the map stays
-    available as reference."""
+    short user input has the salient first position; the overview (paths +
+    line counts only) is brief enough that it can sit after the task
+    without burying it."""
     llm = MockLLMAdapter(["first reply", "second reply"])
     agent = StepAgent(llm=llm, cwd=project, config=_CONFIG)
 
@@ -617,18 +622,17 @@ async def test_user_message_puts_task_before_map(project: Path) -> None:
     user_msg = llm.calls[0][-1]["content"]
     # Task is the very first non-empty content the model sees
     assert user_msg.startswith("Task: Sonnet")
-    # Map still present as labelled reference
-    assert "Project map (reference):" in user_msg
-    # Map comes AFTER the task in byte order
-    assert user_msg.index("Task: Sonnet") < user_msg.index("Project map")
+    # Overview is the labelled reference, not "Project map" anymore
+    assert "Project overview" in user_msg
+    # Overview comes AFTER the task in byte order
+    assert user_msg.index("Task: Sonnet") < user_msg.index("Project overview")
 
 
 @pytest.mark.asyncio
-async def test_user_message_map_present_on_every_turn(project: Path) -> None:
-    """The map is structural context the model needs for read_file/grep
-    navigation. It must be in every turn — not just turn 1 — otherwise
-    multi-turn flows like "find files" → "show code in <some file>"
-    leave the model blind on the follow-up."""
+async def test_user_message_overview_present_on_every_turn(project: Path) -> None:
+    """The overview is structural context the model needs to pick files for
+    map_file / read_file / grep. It must be in every turn — not just turn
+    1 — otherwise multi-turn flows leave the model blind on the follow-up."""
     llm = MockLLMAdapter(["a", "b", "c"])
     agent = StepAgent(llm=llm, cwd=project, config=_CONFIG)
     await agent.ask("first")
@@ -636,7 +640,7 @@ async def test_user_message_map_present_on_every_turn(project: Path) -> None:
     await agent.ask("third")
     for i in range(3):
         msg = llm.calls[i][-1]["content"]
-        assert "Project map" in msg, f"turn {i + 1} lost the map"
+        assert "Project overview" in msg, f"turn {i + 1} lost the overview"
 
 
 @pytest.mark.asyncio

@@ -28,6 +28,11 @@ def build_map(root: Path, max_files: int = 200, use_cache: bool = True) -> str:
 
     With `use_cache=True`, persists per-file blocks keyed by mtime so unchanged
     files don't get re-parsed on every turn. Massive win on larger projects.
+
+    This is the FULL map — every file with signatures, docstrings, imports.
+    For per-turn context use `build_map_overview` and let the model drill in
+    via the `map_file` tool. The full map is what `/map` slash and the
+    initial-turn context use.
     """
     files = list_files(root, max_files=max_files)
     internal = _internal_packages(root)
@@ -58,6 +63,52 @@ def build_map(root: Path, max_files: int = 200, use_cache: bool = True) -> str:
     if use_cache:
         _save_cache(root, new_cache)
     return "\n".join(blocks)
+
+
+def build_map_overview(root: Path, max_files: int = 200) -> str:
+    """Lightweight per-turn map: just paths + line counts, no symbols.
+
+    The model gets a project skeleton it can navigate. For any file it
+    actually needs to reason about, it calls the `map_file(path)` tool
+    which returns the full block (signatures + docstrings + imports).
+
+    Token budget on a 50-file project: ~1500 chars / ~375 tokens (vs
+    the full map's ~14k tokens). Same ceiling for projects 10× larger.
+    """
+    files = list_files(root, max_files=max_files)
+    lines: list[str] = []
+    for rel in files:
+        path = root / rel
+        try:
+            n = sum(1 for _ in path.open("rb")) if path.is_file() else 0
+        except OSError:
+            continue
+        lines.append(f"{rel} [{n}L]")
+    return "\n".join(lines)
+
+
+def build_file_map(root: Path, rel_path: str) -> str:
+    """Full symbol map for ONE file. Backs the `map_file` agent tool.
+
+    Returns the same per-file block format `build_map` would produce
+    (path header + imports + signatures + docstrings), or a single-line
+    error if the file is missing / not Python / unreadable."""
+    target = root / rel_path
+    if not target.is_file():
+        return f"{rel_path}: file not found"
+    if target.suffix != ".py":
+        # Non-Python: just give the line count
+        try:
+            n = sum(1 for _ in target.open("rb"))
+        except OSError:
+            return f"{rel_path}: unreadable"
+        return f"{rel_path} [{n}L]"
+    try:
+        source = target.read_text(errors="replace")
+    except OSError:
+        return f"{rel_path}: unreadable"
+    internal = _internal_packages(root)
+    return _python_block(rel_path, source, internal)
 
 
 def _internal_packages(root: Path) -> frozenset[str]:

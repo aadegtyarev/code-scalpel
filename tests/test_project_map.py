@@ -5,7 +5,7 @@ from __future__ import annotations
 import textwrap
 from pathlib import Path
 
-from code_scalpel.project_map import build_map
+from code_scalpel.project_map import build_file_map, build_map, build_map_overview
 
 
 def test_python_file_shows_classes_and_functions(tmp_path: Path) -> None:
@@ -302,3 +302,93 @@ def test_map_is_substantially_smaller_than_full_content(tmp_path: Path) -> None:
     (tmp_path / "big.py").write_text(big)
     out = build_map(tmp_path)
     assert len(out) < len(big) // 2
+
+
+def test_overview_has_paths_but_no_symbols(tmp_path: Path) -> None:
+    """The overview is paths + line counts only — symbols stay behind the
+    `map_file` tool. Per-turn token budget shrinks ~10× this way."""
+    (tmp_path / "a.py").write_text("class Foo:\n    def bar(self):\n        pass\n")
+    (tmp_path / "b.py").write_text("def baz():\n    return 1\n")
+    overview = build_map_overview(tmp_path)
+    assert "a.py" in overview
+    assert "b.py" in overview
+    # No symbols — that's the whole point
+    assert "class Foo" not in overview
+    assert "def bar" not in overview
+    assert "def baz" not in overview
+    # Line counts are present
+    assert "[3L]" in overview  # a.py
+    assert "[2L]" in overview  # b.py
+
+
+def test_overview_is_drastically_smaller_than_full_map(tmp_path: Path) -> None:
+    """The whole point of the overview is to fit the per-turn context
+    where the full symbol map would not."""
+    body = "class C:\n" + "\n".join(f"    def m{i}(self): pass" for i in range(40)) + "\n"
+    for name in "abcdefghij":
+        (tmp_path / f"{name}.py").write_text(body)
+    overview = build_map_overview(tmp_path)
+    full = build_map(tmp_path, use_cache=False)
+    # Overview should be at least 5× smaller — usually 10-15× on real code
+    assert len(overview) * 5 < len(full)
+
+
+def test_overview_skips_directories(tmp_path: Path) -> None:
+    """list_files already filters to files, but make sure the overview
+    builder doesn't try to count lines on a directory."""
+    (tmp_path / "pkg").mkdir()
+    (tmp_path / "pkg" / "mod.py").write_text("x = 1\n")
+    overview = build_map_overview(tmp_path)
+    assert "pkg/mod.py" in overview
+    # Directory itself should never show up as an entry
+    for line in overview.splitlines():
+        assert line != "pkg [0L]"
+
+
+def test_file_map_returns_full_block_for_python(tmp_path: Path) -> None:
+    """`build_file_map` is the drilldown: same block format the bigger
+    map would produce, but for ONE file."""
+    (tmp_path / "x.py").write_text(
+        textwrap.dedent("""\
+            \"\"\"Module that does things.\"\"\"
+
+            from code_scalpel.foo import bar
+
+            class Greeter:
+                \"\"\"Greets the user.\"\"\"
+
+                def hello(self, name: str) -> str:
+                    return f"Hi {name}"
+            """)
+    )
+    # Make `code_scalpel` look internal so its imports appear
+    (tmp_path / "code_scalpel").mkdir()
+    (tmp_path / "code_scalpel" / "__init__.py").write_text("")
+    block = build_file_map(tmp_path, "x.py")
+    assert "x.py" in block
+    assert "class Greeter" in block
+    assert "def hello(self, name: str) -> str" in block
+    assert "Greets the user" in block
+    # Imports surfaced when internal
+    assert "code_scalpel.foo.bar" in block
+
+
+def test_file_map_handles_non_python(tmp_path: Path) -> None:
+    (tmp_path / "README.md").write_text("# title\n\nbody\n")
+    block = build_file_map(tmp_path, "README.md")
+    assert "README.md" in block
+    assert "[3L]" in block
+
+
+def test_file_map_missing_file(tmp_path: Path) -> None:
+    block = build_file_map(tmp_path, "nope.py")
+    assert "not found" in block
+
+
+def test_file_map_handles_syntax_error(tmp_path: Path) -> None:
+    """Half-typed files shouldn't kill the drilldown — fall back to the
+    line-count header so the model still gets *something* back."""
+    (tmp_path / "broken.py").write_text("def f(:\n    pass\n")
+    block = build_file_map(tmp_path, "broken.py")
+    assert "broken.py" in block
+    assert "parse error" in block

@@ -84,6 +84,38 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
     {
         "type": "function",
         "function": {
+            "name": "map_file",
+            "description": (
+                "Drill into ONE file's structural details: top-level "
+                "classes, functions, methods with their signatures, "
+                "first-sentence docstrings, and intra-project imports. "
+                "This is the per-file table-of-contents — what was on "
+                "the bigger MAP before we switched to navigation. "
+                "Call this when you need to decide which file to read "
+                "for the user's question: look at file's outline first, "
+                "then read_file the body if needed. Cheaper than "
+                "read_file (signatures only, no bodies) and gives the "
+                "imports line so you can trace the dependency graph."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "path": {
+                        "type": "string",
+                        "description": (
+                            "Relative path from the project root, exactly "
+                            "as it appears in the OVERVIEW. No leading "
+                            "'path/' prefix."
+                        ),
+                    },
+                },
+                "required": ["path"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "grep",
             "description": (
                 "Search the project (or a subdirectory) for a regex pattern. "
@@ -177,6 +209,8 @@ async def execute(
     """Dispatch a tool call by name. Returns a ToolResult — never raises."""
     if call.name == "read_file":
         return _tool_read_file(call, cwd, max_lines=max_lines)
+    if call.name == "map_file":
+        return _tool_map_file(call, cwd)
     if call.name == "grep":
         return await _tool_grep(call, cwd, runner or AsyncShellRunner())
     if call.name == "run_tests":
@@ -222,6 +256,27 @@ def _tool_read_file(call: ToolCall, cwd: Path, *, max_lines: int) -> ToolResult:
     except OSError as e:
         return ToolResult(call, output=f"error: {e}", ok=False)
     return ToolResult(call, output=f"path: {path_str}\n---\n{content}", ok=True)
+
+
+def _tool_map_file(call: ToolCall, cwd: Path) -> ToolResult:
+    """args: {path: str}. Returns the per-file outline block from
+    build_file_map — signatures + docstrings + intra-project imports."""
+    from code_scalpel.project_map import build_file_map
+
+    args = _decode_args(call.body)
+    path_str = str(args.get("path") or args.get("_raw", "")).strip()
+    if not path_str:
+        return ToolResult(call, output="error: missing file path", ok=False)
+    if path_str.startswith("/") or ".." in Path(path_str).parts:
+        return ToolResult(
+            call, output=f"error: path must be inside the project: {path_str}", ok=False
+        )
+    try:
+        block = build_file_map(cwd, path_str)
+    except OSError as e:
+        return ToolResult(call, output=f"error: {e}", ok=False)
+    ok = not block.endswith(": file not found") and not block.endswith(": unreadable")
+    return ToolResult(call, output=block, ok=ok)
 
 
 async def _tool_grep(call: ToolCall, cwd: Path, runner: ShellRunner) -> ToolResult:

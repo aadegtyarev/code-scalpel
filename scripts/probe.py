@@ -159,7 +159,9 @@ async def main() -> None:
     # Plan-mode scenario needs an actual prompt — assigned here so the
     # static list above stays readable.
     plan_scenario = SCENARIOS[-1]
-    plan_scenario.turns = ["Спланируй задачу: добавить /history slash для просмотра истории сессии."]
+    plan_scenario.turns = [
+        "Спланируй задачу: добавить /history slash для просмотра истории сессии."
+    ]
 
     print("=" * 72)
     print("LIVE PROBE — типовые сценарии использования")

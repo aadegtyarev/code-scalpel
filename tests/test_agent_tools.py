@@ -103,6 +103,69 @@ async def test_read_file_missing_path_arg(tmp_path: Path) -> None:
     assert "missing" in result.output
 
 
+# ── execution: map_file ──────────────────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_map_file_returns_drilldown_block(tmp_path: Path) -> None:
+    """`map_file` is the drilldown tool — give the model one file's
+    signatures + docstrings + intra-project imports, not the bodies."""
+    (tmp_path / "thing.py").write_text(
+        'class Thing:\n    """Does a thing."""\n    def do(self) -> int:\n        return 42\n'
+    )
+    call = ToolCall(name="map_file", body='{"path": "thing.py"}')
+    result = await execute(call, tmp_path)
+    assert result.ok
+    assert "thing.py" in result.output
+    assert "class Thing" in result.output
+    assert "def do(self) -> int" in result.output
+    # The body should NOT leak through — drilldown is signatures only
+    assert "return 42" not in result.output
+
+
+@pytest.mark.asyncio
+async def test_map_file_handles_legacy_text_body(tmp_path: Path) -> None:
+    """Legacy `<TOOL: map_file>` text form — bare path as the body."""
+    (tmp_path / "x.py").write_text("def f(): pass\n")
+    call = ToolCall(name="map_file", body="x.py")
+    result = await execute(call, tmp_path)
+    assert result.ok
+    assert "x.py" in result.output
+    assert "def f()" in result.output
+
+
+@pytest.mark.asyncio
+async def test_map_file_rejects_missing_path(tmp_path: Path) -> None:
+    call = ToolCall(name="map_file", body="")
+    result = await execute(call, tmp_path)
+    assert not result.ok
+    assert "missing" in result.output
+
+
+@pytest.mark.asyncio
+async def test_map_file_rejects_absolute_path(tmp_path: Path) -> None:
+    call = ToolCall(name="map_file", body='{"path": "/etc/passwd"}')
+    result = await execute(call, tmp_path)
+    assert not result.ok
+    assert "inside the project" in result.output
+
+
+@pytest.mark.asyncio
+async def test_map_file_rejects_parent_escape(tmp_path: Path) -> None:
+    call = ToolCall(name="map_file", body='{"path": "../sneaky.py"}')
+    result = await execute(call, tmp_path)
+    assert not result.ok
+    assert "inside the project" in result.output
+
+
+@pytest.mark.asyncio
+async def test_map_file_reports_missing_file(tmp_path: Path) -> None:
+    call = ToolCall(name="map_file", body='{"path": "nope.py"}')
+    result = await execute(call, tmp_path)
+    assert not result.ok
+    assert "not found" in result.output
+
+
 # ── execution: grep ──────────────────────────────────────────────────────────
 
 
