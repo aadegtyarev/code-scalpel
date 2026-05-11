@@ -44,9 +44,8 @@ _SEGMENT_NOTES: dict[str, str] = {
     "Tools schema": "function-calling schema for project tools",
     "Skills": "active test/lint/format contracts",
     "Recipes": "learned templates (learn --type recipe)",
-    "Project files": "on-demand via list_files tool — 0 until the model calls it",
     "Memory recall": "top-3 hits from /remember notes",
-    "Conversation": "history (incl. tool results); /compact + auto summaries shrink",
+    "Conversation": "history + tool results (list_files, read_file, …); /compact shrinks",
     "Free space": "left for the next model reply",
 }
 
@@ -157,11 +156,11 @@ def build(
     ctx_limit: int,
     system_prompt: str,
     tools_schema_text: str,
-    overview_text: str,
     recall_text: str,
     history_text: str,
     skills_text: str = "",
     recipes_text: str = "",
+    overview_text: str = "",  # deprecated — kept for old callsites, not rendered
 ) -> ContextReport:
     """Materialise a ContextReport from the raw building blocks of a
     turn. All inputs are strings — the caller pre-stringifies anything
@@ -178,21 +177,19 @@ def build(
     /compact) we clamp to 0 so the row stays positive — the headline
     "used" number already signals over-budget.
     """
+    # overview_text is deprecated — used to be a "Project files" segment
+    # that pre-injected paths every turn. Now that's the list_files tool's
+    # output, which lands in Conversation when invoked. Fold any legacy
+    # value the caller passes into history_tokens instead of dropping it
+    # on the floor, so old call-sites don't quietly under-count.
     sys_tokens = _tokens(system_prompt)
     tools_tokens = _tokens(tools_schema_text)
     skills_tokens = _tokens(skills_text)
     recipes_tokens = _tokens(recipes_text)
-    overview_tokens = _tokens(overview_text)
     recall_tokens = _tokens(recall_text)
-    history_tokens = _tokens(history_text)
+    history_tokens = _tokens(history_text) + _tokens(overview_text)
     used = (
-        sys_tokens
-        + tools_tokens
-        + skills_tokens
-        + recipes_tokens
-        + overview_tokens
-        + recall_tokens
-        + history_tokens
+        sys_tokens + tools_tokens + skills_tokens + recipes_tokens + recall_tokens + history_tokens
     )
     free = max(0, ctx_limit - used) if ctx_limit else 0
 
@@ -206,7 +203,6 @@ def build(
         ContextSegment("Tools schema", tools_tokens, pct(tools_tokens)),
         ContextSegment("Skills", skills_tokens, pct(skills_tokens)),
         ContextSegment("Recipes", recipes_tokens, pct(recipes_tokens)),
-        ContextSegment("Project files", overview_tokens, pct(overview_tokens)),
         ContextSegment("Memory recall", recall_tokens, pct(recall_tokens)),
         ContextSegment("Conversation", history_tokens, pct(history_tokens)),
     ]

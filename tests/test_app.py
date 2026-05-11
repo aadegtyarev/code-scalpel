@@ -1624,7 +1624,11 @@ async def test_slash_context_mounts_breakdown_card(sandbox: Path) -> None:
         assert "Context Usage" in body
         assert "System prompt" in body
         assert "Tools schema" in body
-        assert "Project files" in body
+        # "Project files" segment removed — listing is now on-demand
+        # via list_files tool, its cost lands in Conversation.
+        assert "Project files" not in body
+        assert "Skills" in body
+        assert "Conversation" in body
 
 
 @pytest.mark.asyncio

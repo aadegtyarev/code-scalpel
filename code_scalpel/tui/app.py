@@ -343,7 +343,6 @@ class ScalpelApp(App[None]):
             ctx_limit=self.state.context_limit,
             system_prompt=system,
             tools_schema_text=tools_text,
-            overview_text="",
             recall_text="",
             history_text=history,
             skills_text=skills_text,

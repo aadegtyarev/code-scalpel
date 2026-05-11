@@ -22,12 +22,11 @@ def test_build_sums_segments_into_used() -> None:
         ctx_limit=16000,
         system_prompt="x" * 4000,  # 1000 tokens
         tools_schema_text="y" * 2000,  # 500 tokens
-        overview_text="z" * 800,  # 200 tokens
         recall_text="",
         history_text="w" * 400,  # 100 tokens
     )
-    # 1000 + 500 + 200 + 0 + 100 = 1800
-    assert report.used_tokens == 1800
+    # 1000 + 500 + 0 + 100 = 1600
+    assert report.used_tokens == 1600
 
 
 def test_build_computes_free_space_when_limit_known() -> None:
@@ -36,7 +35,6 @@ def test_build_computes_free_space_when_limit_known() -> None:
         ctx_limit=16000,
         system_prompt="x" * 4000,
         tools_schema_text="",
-        overview_text="",
         recall_text="",
         history_text="",
     )
@@ -54,7 +52,6 @@ def test_build_clamps_free_space_to_zero_on_overflow() -> None:
         ctx_limit=1000,
         system_prompt="x" * 80_000,  # 20k tokens, way over 1k limit
         tools_schema_text="",
-        overview_text="",
         recall_text="",
         history_text="",
     )
@@ -71,7 +68,6 @@ def test_build_omits_free_segment_when_limit_unknown() -> None:
         ctx_limit=0,
         system_prompt="x" * 4000,
         tools_schema_text="",
-        overview_text="",
         recall_text="",
         history_text="",
     )
@@ -85,7 +81,6 @@ def test_segments_carry_percent_when_limit_known() -> None:
         ctx_limit=16000,
         system_prompt="x" * 4000,
         tools_schema_text="",
-        overview_text="",
         recall_text="",
         history_text="",
     )
@@ -100,7 +95,6 @@ def test_segments_percent_is_none_without_limit() -> None:
         ctx_limit=0,
         system_prompt="x" * 400,
         tools_schema_text="",
-        overview_text="",
         recall_text="",
         history_text="",
     )
@@ -114,7 +108,6 @@ def test_render_contains_model_and_used_line() -> None:
         ctx_limit=16000,
         system_prompt="x" * 4000,
         tools_schema_text="",
-        overview_text="",
         recall_text="",
         history_text="",
     )
@@ -123,18 +116,20 @@ def test_render_contains_model_and_used_line() -> None:
     # New format uses thousand-separated comma + full number.
     assert "1,000 / 16,000 tokens" in out
     assert "What's in context right now:" in out
-    # All segments visible (Skills/Recipes added)
+    # All segments visible. "Project files" used to be its own row
+    # — it's gone now because list_files is on-demand and its cost
+    # lands in Conversation (with the rest of the tool round-trips).
     for name in (
         "System prompt",
         "Tools schema",
         "Skills",
         "Recipes",
-        "Project files",
         "Memory recall",
         "Conversation",
         "Free space",
     ):
         assert name in out
+    assert "Project files" not in out
 
 
 def test_render_handles_unknown_limit_gracefully() -> None:
@@ -143,7 +138,6 @@ def test_render_handles_unknown_limit_gracefully() -> None:
         ctx_limit=0,
         system_prompt="x" * 4000,
         tools_schema_text="",
-        overview_text="",
         recall_text="",
         history_text="",
     )
@@ -161,7 +155,6 @@ def test_render_progress_bar_uses_unicode_blocks() -> None:
         ctx_limit=16000,
         system_prompt="x" * (4000 * 4),  # exactly 4000 tokens = 25%
         tools_schema_text="",
-        overview_text="",
         recall_text="",
         history_text="",
     )
@@ -182,7 +175,6 @@ def test_render_groups_used_with_explicit_subtotal() -> None:
         ctx_limit=16000,
         system_prompt="x" * 4000,
         tools_schema_text="",
-        overview_text="",
         recall_text="",
         history_text="",
     )
@@ -203,7 +195,6 @@ def test_render_carries_short_notes_per_segment() -> None:
         ctx_limit=16000,
         system_prompt="x" * 4000,
         tools_schema_text="y" * 1000,
-        overview_text="",
         recall_text="",
         history_text="",
     )
@@ -225,7 +216,6 @@ def test_render_includes_skills_and_recipes_segments() -> None:
         ctx_limit=16000,
         system_prompt="",
         tools_schema_text="",
-        overview_text="",
         recall_text="",
         history_text="",
     )
@@ -242,7 +232,6 @@ def test_build_accepts_skills_and_recipes_text() -> None:
         ctx_limit=16000,
         system_prompt="",
         tools_schema_text="",
-        overview_text="",
         recall_text="",
         history_text="",
         skills_text="x" * 400,  # 100t
