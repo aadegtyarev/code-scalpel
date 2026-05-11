@@ -1701,6 +1701,11 @@ class Session:
   тронуты.
 - ✓ informal tone в system prompt — «ты», не «вы»; без «Извините,
   пожалуйста, переформулируйте». Колли́гиальный тон, не корпоративный.
+- ✓ grounding rules в system prompt + 4 retrieval-теста в LLM-бенче:
+  «map авторитетна, не выдумывай», «cite path:symbol», «read_file перед
+  показом кода». Бенч-кейсы: admit-missing-method, reads-file-first,
+  не-инвентируй-метод-AgentState (точная репродукция бага 2026-05-11),
+  cite-file-when-pointing. Регрессионная защита от галлюцинаций.
 - ✓ TUI прозрачность пачкой:
   • model auto-detect через `/v1/models` + ручной override в config.
     Sentinel `"auto"` (плюс legacy `"local-model"`) → автодетект.

@@ -557,3 +557,132 @@ async def test_qwen_navigates_multi_file_project(tmp_path: Path) -> None:
 
     out = (tmp_path / "helpers.py").read_text()
     assert "int" in out and "->" in out
+
+
+# ── grounding / anti-hallucination ───────────────────────────────────────────
+# These cases lock in the prompt's "do not make things up" clause. They
+# exist because of the 2026-05-11 regression where the model invented
+# AgentState.summary_line() — a method that doesn't exist — when asked
+# where summarization lived in the project.
+
+
+_ADMITS_MISSING = (
+    # English
+    "doesn't exist",
+    "does not exist",
+    "not found",
+    "no such",
+    "couldn't find",
+    "i don't see",
+    "isn't in",
+    "is not in",
+    "not present",
+    # Russian
+    "не существует",
+    "нет такого",
+    "не найден",
+    "не найдено",
+    "не вижу",
+    "отсутствует",
+    "нет метода",
+    "нет в",
+)
+
+
+def _admits_missing(reply: str) -> bool:
+    low = reply.lower()
+    return any(phrase in low for phrase in _ADMITS_MISSING)
+
+
+@pytest.mark.llm
+async def test_qwen_admits_missing_method(tmp_path: Path) -> None:
+    """Asked about a method that doesn't exist, model must say so — not
+    fabricate a plausible name."""
+    (tmp_path / "store.py").write_text(
+        "class Cache:\n"
+        "    def get(self, key):\n        return None\n"
+        "    def set(self, k, v):\n        pass\n"
+    )
+    agent = _make_agent(tmp_path)
+    result = await agent.ask("Где в проекте реализован метод .summarize() у класса Cache?")
+    assert _admits_missing(result.reply), (
+        f"model didn't admit summarize() is missing:\n{result.reply[:500]}"
+    )
+
+
+@pytest.mark.llm
+async def test_qwen_reads_file_before_showing_code(tmp_path: Path) -> None:
+    """Asked to SHOW code, the model must ground via read_file/grep rather
+    than reproducing from memory based on the symbol name."""
+    (tmp_path / "lib.py").write_text("def add(a, b):\n    return a + b\n")
+    agent = _make_agent(tmp_path)
+
+    real_chat = agent._llm.chat
+    tools_seen: list[str] = []
+
+    async def spy(messages: list[dict[str, object]], **kw: object) -> object:
+        resp = await real_chat(messages, **kw)  # type: ignore[arg-type]
+        for tc in resp.tool_calls:
+            tools_seen.append(tc.name)
+        return resp
+
+    agent._llm.chat = spy  # type: ignore[assignment]
+    await agent.ask("Покажи код функции add из lib.py")
+    assert any(t in tools_seen for t in ("read_file", "grep")), (
+        f"model produced code without reading the file. tools_seen={tools_seen}"
+    )
+
+
+@pytest.mark.llm
+async def test_qwen_does_not_invent_class_method_from_intent(tmp_path: Path) -> None:
+    """The exact bug from 2026-05-11: AgentState exists but summary_line
+    doesn't. Asking 'find where summarization is implemented' must NOT
+    confabulate. Either the model says it's not there, or it names a real
+    symbol that DOES exist."""
+    import textwrap
+
+    (tmp_path / "state.py").write_text(
+        textwrap.dedent("""\
+            from pydantic import BaseModel
+
+
+            class AgentState(BaseModel):
+                step_id: int = 0
+                dirty_patch: bool = False
+
+                def save(self, root):
+                    pass
+
+                @classmethod
+                def load(cls, root):
+                    pass
+
+                @classmethod
+                def reset(cls, root):
+                    pass
+        """)
+    )
+    agent = _make_agent(tmp_path)
+    result = await agent.ask("найди где в проекте суммаризация контента")
+
+    # The fabrications observed in the bug
+    forbidden = ("summary_line", "summarize_content", "summarize_state")
+    low = result.reply.lower()
+    invented = [w for w in forbidden if w in low]
+    if invented:
+        assert _admits_missing(result.reply), (
+            f"model invented {invented} without flagging it as missing:\n{result.reply[:600]}"
+        )
+
+
+@pytest.mark.llm
+async def test_qwen_cites_file_when_pointing(tmp_path: Path) -> None:
+    """When answering 'where is X', a grounded reply names the path that
+    the model can see in the map. Substring check for the actual file."""
+    (tmp_path / "math_ops.py").write_text("def compute(x, y):\n    return x + y\n")
+    (tmp_path / "other.py").write_text("# unrelated\n")
+    agent = _make_agent(tmp_path)
+    result = await agent.ask("Где определена функция compute?")
+    assert "math_ops.py" in result.reply, (
+        f"reply didn't cite the actual file path:\n{result.reply[:400]}"
+    )

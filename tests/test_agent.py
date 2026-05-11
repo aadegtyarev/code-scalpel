@@ -421,7 +421,10 @@ async def test_clear_history_drops_past_turns(project: Path) -> None:
     agent.clear_history()
     await agent.ask("second")
 
-    second_call_contents = "\n".join(str(m.get("content") or "") for m in llm.calls[1])
+    # Only look at user/assistant messages — the system prompt is a fixed
+    # blob that may legitimately contain words like "first" in its rules.
+    non_system = [m for m in llm.calls[1] if m.get("role") != "system"]
+    second_call_contents = "\n".join(str(m.get("content") or "") for m in non_system)
     assert "first" not in second_call_contents
     assert "second" in second_call_contents
 
@@ -482,3 +485,20 @@ async def test_system_prompt_demands_informal_tone() -> None:
     assert "Извините" in text
     # Tone keyword anchors the section
     assert "tone" in text.lower()
+
+
+@pytest.mark.asyncio
+async def test_system_prompt_carries_grounding_rules() -> None:
+    """Grounding rules are the anti-hallucination clause. They MUST stay in
+    the prompt — without them the model invents method names from thin air
+    (see the summary_line() regression caught on 2026-05-11)."""
+    from code_scalpel.agent import _SYSTEM_PROMPT
+
+    text = _SYSTEM_PROMPT.lower()
+    assert "grounding" in text
+    # Map authority claim is the core of the rule
+    assert "authoritative" in text or "does not exist" in text
+    # Calling read_file before quoting code is explicit
+    assert "read_file" in text and ("quote" in text or "show" in text)
+    # And don't reconstruct from memory
+    assert "memory" in text or "guess" in text
