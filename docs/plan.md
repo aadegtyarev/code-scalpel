@@ -1951,18 +1951,85 @@ PythonSkill built-in
 DockerSkill (component skill демо)
 learn command (из знаний модели)
 session summary при выходе
-dual-model setup (HOOK, подтверждён данными бенча):
+dual-model setup — ОТЛОЖЕНО ДО ПОСЛЕ v0.4 (см. ниже).
   Кросс-модельный замер показал что:
     • coder-14b — лучший Pareto-выбор (96% качества, 45s)
     • gemma-4-26b-a4b — лучшее качество (100%, но 120s)
     • gpt-oss-20b — кандидат для plan/review (общее рассуждение)
-  Архитектура v0.3:
-    • два профиля в config: `coder` (быстрый patch'ер) и `planner`
-      (умный для plan/review/explain). Можно gemma+coder локально,
-      или coder локально + Claude/GPT через API.
-    • Агент эскалирует определённые операции (planner / debug-loop
-      / спорные edit'ы) на «второй» профиль.
-    • Развилка между single-model и dual режимами — конфиг, не код.
+  Архитектура (когда будем делать) — ТРИ ВАРИАНТА dual-mode:
+    (A) **API подписка для умного профиля**: coder локально +
+        Claude/GPT через API для plan/review. Минус — compliance
+        сегмент не может, нужно либо отказаться от него либо
+        делать опт-ин.
+    (B) **Co-resident локально**: gemma+coder одновременно в VRAM
+        (если влезает). Быстрая эскалация, нулевая задержка
+        swap'а. Минус — мало у кого 30+ GB VRAM.
+    (C) **Sequential local model swap**: planner-фазы грузят
+        тяжёлую модель (gemma-4-26b / gpt-oss-20b / qwen3.5-72b),
+        она думает 5–20 минут над планом/ревью, потом
+        выгружается, грузится coder-14b и кодит по плану.
+        LM Studio /v1/models позволяет programmatic-swap; это
+        работает и на 16 GB VRAM. Архитектурно — `model_phases`
+        в config: `{plan: heavy, code: fast, review: heavy}`.
+        Минус — общая latency растёт; компенсируется тем что
+        думающие фазы происходят редко и асинхронно (юзер
+        формулирует план один раз, потом 20 minutes can wait).
+    Развилка между всеми режимами — конфиг, не код. Один и тот же
+    StepAgent должен уметь работать в любой конфигурации.
+  СТРУКТУРА КОНФИГА (явное требование 2026-05-11):
+    Профиль — это набор моделей под разные agent-режимы; профилей
+    может быть несколько под разные задачи. Внутри профиля каждый
+    режим (ask/plan/code/review) → отдельная model spec. Дефолт
+    наследуется от профиля для режимов которые не переопределены.
+    Пример YAML:
+      profiles:
+        local-fast:                       # «всё локально, всё быстро»
+          default_model: qwen2.5-coder-14b
+          provider: lmstudio
+        local-heavy-plan:                 # вариант (C): swap для plan
+          default_model: qwen2.5-coder-14b
+          provider: lmstudio
+          modes:
+            plan:   { model: gemma-4-26b-a4b, swap: true }
+            review: { model: gemma-4-26b-a4b, swap: true }
+        api-mix:                          # вариант (A): coder лок + API ум
+          default_model: qwen2.5-coder-14b
+          provider: lmstudio
+          modes:
+            plan:   { model: claude-sonnet-4-5, provider: anthropic }
+            review: { model: claude-sonnet-4-5, provider: anthropic }
+        co-resident:                      # вариант (B): два в VRAM
+          default_model: qwen2.5-coder-14b
+          provider: lmstudio
+          modes:
+            plan:   { model: gemma-4-26b-a4b }
+            review: { model: gemma-4-26b-a4b }
+      active_profile: local-fast          # /profile slash в TUI переключает
+    `swap: true` на уровне режима говорит orchestrator'у выгрузить
+    coder перед запросом и загрузить heavy. После завершения режима
+    swap обратно. Решение про swap живёт в конфиге, не в коде агента.
+    На уровне кода: `ModelProfile` обрастает полем `modes:
+    dict[str, ModeOverride]`; `current_profile.model_for(mode)`
+    возвращает spec под текущий режим; LLMAdapter получает фабрику
+    которая умеет создавать клиент per-spec (lmstudio / anthropic /
+    openai / local-swap). Конфиг — единственная точка композиции.
+  ПРИНЦИП (явное product-решение, 2026-05-11):
+    Дальняя цель — подпереть локального 14b более умной моделью
+    для plan/review/architectural reasoning. Предпочтительный
+    путь — вариант (C) local sequential swap, потому что
+    сохраняет «полностью локально» позицию и не требует
+    подписки. Вариант (A) — опт-ин для тех у кого есть API
+    бюджет; вариант (B) — для счастливчиков с большим VRAM.
+    Но это NOT NOW. Сначала исчерпываем single-model локальный
+    путь: разбираемся с кодингом, supervised autonomous loop,
+    summaries, tree-sitter Phase 2. И только после того как
+    практика покажет конкретные неперебарываемые ограничения
+    (задокументированные в article + probe-результатах, а не
+    «кажется не тянет»), переходим к dual-model.
+    Иначе сравнение с Claude/большими моделями убивает мотивацию
+    делать одиночный локальный путь хорошо. Целевая позиция —
+    «локальный jr.dev для compliance-сегмента». Dual-model
+    (особенно (A)) — добавка для тех кто может, не дефолт.
 self-clarify loop (HOOK, экспериментально): когда модель в ходе задачи
   задаёт уточняющий вопрос пользователю — попробовать перехватить и
   скормить тот же вопрос ей же с другим контекстом. Два варианта:
