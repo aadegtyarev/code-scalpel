@@ -284,6 +284,24 @@ async def execute(
     )
 
 
+def _is_inside_project(target: Path, cwd: Path) -> bool:
+    """True iff `target` (after symlink resolution) actually lives under
+    `cwd`. The lexical "startswith / .." check is the first gate, but
+    a symlink inside the project pointing outside (e.g. a tracked
+    `secrets -> /etc/shadow`) walks past it — `is_file()` follows
+    symlinks. Calling `resolve()` on both sides catches that without
+    leaking error detail to the model.
+
+    `is_relative_to` requires the target to exist for symlink
+    resolution to behave; non-existent paths return False here and
+    upstream callers handle the missing-file case separately.
+    """
+    try:
+        return target.resolve().is_relative_to(cwd.resolve())
+    except (OSError, ValueError):
+        return False
+
+
 def _decode_args(body: str) -> dict[str, Any]:
     """Tool args can come either as JSON (native function calling) or as raw
     text (legacy <TOOL> format). Try JSON first, fall back to legacy."""
@@ -305,7 +323,7 @@ def _tool_read_file(call: ToolCall, cwd: Path, *, max_lines: int) -> ToolResult:
     path_str = str(args.get("path", args.get("_raw", ""))).strip()
     if not path_str:
         return ToolResult(call, output="error: missing file path", ok=False)
-    # Reject absolute / parent-escaping paths
+    # Reject absolute / parent-escaping paths (lexical gate)
     if path_str.startswith("/") or ".." in Path(path_str).parts:
         return ToolResult(
             call, output=f"error: path must be inside the project: {path_str}", ok=False
@@ -313,6 +331,12 @@ def _tool_read_file(call: ToolCall, cwd: Path, *, max_lines: int) -> ToolResult:
     path = cwd / path_str
     if not path.is_file():
         return ToolResult(call, output=f"error: file not found: {path_str}", ok=False)
+    # Symlink gate — a tracked symlink could point at /etc/shadow even
+    # though the lexical path is clean. Resolve and verify containment.
+    if not _is_inside_project(path, cwd):
+        return ToolResult(
+            call, output=f"error: path must be inside the project: {path_str}", ok=False
+        )
     try:
         content = read_file(path, max_lines=max_lines)
     except OSError as e:
@@ -376,6 +400,11 @@ def _tool_map_file(call: ToolCall, cwd: Path) -> ToolResult:
         return ToolResult(
             call, output=f"error: path must be inside the project: {path_str}", ok=False
         )
+    # Symlink gate — same reasoning as _tool_read_file.
+    if not _is_inside_project(cwd / path_str, cwd):
+        return ToolResult(
+            call, output=f"error: path must be inside the project: {path_str}", ok=False
+        )
     try:
         block = build_file_map(cwd, path_str)
     except OSError as e:
@@ -404,6 +433,8 @@ async def _tool_grep(call: ToolCall, cwd: Path, runner: ShellRunner) -> ToolResu
         where = cwd / rel
         if not where.exists():
             return ToolResult(call, output=f"error: path not found: {rel}", ok=False)
+        if not _is_inside_project(where, cwd):
+            return ToolResult(call, output=f"error: path must be inside project: {rel}", ok=False)
     if shutil.which("rg") is not None:
         try:
             matches = await ripgrep(pattern, where, runner, max_results=30, context_lines=0)

@@ -326,3 +326,42 @@ async def test_find_references_missing_name_errors(tmp_path: Path) -> None:
     result = await execute(call, tmp_path)
     assert not result.ok
     assert "missing" in result.output
+
+
+# ── symlink escape guard (security fix from session review) ──────────────────
+
+
+@pytest.mark.asyncio
+async def test_read_file_rejects_symlink_pointing_outside_project(tmp_path: Path) -> None:
+    """A symlink with a lexically clean name but a target outside the
+    project must NOT be served. Lexical path validation (startswith /,
+    ..) is the first gate; symlink resolution is the backstop. Without
+    this, a tracked `secrets -> /etc/passwd` symlink would slip past
+    read_file and leak host content into the model's context."""
+    outside = tmp_path.parent / "secret_outside.txt"
+    outside.write_text("HOST SECRET")
+    project = tmp_path / "project"
+    project.mkdir()
+    (project / "ok.py").write_text("x = 1\n")
+    (project / "leak").symlink_to(outside)
+
+    call = ToolCall(name="read_file", body='{"path": "leak"}')
+    result = await execute(call, project)
+    assert not result.ok
+    assert "inside the project" in result.output
+    assert "HOST SECRET" not in result.output
+
+
+@pytest.mark.asyncio
+async def test_map_file_rejects_symlink_escape(tmp_path: Path) -> None:
+    outside_dir = tmp_path.parent / "outside_pkg"
+    outside_dir.mkdir(exist_ok=True)
+    (outside_dir / "secret.py").write_text("def secret_fn(): pass\n")
+    project = tmp_path / "project"
+    project.mkdir()
+    (project / "leak.py").symlink_to(outside_dir / "secret.py")
+
+    call = ToolCall(name="map_file", body='{"path": "leak.py"}')
+    result = await execute(call, project)
+    assert not result.ok
+    assert "inside the project" in result.output
