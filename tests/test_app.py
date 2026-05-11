@@ -1110,12 +1110,26 @@ async def test_code_mode_iterative_loop_disabled_uses_streaming_path(sandbox: Pa
         assert mock_llm.calls, "expected the streaming path to be used"
 
 
+_BAD_PATCH_STREAM = (
+    "I'll fix it.\n\n"
+    "missing.py\n"
+    "```python\n"
+    "<<<<<<< SEARCH\n"
+    "no such line in target\n"
+    "=======\n"
+    "replacement\n"
+    ">>>>>>> REPLACE\n"
+    "```\n"
+)
+
+
 @pytest.mark.asyncio
 async def test_code_mode_iterative_loop_enabled_invokes_code_with_retry(
     sandbox: Path,
 ) -> None:
     """With iterative_patch_loop on AND mode=code, the user message must
-    route through code_with_retry — that's the whole point of the wiring."""
+    route through code_with_retry when the streamed first attempt fails.
+    First attempt streams; failure falls through to the retry pipeline."""
     from unittest.mock import AsyncMock
 
     from code_scalpel.tui.widgets.input import UserMessage
@@ -1126,9 +1140,13 @@ async def test_code_mode_iterative_loop_enabled_invokes_code_with_retry(
         agent=AgentConfig(max_files=0, max_file_lines=10, iterative_patch_loop=True),
     )
     app = ScalpelApp(config=config, cwd=sandbox)
+    # Stream produces a SEARCH/REPLACE block that won't apply (target file
+    # missing). _run_first_attempt_streamed extracts edits, fails to apply,
+    # falls through to code_with_retry — which we mock for deterministic
+    # output.
     async with app.run_test(headless=True, size=(80, 24)) as pilot:
         await pilot.pause(0.1)
-        _attach_mock(app, _StreamingMock([""]))
+        _attach_mock(app, _StreamingMock([_BAD_PATCH_STREAM]))
         assert app._agent is not None
 
         result = _make_step_result(
@@ -1146,7 +1164,7 @@ async def test_code_mode_iterative_loop_enabled_invokes_code_with_retry(
         app._handle_slash("/mode code")
         await pilot.pause(0.05)
         app.post_message(UserMessage("change x"))
-        await pilot.pause(0.4)
+        await pilot.pause(0.5)
 
         app._agent.code_with_retry.assert_called_once()  # type: ignore[attr-defined]
         output = app.query_one(OutputLog)
@@ -1172,7 +1190,7 @@ async def test_iterative_loop_renders_each_attempt_as_card(sandbox: Path) -> Non
     app = ScalpelApp(config=config, cwd=sandbox)
     async with app.run_test(headless=True, size=(80, 24)) as pilot:
         await pilot.pause(0.1)
-        _attach_mock(app, _StreamingMock([""]))
+        _attach_mock(app, _StreamingMock([_BAD_PATCH_STREAM]))
         assert app._agent is not None
 
         result = _make_step_result(
@@ -1236,7 +1254,7 @@ async def test_iterative_loop_failure_surfaces_final_diff_for_manual_review(
     app = ScalpelApp(config=config, cwd=sandbox)
     async with app.run_test(headless=True, size=(80, 24)) as pilot:
         await pilot.pause(0.1)
-        _attach_mock(app, _StreamingMock([""]))
+        _attach_mock(app, _StreamingMock([_BAD_PATCH_STREAM]))
         assert app._agent is not None
 
         result = _make_step_result(
@@ -1445,6 +1463,67 @@ async def test_slash_run_cancellation_routes_through_step_worker(
         await pilot.press("escape")
         await pilot.pause(0.2)
         assert worker.is_cancelled or worker.is_finished
+
+
+@pytest.mark.asyncio
+async def test_iterative_loop_streams_first_attempt(sandbox: Path) -> None:
+    """Debt #1: первая попытка /loop должна стримиться, чтобы юзер видел
+    что модель работает, а не пялился в замёрзший экран 30-90 секунд.
+    Перехватываем `Static.update` на placeholder'е, который вернул
+    `start_streaming`, и убеждаемся что он получил вызовы во время
+    стриминга первого аттемпта."""
+    from unittest.mock import AsyncMock
+
+    from code_scalpel.tui.widgets.input import UserMessage
+    from code_scalpel.tui.widgets.output import OutputLog as _OutputLog
+
+    chunks = ["First", " bit", " of", " a", " streamed", " reply.\n"]
+
+    captured_updates: list[str] = []
+
+    real_start_streaming = _OutputLog.start_streaming
+
+    def spy_start_streaming(self: _OutputLog) -> Any:
+        placeholder = real_start_streaming(self)
+        real_update = placeholder.update
+
+        def spy_update(text: Any = "", *args: Any, **kwargs: Any) -> None:
+            captured_updates.append(str(text))
+            real_update(text, *args, **kwargs)
+
+        placeholder.update = spy_update  # type: ignore[method-assign]
+        return placeholder
+
+    config = AppConfig(
+        profiles={"local": ModelProfile(provider="lmstudio", model="local-model")},
+        agent=AgentConfig(max_files=0, max_file_lines=10, iterative_patch_loop=True),
+    )
+    app = ScalpelApp(config=config, cwd=sandbox)
+    async with app.run_test(headless=True, size=(80, 24)) as pilot:
+        await pilot.pause(0.1)
+        # Tiny delay between chunks lets the placeholder mount before the
+        # first update() lands (mount goes through a worker).
+        _attach_mock(app, _StreamingMock(chunks, delay=0.01))
+        assert app._agent is not None
+        # We don't care what happens after the streamed attempt — short-
+        # circuit `code_with_retry` so the test stays fast.
+        app._agent.code_with_retry = AsyncMock(  # type: ignore[method-assign]
+            return_value=_make_step_result(reply="", attempts=())
+        )
+
+        _OutputLog.start_streaming = spy_start_streaming  # type: ignore[method-assign]
+        try:
+            app._handle_slash("/mode code")
+            await pilot.pause(0.05)
+            app.post_message(UserMessage("stream please"))
+            await pilot.pause(0.5)
+        finally:
+            _OutputLog.start_streaming = real_start_streaming  # type: ignore[method-assign]
+
+        assert captured_updates, "placeholder.update() must fire during streaming"
+        # The accumulated text on the last update should contain the
+        # streamed payload — proves the stream was actually visible.
+        assert any("streamed reply" in u for u in captured_updates)
 
 
 @pytest.mark.asyncio

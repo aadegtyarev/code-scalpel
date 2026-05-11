@@ -129,3 +129,25 @@ def test_memory_entry_is_frozen(tmp_path: Path) -> None:
     entry: MemoryEntry = store.all()[0]
     with pytest.raises(AttributeError):
         entry.text = "changed"  # type: ignore[misc]
+
+
+def test_add_accepts_note_at_cap(tmp_path: Path) -> None:
+    """Граница принимается — отказывать ровно на пределе было бы
+    неожиданным сюрпризом."""
+    from code_scalpel.memory import _MAX_NOTE_CHARS
+
+    store = MemoryStore(root=tmp_path)
+    text = "a" * _MAX_NOTE_CHARS
+    store.add(text)
+    assert len(store) == 1
+
+
+def test_add_rejects_oversized_note(tmp_path: Path) -> None:
+    """Заметка длиннее лимита падает с ValueError, а не молча урезается."""
+    from code_scalpel.memory import _MAX_NOTE_CHARS
+
+    store = MemoryStore(root=tmp_path)
+    text = "a" * (_MAX_NOTE_CHARS + 1)
+    with pytest.raises(ValueError, match="note too long"):
+        store.add(text)
+    assert len(store) == 0

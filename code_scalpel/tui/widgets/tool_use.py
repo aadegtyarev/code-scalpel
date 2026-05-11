@@ -200,6 +200,13 @@ class ToolUseCard(Widget):
                     classes="body",
                 )
 
+    # CSS-селектор по имени класса — пускаем DOM-query вместо импорта
+    # `textual.widgets._collapsible.CollapsibleTitle`. Подчёркивание =
+    # «может уехать между минорами»; имя класса в DOM публичнее, чем
+    # путь импорта. Если когда-нибудь Textual переименует виджет,
+    # упадёт ровно одна точка — здесь, а не у пользователя.
+    _TITLE_SELECTOR = "CollapsibleTitle"
+
     def on_mount(self) -> None:
         # CollapsibleTitle is focusable by default, which means every
         # history tool card lands a Tab stop. The user complaint: Tab from
@@ -207,9 +214,7 @@ class ToolUseCard(Widget):
         # actionable. Strip the title (and any child widget — read-only
         # bodies don't need keyboard focus either) out of the Tab cycle.
         # Programmatic focus via Ctrl+↑/↓ still works — see focus_card().
-        from textual.widgets._collapsible import CollapsibleTitle
-
-        for title in self.query(CollapsibleTitle):
+        for title in self.query(self._TITLE_SELECTOR):
             title.can_focus = False
 
     def focus_card(self) -> None:
@@ -223,10 +228,8 @@ class ToolUseCard(Widget):
         Enter/Space on the focused title fire Collapsible's built-in
         toggle action; the user gets fold/unfold for free.
         """
-        from textual.widgets._collapsible import CollapsibleTitle
-
         try:
-            title = self.query_one(CollapsibleTitle)
+            title = self.query_one(self._TITLE_SELECTOR)
         except Exception:
             return
         title.can_focus = True

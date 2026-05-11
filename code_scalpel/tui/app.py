@@ -333,6 +333,7 @@ class ScalpelApp(App[None]):
             # — otherwise the agent's recall would miss anything saved this
             # session until the next /new.
             if self._agent is not None:
+                # TODO(phase-3-cleanup): need public StepAgent.attach_memory(...)
                 self._agent._memory = self._memory
         return self._memory
 
@@ -695,15 +696,15 @@ class ScalpelApp(App[None]):
             self.jobs.finish(job_id)
 
     async def _run_code_with_retry(self, task: str) -> None:
-        """Code mode + iterative_patch_loop: let the agent run apply→test→retry
-        itself, rendering each attempt as an inline ToolUseCard. The user no
-        longer mashes [g] N times to wear the model down — the agent does it
-        and only surfaces the manual review card if every attempt failed.
+        """Code mode + iterative_patch_loop: stream attempt 1 so the user
+        sees tokens in real time (weak local 14B спокойно молчит 30-90 с),
+        then — if attempt 1 didn't land — bounce through `code_with_retry`
+        for the non-streamed retry sequence.
 
-        Each attempt becomes a `patch_attempt_{idx}` ToolUseCard whose body
-        is the synthesised diff + test output. The card's ok dot tracks
-        `attempt.tests_passed`, mirroring how every other tool card signals
-        success/failure at a glance."""
+        Each rendered attempt becomes a `patch_attempt_{idx}` ToolUseCard
+        whose body is the synthesised diff + test output. The card's ok dot
+        tracks `attempt.tests_passed`, mirroring how every other tool card
+        signals success/failure at a glance."""
         import time
 
         output = self.query_one(OutputLog)
@@ -716,6 +717,47 @@ class ScalpelApp(App[None]):
             footer.status = "◌ patch loop…"
             output.print_status(f"● Running patch loop (max attempts: {max_attempts})")
             try:
+                first = await self._run_first_attempt_streamed(task)
+            except asyncio.CancelledError:
+                output.print_status("● Cancelled.")
+                footer.status = "● idle"
+                raise
+            except Exception as e:
+                output.print_error(f"Error: {e}")
+                footer.status = "● error"
+                return
+
+            # No SEARCH/REPLACE blocks in the streamed reply — model
+            # answered in plain text (question / "no change needed").
+            # Loop has nothing to retry; mirror the regular ask path.
+            if first is None:
+                duration = time.monotonic() - start
+                self._record_loop_usage(task, "", duration, 0)
+                footer.status = "● idle"
+                return
+
+            attempt1, reply1 = first
+
+            # Happy path: streamed attempt landed AND tests are green.
+            # No need to invoke the retry pipeline at all.
+            if attempt1.apply_ok and attempt1.tests_passed:
+                call = ToolCall(name="patch_attempt_1", body="")
+                body = self._render_attempt(attempt1)
+                tool_result = ToolResult(call=call, output=body, ok=True)
+                output.add_tool_use(call, tool_result)
+                self._last_tool_result = tool_result
+                duration = time.monotonic() - start
+                self._record_loop_usage(task, reply1, duration, 1)
+                output.print_status("● Patch loop succeeded after 1 attempt(s).")
+                footer.status = "● idle"
+                return
+
+            # Attempt 1 didn't land. Hand off to `code_with_retry` for the
+            # remaining attempts. It re-runs the model once more from
+            # scratch (no way to pass attempt-1 history cheaply without
+            # touching agent.py) and then iterates; we surface the full
+            # set of attempts it tries, so the visible history is honest.
+            try:
                 result = await self._agent.code_with_retry(task)
             except asyncio.CancelledError:
                 output.print_status("● Cancelled.")
@@ -727,10 +769,9 @@ class ScalpelApp(App[None]):
                 return
 
             attempts = result.attempts
-            # Plain-text answer (no SEARCH/REPLACE blocks) — surface the
-            # reply same as the streaming path would and bail. Loop did
-            # nothing to retry.
             if not attempts:
+                # Model degraded into plain-text on the non-streamed retry.
+                # Surface its reply and bail — same as the no-edits branch.
                 if result.reply:
                     output.print_assistant(result.reply)
                 duration = time.monotonic() - start
@@ -768,6 +809,109 @@ class ScalpelApp(App[None]):
                     footer.status = "● reviewing"
                 else:
                     footer.status = "● idle"
+
+    async def _run_first_attempt_streamed(self, task: str) -> tuple[PatchAttempt, str] | None:
+        """Stream the first /loop attempt so the user sees tokens instead
+        of staring at a frozen screen for 30-90s. Returns:
+
+        - None — model answered in plain text (no SEARCH/REPLACE blocks);
+          treat as "no patch wanted", caller surfaces the reply.
+        - (attempt, full_reply) — edits were extracted and we tried to
+          apply + test them. The PatchAttempt mirrors what `code_with_retry`
+          would produce for one iteration, so the caller can render it
+          identically.
+
+        The OutputLog placeholder is removed once we know the shape of the
+        reply — we don't want the live token stream to linger AND a card
+        to appear below it.
+        """
+        import time
+
+        from code_scalpel.patch.edit_block import apply_edits
+
+        output = self.query_one(OutputLog)
+        assert self._agent is not None
+
+        progress = output.start_turn_progress()
+        placeholder = output.start_streaming()
+        await self._wait_mounted(progress)
+        await self._wait_mounted(placeholder)
+
+        full = ""
+        chunks = 0
+        tool_calls = 0
+        start = time.monotonic()
+        last_tick = start
+        async for item in self._agent.stream_ask(task, mode="code"):
+            if isinstance(item, TextDelta):
+                full += item.text
+                chunks += 1
+                placeholder.update(full)
+                output.scroll_end(animate=False)
+                now = time.monotonic()
+                if now - last_tick > 0.25:
+                    elapsed = now - start
+                    progress.update_progress(
+                        tokens=len(full) // 4,
+                        tool_calls=tool_calls,
+                        elapsed_s=elapsed,
+                        rate_tok_s=chunks / elapsed if elapsed > 0 else 0.0,
+                    )
+                    last_tick = now
+            elif isinstance(item, ToolExecuted):
+                tool_calls += 1
+                self._last_tool_result = item.result
+                placeholder.update(full)
+                await output.finalize_streaming(placeholder, full)
+                output.add_tool_use(item.call, item.result)
+                progress.update_progress(tool_calls=tool_calls)
+                full = ""
+                placeholder = output.start_streaming()
+                await self._wait_mounted(placeholder)
+
+        # The live stream is done; we'll render the result as cards from
+        # here on. Clean up the placeholder/progress so they don't sit
+        # under the upcoming attempt card.
+        await self._remove_progress(progress)
+        try:
+            if placeholder.is_mounted:
+                await placeholder.remove()
+        except Exception:
+            pass
+
+        edits = extract_edits(full)
+        if not edits:
+            # Plain text — surface as assistant reply and bail. No
+            # patch to apply, nothing to retry.
+            if full:
+                output.print_assistant(full)
+            return None
+
+        ok, err = apply_edits(edits, self.cwd)
+        if not ok:
+            return (
+                PatchAttempt(
+                    edits=tuple(edits),
+                    apply_ok=False,
+                    apply_error=err,
+                    test_output="",
+                    tests_passed=False,
+                ),
+                full,
+            )
+        # Apply succeeded — run tests through the agent (mirrors how
+        # `code_with_retry` measures pass/fail).
+        test_output, tests_passed = await self._agent._run_tests()
+        return (
+            PatchAttempt(
+                edits=tuple(edits),
+                apply_ok=True,
+                apply_error="",
+                test_output=test_output,
+                tests_passed=tests_passed,
+            ),
+            full,
+        )
 
     async def _run_plan(self) -> None:
         """Walk `.code-scalpel/TASKS.md` unattended through code_with_retry.

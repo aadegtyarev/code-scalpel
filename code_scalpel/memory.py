@@ -34,6 +34,11 @@ from pathlib import Path
 
 _DEFAULT_DB = Path(".code-scalpel") / "memory.db"
 
+# Жёсткий предел на размер одной заметки. /remember пушит текст в каждый
+# последующий auto-recall блок — 50KB «system: ignore previous» молча
+# раздули бы каждый turn. Лучше явный отказ, чем тихая порча контекста.
+_MAX_NOTE_CHARS = 2000
+
 _SCHEMA = """\
 CREATE TABLE IF NOT EXISTS memory (
     id          INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -93,6 +98,10 @@ class MemoryStore:
         cleaned = text.strip()
         if not cleaned:
             raise ValueError("memory text must be non-empty")
+        # Усечь молча было бы хуже — пользователь не узнает, что часть
+        # его инструкции потерялась. Лучше падать с понятным сообщением.
+        if len(cleaned) > _MAX_NOTE_CHARS:
+            raise ValueError(f"note too long: {len(cleaned)} > {_MAX_NOTE_CHARS} chars")
         now = datetime.now(UTC).isoformat()
         with self._conn() as conn:
             cur = conn.execute(
