@@ -507,3 +507,107 @@ async def test_system_prompt_carries_grounding_rules() -> None:
     assert "pattern recognition" in text or "you might" in text
     # And the dataclass anti-example is in (covers the screenshot bug shape).
     assert "dataclass" in text
+
+
+# ── plan mode ───────────────────────────────────────────────────────────────
+
+
+_PLAN_REPLY = """\
+Sure, here's the breakdown.
+
+## T001: Add note model
+
+Goal: Define a Note dataclass with title and body fields.
+Files: src/notes.py
+Acceptance:
+- Note has `title: str` and `body: str` fields
+- `__eq__` works by content
+Test command: pytest tests/test_notes.py::test_note_model
+
+## T002: Add search function
+
+Goal: Add search_notes(query) that filters notes by title or body.
+Files: src/notes.py, tests/test_notes.py
+Acceptance:
+- Case-insensitive substring match
+- Empty query returns all notes
+Test command: pytest tests/test_notes.py::test_search
+"""
+
+
+@pytest.mark.asyncio
+async def test_plan_mode_addendum_in_system_prompt() -> None:
+    """Plan mode appends a planning addendum that asks for TASKS.md output."""
+    from code_scalpel.agent import StepAgent
+
+    cfg = AppConfig(
+        profiles={"local": ModelProfile(provider="lmstudio", model="m")},
+        agent=AgentConfig(max_files=2, max_file_lines=50),
+    )
+    llm = MockLLMAdapter(["ok"])
+    agent = StepAgent(llm=llm, cwd=Path("."), config=cfg)
+    await agent.ask("plan something", mode="plan")
+    system = llm.calls[0][0]["content"]
+    assert "PLAN mode" in system
+    assert "## T001:" in system
+    assert "Acceptance:" in system
+    # SEARCH/REPLACE explicitly forbidden in plan mode
+    assert "NO SEARCH/REPLACE" in system
+
+
+@pytest.mark.asyncio
+async def test_ask_mode_does_not_inject_plan_addendum(project: Path) -> None:
+    """The plan-mode addendum must NOT leak into ask/code/review prompts."""
+    llm = MockLLMAdapter(["ok"])
+    agent = StepAgent(llm=llm, cwd=project, config=_CONFIG)
+    await agent.ask("question", mode="ask")
+    system = llm.calls[0][0]["content"]
+    assert "PLAN mode" not in system
+
+
+@pytest.mark.asyncio
+async def test_plan_mode_saves_tasks_md(project: Path) -> None:
+    """A reply that contains a `## T001:` plan gets persisted to
+    .code-scalpel/TASKS.md — that's the artifact the user (or run mode)
+    will execute next."""
+    llm = MockLLMAdapter([_PLAN_REPLY])
+    agent = StepAgent(llm=llm, cwd=project, config=_CONFIG)
+    await agent.ask("plan note search", mode="plan")
+    tasks_md = project / ".code-scalpel" / "TASKS.md"
+    assert tasks_md.is_file(), "expected TASKS.md to be written"
+    text = tasks_md.read_text()
+    assert text.startswith("## T001:")
+    assert "## T002:" in text
+    # Lead-in chatter is stripped
+    assert "Sure, here's" not in text
+
+
+@pytest.mark.asyncio
+async def test_plan_mode_skips_save_when_no_tasks_found(project: Path) -> None:
+    """If the model asked a clarifying question instead of producing a
+    plan, we shouldn't write a junk TASKS.md."""
+    llm = MockLLMAdapter(["What kind of search? Title only, or also body?"])
+    agent = StepAgent(llm=llm, cwd=project, config=_CONFIG)
+    await agent.ask("plan", mode="plan")
+    assert not (project / ".code-scalpel" / "TASKS.md").exists()
+
+
+@pytest.mark.asyncio
+async def test_ask_mode_does_not_write_tasks_md(project: Path) -> None:
+    """Even if an ask-mode reply happens to contain `## T001:` text,
+    don't auto-persist — that's plan mode's job."""
+    llm = MockLLMAdapter([_PLAN_REPLY])
+    agent = StepAgent(llm=llm, cwd=project, config=_CONFIG)
+    await agent.ask("question", mode="ask")
+    assert not (project / ".code-scalpel" / "TASKS.md").exists()
+
+
+@pytest.mark.asyncio
+async def test_stream_ask_in_plan_mode_also_saves(project: Path) -> None:
+    """TUI uses stream_ask, not ask. The plan-saving hook must fire from
+    the streaming path too."""
+    llm = MockLLMAdapter([_PLAN_REPLY])
+    agent = StepAgent(llm=llm, cwd=project, config=_CONFIG)
+    async for _ in agent.stream_ask("plan", mode="plan"):
+        pass
+    assert (project / ".code-scalpel" / "TASKS.md").is_file()

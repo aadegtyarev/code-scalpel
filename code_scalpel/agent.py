@@ -116,6 +116,36 @@ Rules:
   plain text only — no blocks."""
 
 
+_PLAN_MODE_ADDENDUM = """\
+
+You are currently in PLAN mode. Your job is to produce a structured task
+breakdown — NOT to write code or SEARCH/REPLACE blocks.
+
+Output exactly this format (Markdown), one ## T-prefixed heading per task,
+each task with the same five-line shape:
+
+## T001: <short imperative title>
+
+Goal: <one-line description of the outcome>
+Files: <comma-separated list of project files this task touches>
+Acceptance:
+- <bullet 1 — observable test or behaviour>
+- <bullet 2>
+Test command: <pytest command that proves done, or "manual" if N/A>
+
+## T002: ...
+
+Rules for plan mode:
+- 3-7 tasks total — split big work, but don't over-fragment.
+- Each task self-contained: a separate person could pick one up.
+- Files: real paths from the MAP. If a task needs new files, list the
+  path you'll create.
+- NO SEARCH/REPLACE blocks. NO code. Just the plan. The user will
+  switch to code mode to execute each task.
+- You MAY call read_file / grep to understand the project before
+  planning — that's encouraged. Don't plan blind."""
+
+
 @dataclass(frozen=True)
 class StepResult:
     reply: str
@@ -168,8 +198,14 @@ class StepAgent:
         self._history.clear()
 
     async def ask(self, task: str, *, mode: str = "ask") -> StepResult:
+        result = await self._chat_loop(task, mode=mode)
+        if mode == "plan":
+            self._maybe_save_plan(result.reply)
+        return result
+
+    async def _chat_loop(self, task: str, *, mode: str = "ask") -> StepResult:
         user_msg = self._user_message(task)
-        messages = self._initial_messages(user_msg)
+        messages = self._initial_messages(user_msg, mode=mode)
         profile = self._config.current_profile
 
         response: ChatResponse | None = None
@@ -273,7 +309,7 @@ class StepAgent:
         function-calling — model emits structured tool_calls instead of the
         old <TOOL: name> text format."""
         user_msg = self._user_message(task)
-        messages = self._initial_messages(user_msg)
+        messages = self._initial_messages(user_msg, mode=mode)
         profile = self._config.current_profile
         final_assistant = ""
 
@@ -325,11 +361,41 @@ class StepAgent:
             final_assistant = full
 
         self._remember(task, final_assistant)
+        if mode == "plan":
+            self._maybe_save_plan(final_assistant)
 
-    def _initial_messages(self, user_msg: str) -> list[dict[str, Any]]:
+    def _maybe_save_plan(self, reply: str) -> None:
+        """Persist the planner's TASKS.md output to .code-scalpel/TASKS.md.
+
+        Looks for the conventional "## T001:" first-task heading; if found,
+        writes everything from that heading onward to disk. Anything before
+        the first heading is conversational lead-in and gets dropped.
+        Silent no-op when the reply doesn't contain a recognised plan
+        (e.g. model asked a clarifying question)."""
+        import re
+
+        m = re.search(r"^##\s+T\d{3}:", reply, flags=re.MULTILINE)
+        if m is None:
+            return
+        plan_text = reply[m.start() :].rstrip() + "\n"
+        target_dir = self._cwd / ".code-scalpel"
+        target = target_dir / "TASKS.md"
+        try:
+            target_dir.mkdir(parents=True, exist_ok=True)
+            target.write_text(plan_text)
+        except OSError:
+            # Best-effort; don't crash the turn over a write failure.
+            pass
+
+    def _initial_messages(
+        self, user_msg: str, *, mode: str = "ask"
+    ) -> list[dict[str, Any]]:
         # With native function-calling, tool docs come from the API schema —
         # we don't need few-shot examples of the text <TOOL: name> format.
-        msgs: list[dict[str, Any]] = [{"role": "system", "content": _SYSTEM_PROMPT}]
+        system = _SYSTEM_PROMPT
+        if mode == "plan":
+            system += _PLAN_MODE_ADDENDUM
+        msgs: list[dict[str, Any]] = [{"role": "system", "content": system}]
         msgs.extend(self._history)
         msgs.append({"role": "user", "content": user_msg})
         return msgs
