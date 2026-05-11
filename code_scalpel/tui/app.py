@@ -14,6 +14,7 @@ from textual_autocomplete import AutoComplete, DropdownItem
 
 from code_scalpel.agent import PatchAttempt, StepAgent, TextDelta, ToolExecuted
 from code_scalpel.config import AppConfig, autodetect_context_tokens, resolve_model_name
+from code_scalpel.diagrams import extract_mermaid_blocks
 from code_scalpel.jobs import JobRegistry
 from code_scalpel.llm.adapter import ChatResponse, OpenAICompatibleAdapter
 from code_scalpel.memory import MemoryStore
@@ -27,6 +28,7 @@ from code_scalpel.tui.widgets.footer import StatusFooter
 from code_scalpel.tui.widgets.input import ModeInput, UserMessage
 from code_scalpel.tui.widgets.jobs_bar import JobsBar
 from code_scalpel.tui.widgets.jobs_modal import JobsModal
+from code_scalpel.tui.widgets.mermaid_card import MermaidCard
 from code_scalpel.tui.widgets.output import OutputLog
 from code_scalpel.tui.widgets.tool_result_modal import ToolResultModal
 from code_scalpel.tui.widgets.tool_use import ToolUseCard
@@ -707,6 +709,15 @@ class ScalpelApp(App[None]):
                 duration=total_elapsed,
             )
             output.print_turn_summary(summary)
+
+            # Mermaid blocks render BEFORE the apply-card so the user sees
+            # the diagram first and the patch dialog after — diagrams are
+            # context, the dialog is action.
+            for mermaid_src in extract_mermaid_blocks(full):
+                output.run_worker(
+                    output._append(MermaidCard(mermaid_src)),
+                    exclusive=False,
+                )
 
             edits = extract_edits(full)
             if edits:

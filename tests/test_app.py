@@ -1643,3 +1643,34 @@ async def test_slash_context_handles_unknown_ctx_limit(sandbox: Path) -> None:
         assert cards
         body = cards[-1]._result.output
         assert "ctx limit unknown" in body
+
+
+@pytest.mark.asyncio
+async def test_mermaid_block_in_reply_mounts_card(sandbox: Path) -> None:
+    """When the assistant emits ```mermaid ... ``` in a streamed reply,
+    a MermaidCard appears in the OutputLog right after the turn ends.
+    This is the user-visible upgrade over raw fence text."""
+    from code_scalpel.tui.widgets.input import UserMessage
+    from code_scalpel.tui.widgets.mermaid_card import MermaidCard
+
+    reply = (
+        "Sure — here's a flow:\n\n"
+        "```mermaid\n"
+        "flowchart TD\n"
+        "    A --> B\n"
+        "```\n\n"
+        "Let me know if you want more detail."
+    )
+
+    app = ScalpelApp(config=_CONFIG, cwd=sandbox)
+    mock = _StreamingMock([reply])
+    async with app.run_test(headless=True, size=(80, 24)) as pilot:
+        await pilot.pause(0.1)
+        _attach_mock(app, mock)
+
+        app.post_message(UserMessage("show me a diagram"))
+        await pilot.pause(0.5)
+
+        cards = list(app.query(MermaidCard))
+        assert cards, "expected one MermaidCard mounted after the turn"
+        assert len(cards) == 1

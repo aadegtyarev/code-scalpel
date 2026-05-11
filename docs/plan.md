@@ -1946,11 +1946,18 @@ diagram-shape guidance (HOOK, наблюдение 2026-05-11):
   `_do_compact()` в tui/app.py. Алгоритм описан только своим хвостом
   (anchor baseline), сама LLM-суммаризация истории не упомянута.
   Что делать:
-    • В system prompt отдельный блок про диаграммы: distinguish
-      flow vs structure. «Как работает X» — это sequence/flow,
-      не file tree. Prefer Mermaid (модель умеет) над ASCII art —
-      рендера в TUI всё равно нет, Mermaid хотя бы короче и читается
-      внешним рендером.
+    ✓ Рендер сделан (2026-05-11): `code_scalpel/diagrams.py` +
+      `tui/widgets/mermaid_card.py`. Детектим ```mermaid``` fenced-блоки
+      в финальном ответе, монтируем `MermaidCard` в OutputLog до
+      apply-card. Tier-1 (mmdc on PATH + rich-pixels) → PNG → Unicode
+      half-blocks inline. Tier-2 (mmdc упал) → текст + строка ошибки.
+      Tier-3 (deps нет) → raw source + install hint. `rich-pixels` —
+      optional dep (`pip install -e .[diagrams]`), Node CLI ставится
+      руками юзером.
+    • TODO: prompt-half. В system prompt отдельный блок про диаграммы:
+      distinguish flow vs structure. «Как работает X» — это
+      sequence/flow, не file tree. Steer модель к Mermaid (рендер
+      теперь есть — ASCII art смысла больше не имеет).
     • Перед утверждением «X использует Y» вызови map_file(X) и
       проверь `imports:` (current grounding rule, but модель его
       игнорирует в свободном тексте — нужно подсилить или вынести

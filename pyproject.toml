@@ -36,6 +36,14 @@ dev = [
     "pytest-cov>=5.0",
     "types-PyYAML",
 ]
+# Inline rendering of ```mermaid``` blocks the model emits. Requires the
+# Mermaid CLI (`npm i -g @mermaid-js/mermaid-cli`) on PATH for the PNG
+# step; rich-pixels then draws the PNG as Unicode half-blocks. Без обоих
+# мы фоллбэчимся на raw текст блока в карточке — TUI работает, картинки
+# нет.
+diagrams = [
+    "rich-pixels>=3.0",
+]
 
 [tool.ruff]
 target-version = "py311"
