@@ -1,12 +1,40 @@
 # Кросс-модельный замер (v0.2)
 
-Бенч-сюита: 24 теста — 15 базовых правок (`test_qwen_produces_applicable_patch`),
-multi-file navigation, 7 поведенческих (история, native tools, identity,
-язык, plain-text, новый файл, after-tool retention), 1 xfail (grep до
-v0.3 native function expansion).
+## Методология
 
-Все прогоны через одну архитектуру (map + native function calling +
-SEARCH/REPLACE applier), идентичный harness — отличается только модель.
+**Бенч-сюита:** 24 теста, расположены в `tests/test_llm_bench.py`:
+- 15 базовых правок (`test_qwen_produces_applicable_patch`):
+  type hints, rename, fix off-by-one, replace .format → f-string,
+  wrap try/except, extract helper, и т.д. На каждой задаче
+  создаётся временный git-репо с маленьким файлом, агенту даётся
+  prompt, ответ применяется через `apply_edits`, проверяется
+  результирующий код.
+- 1 multi-file navigation (агент должен через map выбрать нужный
+  файл из 3 и прочитать через read_file).
+- 7 поведенческих: история между turn'ами (2 и 3 turn), identity
+  (не выдаёт себя за Claude/GPT), plain-text без diff'а на не-
+  кодовый вопрос, ответ на русском когда спросили по-русски,
+  создание нового файла через пустой SEARCH, эмиссия структурных
+  tool_calls вместо текста, история после tool-call round-trip.
+- 1 xfail на grep (модель не зовёт grep явно — ждёт v0.3 native
+  function expansion).
+
+**Архитектура:** одна и та же на всех моделях — project map (AST-
+based), native OpenAI function calling, SEARCH/REPLACE applier с
+whitespace-tolerance cascade. Никаких per-model хаков. Отличается
+**только** модель (`_PROFILE.model` в bench-файле).
+
+**Прогон:** `pytest --run-llm -m llm` против LM Studio на
+localhost:1234. `temperature=0.1`, `seed=42`. Каждая модель
+прогонялась один раз (мы видели ранее на v0.1 что цифры
+детерминированно повторяются между прогонами на той же модели).
+
+**Железо:**
+- GPU: NVIDIA RTX 5060 Ti, 16 GB VRAM, driver 595.58.03
+- CPU: Intel Xeon E5-2678 v3 (2.5 GHz)
+- RAM: 32 GB
+- OS: Ubuntu 24.04 LTS
+- Backend: LM Studio (llama.cpp под капотом), `loaded_context_length=16384`
 
 ## Таблица
 
