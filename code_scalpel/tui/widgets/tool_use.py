@@ -137,6 +137,11 @@ class ToolUseCard(Widget):
         if self._call.name == "run_tests":
             first = out.split("\n", 1)[0]
             return first[:80]
+        # Default for any other tool name (incl. synthetic ones like
+        # `project_map`): lines first, then char count for empty/short.
+        n_lines = out.count("\n") + 1 if out else 0
+        if n_lines > 1:
+            return f"{n_lines} lines"
         return f"{len(out)} chars"
 
     def _preview_text(self) -> tuple[str, int]:

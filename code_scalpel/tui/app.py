@@ -17,7 +17,7 @@ from code_scalpel.llm.adapter import ChatResponse, OpenAICompatibleAdapter
 from code_scalpel.patch.edit_block import Edit, apply_edits, edits_to_diff, extract_edits
 from code_scalpel.session import Session
 from code_scalpel.state import AgentState
-from code_scalpel.tools.agent_tools import ToolResult
+from code_scalpel.tools.agent_tools import ToolCall, ToolResult
 from code_scalpel.tools.shell import AsyncShellRunner
 from code_scalpel.tui.widgets.cards.tool_call import PatchDecision, ToolCallCard
 from code_scalpel.tui.widgets.footer import StatusFooter
@@ -294,15 +294,15 @@ class ScalpelApp(App[None]):
             from code_scalpel.project_map import build_map
 
             text = build_map(self.cwd)
-            line_count = text.count("\n") + 1 if text else 0
-            char_count = len(text)
-            # markup=False because the map is raw Python signatures —
-            # `[`, `]`, `=True/False` would otherwise break Rich.
-            output.print_status(
-                f"● Project map ({line_count} lines, {char_count} chars — "
-                f"sent to the model on every turn):\n{text}",
-                markup=False,
-            )
+            # Render as a ToolUseCard — same pattern every tool result uses:
+            # collapsed by default, 5-line preview, Ctrl+O for the full
+            # popup. The map IS the output of an implicit tool that runs
+            # every turn, so this naming is honest.
+            call = ToolCall(name="project_map", body="")
+            result = ToolResult(call=call, output=text, ok=True)
+            output.add_tool_use(call, result)
+            # Make Ctrl+O target this result.
+            self._last_tool_result = result
             return
         if cmd.startswith("/mode "):
             mode = cmd.removeprefix("/mode ").strip()
