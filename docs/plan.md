@@ -1977,42 +1977,79 @@ dual-model setup — ОТЛОЖЕНО ДО ПОСЛЕ v0.4 (см. ниже).
     Развилка между всеми режимами — конфиг, не код. Один и тот же
     StepAgent должен уметь работать в любой конфигурации.
   СТРУКТУРА КОНФИГА (явное требование 2026-05-11):
-    Профиль — это набор моделей под разные agent-режимы; профилей
-    может быть несколько под разные задачи. Внутри профиля каждый
-    режим (ask/plan/code/review) → отдельная model spec. Дефолт
-    наследуется от профиля для режимов которые не переопределены.
-    Пример YAML:
+    Профиль = набор моделей под agent-режимы. Формат: dotted-key
+    overrides. Базовый `llm` спека наследуется во все режимы; любой
+    `llm.<mode>` точечно переопределяет. Спека модели —
+    single-string `provider:model[?opt=val&opt=val]`. Параметры
+    через query-string чтобы остаться на одной строке.
+
+    Пример YAML — все четыре варианта в одном файле:
+
       profiles:
-        local-fast:                       # «всё локально, всё быстро»
-          default_model: qwen2.5-coder-14b
-          provider: lmstudio
+        local-fast:                       # всё локально, всё быстро
+          llm: 'lmstudio:qwen2.5-coder-14b'
+
         local-heavy-plan:                 # вариант (C): swap для plan
-          default_model: qwen2.5-coder-14b
-          provider: lmstudio
-          modes:
-            plan:   { model: gemma-4-26b-a4b, swap: true }
-            review: { model: gemma-4-26b-a4b, swap: true }
+          llm: 'lmstudio:qwen2.5-coder-14b'
+          llm.plan:   'lmstudio:gemma-4-26b-a4b?swap'
+          llm.review: 'lmstudio:gemma-4-26b-a4b?swap'
+
         api-mix:                          # вариант (A): coder лок + API ум
-          default_model: qwen2.5-coder-14b
-          provider: lmstudio
-          modes:
-            plan:   { model: claude-sonnet-4-5, provider: anthropic }
-            review: { model: claude-sonnet-4-5, provider: anthropic }
-        co-resident:                      # вариант (B): два в VRAM
-          default_model: qwen2.5-coder-14b
-          provider: lmstudio
-          modes:
-            plan:   { model: gemma-4-26b-a4b }
-            review: { model: gemma-4-26b-a4b }
+          llm: 'lmstudio:qwen2.5-coder-14b'
+          llm.plan:   'anthropic:claude-sonnet-4-5'
+          llm.review: 'anthropic:claude-sonnet-4-5'
+
+        co-resident:                      # вариант (B): две в VRAM
+          llm: 'lmstudio:qwen2.5-coder-14b'
+          llm.plan:   'lmstudio:gemma-4-26b-a4b'
+          llm.review: 'lmstudio:gemma-4-26b-a4b'
+
+        mixed-experiment:                 # тонкий контроль по каждому
+          llm: 'lmstudio:qwen2.5-coder-14b?temperature=0.2'
+          llm.ask:    'lmstudio:qwen3.5-9b?temperature=0.1'
+          llm.plan:   'anthropic:claude-opus-4-7?temperature=0.4'
+          llm.code:   'lmstudio:qwen2.5-coder-14b?temperature=0.2'
+          llm.review: 'lmstudio:gemma-4-26b-a4b?swap&temperature=0.1'
+
       active_profile: local-fast          # /profile slash в TUI переключает
-    `swap: true` на уровне режима говорит orchestrator'у выгрузить
-    coder перед запросом и загрузить heavy. После завершения режима
-    swap обратно. Решение про swap живёт в конфиге, не в коде агента.
-    На уровне кода: `ModelProfile` обрастает полем `modes:
-    dict[str, ModeOverride]`; `current_profile.model_for(mode)`
-    возвращает spec под текущий режим; LLMAdapter получает фабрику
-    которая умеет создавать клиент per-spec (lmstudio / anthropic /
-    openai / local-swap). Конфиг — единственная точка композиции.
+
+    Семантика shorthand:
+      `provider:model` — обязательная часть, разделитель `:`
+      `?key=val&key=val` — query-string опции. Без `=` (как `?swap`) —
+        флаг true. Известные опции: `swap` (model_swap для local
+        sequential), `temperature`, `timeout`, `max_tokens`, `seed`,
+        `top_p`. Неизвестные опции игнорируются с предупреждением,
+        не падают.
+      Provider'ы — plugin-friendly registry. Встроенные нами планируются:
+        `lmstudio`, `llamacpp`, `ollama`, `vllm` (local) + `openai`,
+        `anthropic` (cloud). Каждый знает свой base_url, auth-flow
+        и фичи (function calling / streaming / model-swap API).
+      Третий сторонний provider — пишется один Provider-класс с
+        интерфейсом `chat()`/`stream()`/`list_models()` и
+        регистрируется через entry-point (или просто
+        `register_provider(name, class)` в `code_scalpel.config`).
+        В YAML появляется новый префикс — `myorg-internal:llama-70b`
+        — и всё, никаких других изменений в проекте не требуется.
+        Это та же plugin-точка что и Skills и Memory backends:
+        ядро не должно знать про конкретный провайдер.
+
+    Код:
+      • `ModelSpec.parse(spec_string) -> ModelSpec` — парсер
+        provider:model?opts (~30 LOC, тестируется отдельно).
+      • `ModelProfile` хранит `llm: ModelSpec` и `mode_overrides:
+        dict[str, ModelSpec]`. Метод `spec_for(mode)` отдаёт
+        правильную с fallback на базовую.
+      • Pydantic root_validator собирает `llm.<mode>` ключи в
+        `mode_overrides` при загрузке YAML (dotted-keys в YAML —
+        обычные string-ключи, не nested).
+      • `LLMAdapter.for_spec(spec)` — фабрика; кэшит клиенты по
+        (provider, model), переиспользует между режимами.
+      • Когда `?swap` стоит — оркестратор перед запросом дёргает
+        LM Studio /v1/models/load с нужным id, после завершения
+        возвращает coder. Swap прозрачен для агента.
+
+    Точка композиции — конфиг. Единственная. Никаких if'ов «if
+    dual_model:» в коде агента.
   ПРИНЦИП (явное product-решение, 2026-05-11):
     Дальняя цель — подпереть локального 14b более умной моделью
     для plan/review/architectural reasoning. Предпочтительный
