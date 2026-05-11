@@ -97,19 +97,29 @@ def apply_edits(edits: list[Edit], root: Path) -> tuple[bool, str]:
     if not edits:
         return False, "no edits to apply"
 
-    pending: dict[Path, str | None] = {}  # None = file should be created
+    pending: dict[Path, str | None] = {}
     for e in edits:
         path = root / e.path
-        if not e.search:
-            # Create or overwrite
-            pending[path] = e.replace
+        if not e.search.strip():
+            # Empty SEARCH: create a new file, or prepend if the file already
+            # exists. The model emits empty SEARCH for "add import at top of
+            # this file" — overwriting would destroy the file content.
+            prepend = e.replace
+            if prepend and not prepend.endswith("\n"):
+                prepend += "\n"
+            if path in pending and pending[path] is not None:
+                pending[path] = prepend + (pending[path] or "")
+            elif path.exists():
+                pending[path] = prepend + path.read_text()
+            else:
+                pending[path] = e.replace
             continue
         if path not in pending:
             if not path.exists():
                 return False, f"{e.path}: file not found for SEARCH block"
             pending[path] = path.read_text()
         current = pending[path]
-        if current is None:  # we just created it; immediately replace within
+        if current is None:
             current = ""
         new = _apply_one(current, e.search, e.replace)
         if new is None:

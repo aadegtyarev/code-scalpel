@@ -178,3 +178,26 @@ def test_apply_empty_edits_returns_false(tmp_path: Path) -> None:
     ok, err = apply_edits([], tmp_path)
     assert not ok
     assert "no edits" in err
+
+
+def test_apply_prepends_when_search_is_empty_and_file_exists(tmp_path: Path) -> None:
+    """qwen emits empty SEARCH for 'add line at top'. Must prepend, not overwrite."""
+    (tmp_path / "p.py").write_text("def foo():\n    pass\n")
+    edits = [Edit(path="p.py", search="", replace="from x import y")]
+    ok, err = apply_edits(edits, tmp_path)
+    assert ok, err
+    assert (tmp_path / "p.py").read_text() == "from x import y\ndef foo():\n    pass\n"
+
+
+def test_apply_treats_whitespace_only_search_as_empty(tmp_path: Path) -> None:
+    """When the regex captures a blank line as the SEARCH body (model put a
+    bare \\n between SEARCH and =======), don't try to match — prepend it
+    instead. Otherwise the lone \\n matches every newline in the source."""
+    (tmp_path / "p.py").write_text("def foo():\n    pass\n")
+    edits = [
+        Edit(path="p.py", search="\n", replace="from x import y"),
+        Edit(path="p.py", search="def foo():\n    pass\n", replace="def foo():\n    return 1\n"),
+    ]
+    ok, err = apply_edits(edits, tmp_path)
+    assert ok, err
+    assert (tmp_path / "p.py").read_text() == "from x import y\ndef foo():\n    return 1\n"
