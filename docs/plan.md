@@ -1751,6 +1751,9 @@ project memory + retrieval (BIG, ставит фундамент для всег
   плоский: signatures + docstrings + imports. Нужна **многослойная
   память** проекта чтобы агент не зависел от того что юзер помнит
   сказать «прочитай файл X» каждый раз.
+  **Перед стартом** — полудневной spike `mem0ai` (см. external SDK
+  survey выше): закрывает recall/dedup, экономит 30%. AST/symbols/
+  summaries — пишем сами, наш moat.
   Слои:
   • Tree-sitter / AST индекс — granular nodes (functions, classes,
     methods) с позициями, типами параметров, control-flow shape (есть
@@ -1783,6 +1786,9 @@ iterative patch loop: после SEARCH/REPLACE apply'а — запускать
   error message и просить fix. Сейчас это ручной regen через
   кнопку в diff-карточке. Должно быть автоматическим в `code`
   и `run` режимах. Stop condition: N попыток (e.g. 3).
+  **Reference:** прочитать OpenHands `FileEditorTool` (см. external
+  SDK survey) — они уже решали retry-on-fail с error-context. Их
+  паттерн error-handling может быть полезен, не как dependency.
 
 mandatory tests: для каждой задачи в plan'е модель должна заявлять
   testы которые покрывают изменение. Если testов нет — задача не
