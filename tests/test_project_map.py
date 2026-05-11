@@ -114,6 +114,80 @@ def test_map_invalidates_cache_when_mtime_changes(tmp_path: Path) -> None:
     assert "def f()" in refreshed
 
 
+def test_docstrings_render_first_sentence_as_comment(tmp_path: Path) -> None:
+    """The MAP must carry first-sentence docstrings so the model can
+    disambiguate similar-named symbols (e.g. mark_compacted vs compact)
+    without reading every file. Regression repro for 2026-05-11 bug."""
+    (tmp_path / "x.py").write_text(
+        textwrap.dedent('''\
+            class Session:
+                def mark_compacted(self) -> None:
+                    """Anchor the footer budget to post-compact state."""
+                    pass
+
+            class Agent:
+                async def compact(self) -> str | None:
+                    """Summarize history into a short note and replace it."""
+                    pass
+        ''')
+    )
+    out = build_map(tmp_path, use_cache=False)
+    assert "mark_compacted(self) -> None  # Anchor the footer budget" in out
+    assert "compact(self) -> str | None  # Summarize history into a short note" in out
+
+
+def test_no_docstring_means_no_comment_suffix(tmp_path: Path) -> None:
+    """Symbols without docstrings stay clean — no trailing `# ` placeholder."""
+    (tmp_path / "x.py").write_text("def bare(x: int) -> int:\n    return x\n")
+    out = build_map(tmp_path, use_cache=False)
+    assert "def bare(x: int) -> int" in out
+    # No trailing comment marker glued to the signature
+    assert "def bare(x: int) -> int  #" not in out
+
+
+def test_docstring_truncated_at_100_chars(tmp_path: Path) -> None:
+    """Long docstrings can't blow the map budget — capped at ~100 chars,
+    suffixed with ellipsis when cut."""
+    long_doc = "A " + "very " * 50 + "long single-sentence docstring without periods"
+    (tmp_path / "x.py").write_text(f'def f(): """{long_doc}"""\n')
+    out = build_map(tmp_path, use_cache=False)
+    # Find the docstring fragment on the f() line
+    line = next(ln for ln in out.splitlines() if "def f(" in ln)
+    comment = line.split("#", 1)[1].strip() if "#" in line else ""
+    assert comment.endswith("…")
+    # Cap is ~100 chars total
+    assert len(comment) <= 110
+
+
+def test_class_docstring_also_carried(tmp_path: Path) -> None:
+    (tmp_path / "x.py").write_text(
+        textwrap.dedent('''\
+            class Widget:
+                """Inline TUI primitive."""
+                pass
+        ''')
+    )
+    out = build_map(tmp_path, use_cache=False)
+    assert "class Widget  # Inline TUI primitive." in out
+
+
+def test_multiline_docstring_uses_first_line(tmp_path: Path) -> None:
+    (tmp_path / "x.py").write_text(
+        textwrap.dedent('''\
+            def f():
+                """Short summary line.
+
+                Longer explanation here that should NOT appear in the map.
+                """
+                pass
+        ''')
+    )
+    out = build_map(tmp_path, use_cache=False)
+    line = next(ln for ln in out.splitlines() if "def f(" in ln)
+    assert "Short summary line." in line
+    assert "Longer explanation" not in line
+
+
 def test_map_is_substantially_smaller_than_full_content(tmp_path: Path) -> None:
     """The whole point of the map is token efficiency."""
     big = (

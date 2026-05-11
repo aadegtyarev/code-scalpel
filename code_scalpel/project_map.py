@@ -108,20 +108,63 @@ def _top_level_symbols(tree: ast.Module, lines: list[str]) -> list[str]:
     out: list[str] = []
     for node in tree.body:
         if isinstance(node, ast.ClassDef):
-            out.append(f"class {node.name}")
+            class_line = f"class {node.name}"
+            class_doc = _docstring_summary(node)
+            if class_doc:
+                class_line += f"  # {class_doc}"
+            out.append(class_line)
             for m in node.body:
                 if isinstance(m, ast.FunctionDef | ast.AsyncFunctionDef):
-                    out.append(
-                        f"  {_func_signature(m, prefix='async def ' if isinstance(m, ast.AsyncFunctionDef) else 'def ')}"
-                    )
+                    prefix = "async def " if isinstance(m, ast.AsyncFunctionDef) else "def "
+                    sig = _func_signature(m, prefix=prefix)
+                    doc = _docstring_summary(m)
+                    line = f"  {sig}"
+                    if doc:
+                        line += f"  # {doc}"
+                    out.append(line)
         elif isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef):
             prefix = "async def " if isinstance(node, ast.AsyncFunctionDef) else "def "
-            out.append(_func_signature(node, prefix=prefix))
+            sig = _func_signature(node, prefix=prefix)
+            doc = _docstring_summary(node)
+            if doc:
+                sig += f"  # {doc}"
+            out.append(sig)
         elif isinstance(node, ast.Assign):
             for target in node.targets:
                 if isinstance(target, ast.Name) and target.id.isupper():
                     out.append(f"{target.id} = ...")
     return out
+
+
+# Cap so a verbose docstring can't blow the map budget — first sentence is
+# what the model needs to disambiguate similarly-named symbols.
+_DOC_MAX_CHARS = 100
+
+
+def _docstring_summary(
+    node: ast.FunctionDef | ast.AsyncFunctionDef | ast.ClassDef,
+) -> str:
+    """Return the first sentence of the symbol's docstring (≤100 chars).
+
+    The MAP otherwise only carries signatures — names alone can't tell the
+    model what a method actually does. With a one-liner from the docstring,
+    qwen-coder picks `StepAgent.compact (Summarize history…)` over
+    `Session.mark_compacted (Snapshot for footer math…)` instead of just
+    matching on the substring `compact`.
+    """
+    doc = ast.get_docstring(node)
+    if not doc:
+        return ""
+    # First sentence: cut at the first period followed by space/newline, or
+    # at the first newline if no period. Strip whitespace, collapse internal
+    # whitespace to single spaces.
+    first = doc.strip().split("\n", 1)[0].strip()
+    if "." in first:
+        first = first.split(".", 1)[0] + "."
+    first = " ".join(first.split())
+    if len(first) > _DOC_MAX_CHARS:
+        first = first[: _DOC_MAX_CHARS - 1].rstrip() + "…"
+    return first
 
 
 def _func_signature(node: ast.FunctionDef | ast.AsyncFunctionDef, *, prefix: str) -> str:

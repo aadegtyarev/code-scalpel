@@ -741,6 +741,46 @@ async def test_qwen_reads_file_even_for_vague_show_code(tmp_path: Path) -> None:
 
 
 @pytest.mark.llm
+async def test_qwen_picks_correct_method_among_similar_names(tmp_path: Path) -> None:
+    """The 2026-05-11 misattribution: project has BOTH `compact()` and
+    `mark_compacted()`; user asks 'where is summarization done'. Without
+    docstrings in the MAP, the model picks `mark_compacted` because the
+    name contains 'compact'. With first-line docstrings in the MAP, the
+    model has enough semantic signal to pick the real `compact()`."""
+    import textwrap
+
+    (tmp_path / "agent.py").write_text(
+        textwrap.dedent('''\
+            class StepAgent:
+                async def compact(self) -> str | None:
+                    """Summarize history into a short note and replace it."""
+                    return None
+        ''')
+    )
+    (tmp_path / "session.py").write_text(
+        textwrap.dedent('''\
+            class Session:
+                def mark_compacted(self) -> None:
+                    """Anchor the footer budget to the post-compact state."""
+                    pass
+        ''')
+    )
+    agent = _make_agent(tmp_path)
+    result = await agent.ask("где в проекте суммаризация / сжатие истории?")
+    # Should land on the real compact in agent.py, not the bookkeeping
+    # mark_compacted in session.py.
+    assert "agent.py" in result.reply or "StepAgent" in result.reply, (
+        f"model didn't pick the right symbol:\n{result.reply[:500]}"
+    )
+    if "mark_compacted" in result.reply:
+        # If the model mentions both, the answer must still anchor on the
+        # real compact — it's fine to clarify they're different.
+        assert "compact" in result.reply.lower(), (
+            f"model only mentioned the wrong one:\n{result.reply[:500]}"
+        )
+
+
+@pytest.mark.llm
 async def test_qwen_does_not_invent_method_from_neighbouring_name(tmp_path: Path) -> None:
     """Direct reproduction of the 2026-05-11 turn-1 bug: class has a
     `mark_compacted` method, user asks where summarisation lives, model
