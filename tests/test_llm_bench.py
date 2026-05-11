@@ -601,6 +601,12 @@ _ADMITS_MISSING = (
     "не в map",
     "not in the map",
     "not listed",
+    # Clarification asks are ALSO valid — model refused to fabricate
+    # and asked the user to disambiguate. That's the correct behavior.
+    "не понял, переспроси",
+    "переспроси",
+    "уточни",
+    "didn't catch that",
 )
 
 

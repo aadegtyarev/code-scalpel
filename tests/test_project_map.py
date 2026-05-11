@@ -188,6 +188,93 @@ def test_multiline_docstring_uses_first_line(tmp_path: Path) -> None:
     assert "Longer explanation" not in line
 
 
+def test_internal_imports_appear_in_block(tmp_path: Path) -> None:
+    """Each file block carries an `imports:` line listing intra-project
+    imports. This is what lets the model verify 'X uses Y' claims without
+    grep — if Y isn't listed, X doesn't import it."""
+    (tmp_path / "pkg").mkdir()
+    (tmp_path / "pkg" / "__init__.py").write_text("")
+    (tmp_path / "pkg" / "core.py").write_text(
+        textwrap.dedent("""\
+            from pkg.helpers import helper_one
+            from pkg.helpers import helper_two
+
+            def main():
+                pass
+        """)
+    )
+    (tmp_path / "pkg" / "helpers.py").write_text("def helper_one(): pass\ndef helper_two(): pass\n")
+    out = build_map(tmp_path, use_cache=False)
+    line = next(ln for ln in out.splitlines() if ln.startswith("  imports:"))
+    assert "pkg.helpers.helper_one" in line
+    assert "pkg.helpers.helper_two" in line
+
+
+def test_external_imports_filtered_out(tmp_path: Path) -> None:
+    """typing / pathlib / pydantic noise out — they don't trace project flow.
+    Only intra-project imports stay."""
+    (tmp_path / "pkg").mkdir()
+    (tmp_path / "pkg" / "__init__.py").write_text("")
+    (tmp_path / "pkg" / "x.py").write_text(
+        textwrap.dedent("""\
+            from typing import Any
+            from pathlib import Path
+            from pydantic import BaseModel
+            from pkg.helpers import h
+        """)
+    )
+    (tmp_path / "pkg" / "helpers.py").write_text("def h(): pass\n")
+    out = build_map(tmp_path, use_cache=False)
+    block_lines = [ln for ln in out.splitlines() if "pkg/x.py" in ln or ln.startswith("  imports:")]
+    # The imports line directly after the pkg/x.py header
+    imports_idx = next(i for i, ln in enumerate(out.splitlines()) if "pkg/x.py" in ln) + 1
+    imports_line = out.splitlines()[imports_idx]
+    assert "pkg.helpers.h" in imports_line
+    assert "typing" not in imports_line
+    assert "pathlib" not in imports_line
+    assert "pydantic" not in imports_line
+    del block_lines  # unused; kept for readability of intent
+
+
+def test_no_imports_line_when_module_has_no_internal_imports(tmp_path: Path) -> None:
+    """Clean output for modules that only use stdlib — no empty
+    `imports: ` line trailing nothing."""
+    (tmp_path / "pkg").mkdir()
+    (tmp_path / "pkg" / "__init__.py").write_text("")
+    (tmp_path / "pkg" / "lone.py").write_text(
+        textwrap.dedent("""\
+            from typing import Any
+
+            def f():
+                pass
+        """)
+    )
+    out = build_map(tmp_path, use_cache=False)
+    # Find the lone.py block (between its header and the next file header)
+    lines = out.splitlines()
+    start = next(i for i, ln in enumerate(lines) if "pkg/lone.py" in ln)
+    end = next(
+        (i for i, ln in enumerate(lines[start + 1 :], start + 1) if not ln.startswith(" ")),
+        len(lines),
+    )
+    block = "\n".join(lines[start:end])
+    assert "imports:" not in block
+
+
+def test_relative_imports_captured(tmp_path: Path) -> None:
+    """`from . import foo` and `from .helpers import bar` are intra-project
+    by definition — capture them regardless of the package-name heuristic."""
+    (tmp_path / "pkg").mkdir()
+    (tmp_path / "pkg" / "__init__.py").write_text("")
+    (tmp_path / "pkg" / "core.py").write_text("from .helpers import h\nfrom . import util\n")
+    (tmp_path / "pkg" / "helpers.py").write_text("def h(): pass\n")
+    (tmp_path / "pkg" / "util.py").write_text("X = 1\n")
+    out = build_map(tmp_path, use_cache=False)
+    imports_line = next(ln for ln in out.splitlines() if ln.startswith("  imports:"))
+    assert "helpers.h" in imports_line
+    assert "util" in imports_line
+
+
 def test_map_is_substantially_smaller_than_full_content(tmp_path: Path) -> None:
     """The whole point of the map is token efficiency."""
     big = (

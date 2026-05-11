@@ -30,6 +30,7 @@ def build_map(root: Path, max_files: int = 200, use_cache: bool = True) -> str:
     files don't get re-parsed on every turn. Massive win on larger projects.
     """
     files = list_files(root, max_files=max_files)
+    internal = _internal_packages(root)
     cache = _load_cache(root) if use_cache else {}
     new_cache: dict[str, dict[str, float | str]] = {}
     blocks: list[str] = []
@@ -49,7 +50,7 @@ def build_map(root: Path, max_files: int = 200, use_cache: bool = True) -> str:
                     source = path.read_text(errors="replace")
                 except OSError:
                     continue
-                block = _python_block(rel_key, source)
+                block = _python_block(rel_key, source, internal)
             else:
                 block = _plain_block(rel_key, path)
         new_cache[rel_key] = {"mtime": mtime, "block": block}
@@ -57,6 +58,27 @@ def build_map(root: Path, max_files: int = 200, use_cache: bool = True) -> str:
     if use_cache:
         _save_cache(root, new_cache)
     return "\n".join(blocks)
+
+
+def _internal_packages(root: Path) -> frozenset[str]:
+    """Top-level package/module names belonging to this project. Used to
+    filter imports in the map so we surface intra-project dependencies
+    (which trace flow) and drop stdlib / third-party noise (typing,
+    pathlib, textual, pydantic — useful for tools, not for flow analysis).
+    """
+    names: set[str] = set()
+    try:
+        for child in root.iterdir():
+            if child.is_dir() and (child / "__init__.py").is_file():
+                names.add(child.name)
+            elif child.is_file() and child.suffix == ".py":
+                # bare-module project — e.g. a single foo.py at the root
+                stem = child.stem
+                if stem != "__init__":
+                    names.add(stem)
+    except OSError:
+        pass
+    return frozenset(names)
 
 
 def _load_cache(root: Path) -> dict[str, dict[str, float | str]]:
@@ -78,7 +100,7 @@ def _save_cache(root: Path, data: dict[str, dict[str, float | str]]) -> None:
         pass
 
 
-def _python_block(rel: str, source: str) -> str:
+def _python_block(rel: str, source: str, internal: frozenset[str] = frozenset()) -> str:
     try:
         tree = ast.parse(source)
     except SyntaxError:
@@ -90,10 +112,42 @@ def _python_block(rel: str, source: str) -> str:
     loc = len(lines)
     symbols = _top_level_symbols(tree, lines)
     header = f"{rel} [{loc}L]"
-    if not symbols:
-        return header
-    body = "\n".join(f"  {s}" for s in symbols)
-    return f"{header}\n{body}"
+    parts: list[str] = [header]
+    imports = _internal_imports(tree, internal)
+    if imports:
+        parts.append(f"  imports: {', '.join(imports)}")
+    if symbols:
+        parts.extend(f"  {s}" for s in symbols)
+    return "\n".join(parts)
+
+
+def _internal_imports(tree: ast.Module, internal: frozenset[str]) -> list[str]:
+    """Return a deduplicated, ordered list of intra-project import targets.
+
+    For `from foo.bar import Baz` where `foo` is internal → "foo.bar.Baz".
+    For relative `from . import x` → "x" (root-relative not resolved here).
+    External / stdlib imports skipped — this list is for tracing flow.
+    """
+    seen: list[str] = []
+
+    def _add(label: str) -> None:
+        if label not in seen:
+            seen.append(label)
+
+    for node in tree.body:
+        if isinstance(node, ast.Import):
+            for alias in node.names:
+                top = alias.name.split(".", 1)[0]
+                if top in internal:
+                    _add(alias.name)
+        elif isinstance(node, ast.ImportFrom) and (
+            node.level > 0 or (node.module and node.module.split(".", 1)[0] in internal)
+        ):
+            base = node.module or ""
+            for alias in node.names:
+                label = f"{base}.{alias.name}" if base else alias.name
+                _add(label)
+    return seen
 
 
 def _plain_block(rel: str, path: Path) -> str:
