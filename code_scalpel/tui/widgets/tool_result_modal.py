@@ -123,39 +123,49 @@ class ToolResultModal(ModalScreen[None]):
         width = len(str(len(lines)))
         return "\n".join(f"{i:>{width}}  {line}" for i, line in enumerate(lines, 1))
 
-
-def _prepend_line_numbers(text: Text) -> Text:
-    """Same idea as _with_line_numbers but for an already-styled rich.Text.
-    Splits on newlines (preserving spans), prepends a dim gutter, and
-    reassembles. The gutter style matches the modal's secondary colour."""
-    lines = text.split("\n", allow_blank=True)
-    width = len(str(len(lines)))
-    out = Text()
-    for i, line in enumerate(lines, 1):
-        out.append(f"{i:>{width}}  ", style="dim #707070")
-        out.append_text(line)
-        if i < len(lines):
-            out.append("\n")
-    return out
-
     def compose(self) -> ComposeResult:
+        # Render-heavy bodies (project_map with hundreds of styled spans)
+        # used to freeze the modal — black screen until Textual finished
+        # painting. Now compose mounts a "● Rendering…" placeholder
+        # instantly; on_mount kicks a worker that prepares the real
+        # renderable off the event loop and swaps it in.
         with Vertical():
             yield Static(self._header_text(), id="trm-header")
             with VerticalScroll():
-                highlighted = self._body_renderable()
-                if highlighted is not None:
-                    # Syntax handles its own line numbers + wrap.
-                    yield Static(highlighted, id="trm-body")
-                elif not self._result.output:
-                    yield Static("[dim](empty output)[/dim]", id="trm-body")
-                else:
-                    # Plain text: prepend our own line numbers, mark up off.
-                    yield Static(
-                        self._with_line_numbers(self._result.output),
-                        id="trm-body",
-                        markup=False,
-                    )
+                yield Static(
+                    "[dim]● Rendering…[/dim]",
+                    id="trm-body",
+                )
             yield Static(r"\[esc] close · \[ctrl+c] copy", id="trm-hint")
+
+    def on_mount(self) -> None:
+        self.run_worker(self._render_body(), exclusive=True, group="modal-render")
+
+    async def _render_body(self) -> None:
+        """Build the heavy renderable on a thread, then update the placeholder.
+        Keeps the modal interactive while large maps / files are laid out."""
+        import asyncio
+
+        loop = asyncio.get_running_loop()
+        try:
+            highlighted = await loop.run_in_executor(None, self._body_renderable)
+        except Exception as e:
+            self.query_one("#trm-body", Static).update(
+                f"[#bf6060]Render error: {e}[/#bf6060]"
+            )
+            return
+
+        body = self.query_one("#trm-body", Static)
+        if highlighted is not None:
+            body.update(highlighted)
+            return
+        if not self._result.output:
+            body.update("[dim](empty output)[/dim]")
+            return
+        # Plain text: prepend our own line numbers. Disable markup so the
+        # raw content's brackets don't blow up Rich.
+        body._renderable_markup = False  # type: ignore[attr-defined]
+        body.update(self._with_line_numbers(self._result.output))
 
     def action_copy(self) -> None:
         """Ctrl+C copies the raw tool output (not the rendered highlight).
@@ -178,3 +188,18 @@ def _prepend_line_numbers(text: Text) -> Text:
             title="Copy",
             timeout=2,
         )
+
+
+def _prepend_line_numbers(text: Text) -> Text:
+    """Same idea as ToolResultModal._with_line_numbers but for an
+    already-styled rich.Text. Splits on newlines (preserving spans),
+    prepends a dim gutter, and reassembles."""
+    lines = text.split("\n", allow_blank=True)
+    width = len(str(len(lines)))
+    out = Text()
+    for i, line in enumerate(lines, 1):
+        out.append(f"{i:>{width}}  ", style="dim #707070")
+        out.append_text(line)
+        if i < len(lines):
+            out.append("\n")
+    return out
