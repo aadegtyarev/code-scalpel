@@ -164,7 +164,7 @@ profiles:
 ```bash
 ruff check . && ruff format --check .
 mypy code_scalpel/
-pytest                          # 255 unit-тестов
+pytest                          # 297 unit-тестов
 pytest -m llm --run-llm         # 30 LLM-тестов под LM Studio
 ```
 
