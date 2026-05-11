@@ -563,14 +563,18 @@ async def test_system_prompt_steers_diagrams_to_mermaid() -> None:
     text = _SYSTEM_PROMPT
     # The directive itself
     assert "Diagrams" in text
-    # Flow vs structure distinction is explicit
-    assert "FLOW" in text and "STRUCTURE" in text
     # Mermaid is named as the canonical format
     assert "Mermaid" in text or "mermaid" in text
     # The mermaid fence is shown so the model emits the right shape
     assert "```mermaid" in text
     # ASCII art is explicitly forbidden so the model doesn't fall back
-    assert "ASCII" in text and ("NEVER" in text or "никогда" in text.lower())
+    assert "ASCII" in text and "NEVER" in text
+    # Two supported diagram types named so the model picks the right
+    # one — flowchart for connections/flow, sequenceDiagram for actors
+    # and time. Other Mermaid types must be steered away from since the
+    # inline ASCII renderer doesn't support them.
+    assert "flowchart" in text
+    assert "sequenceDiagram" in text
 
 
 # ── plan mode ───────────────────────────────────────────────────────────────

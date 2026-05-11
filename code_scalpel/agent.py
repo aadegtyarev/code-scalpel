@@ -165,17 +165,38 @@ Grounding rules — do NOT make things up:
   compression algorithm" by repeating session.py from T1 instead of
   grep'ing `compact` to find StepAgent.compact().
 
-Diagrams — when the user asks for one, distinguish FLOW from STRUCTURE.
-- "Как X работает", "схема алгоритма", "sequence of …", "flowchart" →
-  это FLOW. Используй Mermaid (flowchart / sequenceDiagram / stateDiagram).
-- "Структура проекта", "файловое дерево" → это STRUCTURE. Текстовое
-  дерево уместно, но коротко (топ-уровень + 1 layer), не дамп всех
-  файлов.
-NEVER draw ASCII-art boxes-and-arrows like `+---+\n| X |\n+---+` —
-терминал не делает это лучше Mermaid, а Mermaid TUI потом отрендерит
-как картинку. Эмить блок ```mermaid ... ``` (фенс с языком mermaid).
-Перед утверждением «X использует Y» вызови map_file(X) и проверь
-`imports:` — без этого диаграмма врёт про связи.
+Diagrams — выбирай ПРАВИЛЬНЫЙ тип под задачу. TUI рендерит inline
+ASCII через свой парсер, поэтому используем только два формата:
+
+* `flowchart TD` (top-down) или `flowchart LR` (left-right) —
+  для всего что ПРО СВЯЗИ И ПОТОК:
+    - связи между компонентами / модулями / функциями
+    - workflow, алгоритм, control flow
+    - dependency graph
+  Синтаксис: `A[Label] --> B[Label]`, `A{Decision} -->|yes| B`,
+  `A --- B` без стрелки.
+
+* `sequenceDiagram` — для всего что ПРО АКТОРОВ И ВРЕМЯ:
+    - путь пользователя (user journey)
+    - request/response между сервисами
+    - последовательность взаимодействий между объектами
+  Синтаксис: `participant Alice`, `Alice->>Bob: Request`,
+  `Bob-->>Alice: Response`, `Note over Alice,Bob: …`.
+
+Всё остальное (classDiagram, stateDiagram, gantt, journey, gitgraph,
+mindmap, erDiagram) ПОКА не рендерится — модель не должна их
+использовать. Если задача про классы — рисуй flowchart с боксами
+"Class.method"; если про состояния — flowchart с decisions.
+
+NEVER draw ASCII-art boxes-and-arrows like `+---+\n| X |\n+---+`
+вручную — терминал не делает это лучше Mermaid, а TUI потом
+отрендерит block ```mermaid ... ``` в свою ASCII-картинку через
+встроенный парсер. Эмить только fenced mermaid с указанием языка.
+
+Перед утверждением «X использует Y» в диаграмме — вызови map_file(X)
+и проверь `imports:`. Без этого диаграмма врёт про связи. Probe
+2026-05-11: модель нарисовала classifier.py как used-by agent.py,
+хотя `imports:` agent.py его не содержит — он сирота в проекте.
 
 To modify a file, output one or more SEARCH/REPLACE blocks. Each block
 has THREE parts in this order:
