@@ -897,3 +897,46 @@ async def test_qwen_cites_file_when_pointing(tmp_path: Path) -> None:
     assert "math_ops.py" in result.reply, (
         f"reply didn't cite the actual file path:\n{result.reply[:400]}"
     )
+
+
+@pytest.mark.llm
+async def test_qwen_task_does_not_open_with_identity_prefix(tmp_path: Path) -> None:
+    """Probe regression 2026-05-11: model answered "найди X в проекте"
+    with "Я — code-scalpel, как помочь?" — identity-blurb on a task.
+    The prompt now bans that opening for task replies. Assertion:
+    reply must NOT start with the identity template AND must mention
+    something concrete from the project (file path / symbol name)."""
+    (tmp_path / "footer.py").write_text(
+        "class Footer:\n    def render(self) -> str:\n        return 'idle'\n"
+    )
+    (tmp_path / "app.py").write_text("from footer import Footer\n")
+    agent = _make_agent(tmp_path)
+    result = await agent.ask("найди футер и предложи как добавить туда системное время")
+    reply = result.reply
+    head = reply.lstrip().lower()[:40]
+    # The exact regression shape — banned opening.
+    assert not head.startswith(("я — code-scalpel", "i'm code-scalpel")), (
+        f"task reply opened with identity prefix:\n{reply[:300]}"
+    )
+    # And the reply has to engage with the actual project, not just
+    # decline. Either a real symbol or a real file path.
+    low = reply.lower()
+    assert "footer" in low or "app.py" in low or ".py" in low, (
+        f"task reply didn't engage with the project:\n{reply[:300]}"
+    )
+
+
+@pytest.mark.llm
+async def test_qwen_calls_list_files_on_orientation_task(tmp_path: Path) -> None:
+    """User message no longer auto-injects a project listing — model
+    has to call list_files when the task is "what's in this project".
+    Without it the answer would be fabricated from name guessing."""
+    (tmp_path / "alpha.py").write_text("x = 1\n")
+    (tmp_path / "beta.py").write_text("y = 2\n")
+    agent = _make_agent(tmp_path)
+    result = await agent.ask("какие файлы есть в проекте? перечисли")
+    reply = result.reply.lower()
+    # Both files should be named — possible only if list_files was
+    # called and the output flowed back into the conversation.
+    assert "alpha.py" in reply
+    assert "beta.py" in reply
