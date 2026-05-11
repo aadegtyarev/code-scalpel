@@ -7,6 +7,7 @@ from textual.widgets import Markdown, Static
 
 from code_scalpel.tools.agent_tools import ToolCall, ToolResult
 from code_scalpel.tui.widgets.tool_use import ToolUseCard
+from code_scalpel.tui.widgets.turn_progress import TurnProgress
 
 
 class OutputLog(VerticalScroll):
@@ -49,6 +50,14 @@ class OutputLog(VerticalScroll):
         height: auto;
         margin: 1 0 0 0;
         color: #a0a0a0;
+        background: #0f0f0f;
+    }
+    OutputLog Static.msg-turn-progress {
+        /* In-flight turn progress — slightly dimmer than the final
+           summary so the eye reads it as "ephemeral, still working". */
+        height: 1;
+        margin: 1 0 0 0;
+        color: #808080;
         background: #0f0f0f;
     }
     OutputLog Static.msg-error {
@@ -94,6 +103,14 @@ class OutputLog(VerticalScroll):
         widget = Markdown(text)
         self.run_worker(self._append(widget), exclusive=False)
         return widget
+
+    def start_turn_progress(self) -> TurnProgress:
+        """Mount the live in-chat progress widget for an in-flight turn.
+        Returned so the caller can `update_progress(...)` it on each
+        stream tick and `remove()` it once the turn finalises."""
+        p = TurnProgress()
+        self.run_worker(self._append(p), exclusive=False)
+        return p
 
     def start_streaming(self) -> Static:
         """A fast Static widget for stream-in-progress text. Use this during the

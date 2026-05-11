@@ -331,8 +331,10 @@ class ScalpelApp(App[None]):
         footer = self.query_one(StatusFooter)
         assert self._agent is not None
 
+        progress = output.start_turn_progress()
         placeholder = output.start_streaming()
         try:
+            await self._wait_mounted(progress)
             await self._wait_mounted(placeholder)
 
             full = ""
@@ -349,9 +351,18 @@ class ScalpelApp(App[None]):
                     now = time.monotonic()
                     if now - last_tick > 0.25:
                         elapsed = now - start
-                        if elapsed > 0.1:
-                            rate = chunks / elapsed
-                            footer.status = f"◌ streaming · {rate:.0f} tok/s"
+                        # Tokens here is an approximation — we have chunk
+                        # count, not tokenizer output. ~4 chars/token is the
+                        # same rough ratio used in session accounting, so the
+                        # number the user sees matches the final summary.
+                        approx_tokens = len(full) // 4
+                        rate = chunks / elapsed if elapsed > 0 else 0.0
+                        progress.update_progress(
+                            tokens=approx_tokens,
+                            tool_calls=tool_calls,
+                            elapsed_s=elapsed,
+                            rate_tok_s=rate,
+                        )
                         last_tick = now
                 elif isinstance(item, ToolExecuted):
                     tool_calls += 1
@@ -359,6 +370,10 @@ class ScalpelApp(App[None]):
                     placeholder.update(full)
                     await output.finalize_streaming(placeholder, full)
                     output.add_tool_use(item.call, item.result)
+                    # Reflect the new tool count immediately — don't wait for
+                    # the next text tick, which might not come if the model
+                    # ends right after the tool call.
+                    progress.update_progress(tool_calls=tool_calls)
                     full = ""
                     placeholder = output.start_streaming()
                     await self._wait_mounted(placeholder)
@@ -368,6 +383,11 @@ class ScalpelApp(App[None]):
 
             total_elapsed = time.monotonic() - start
             self._last_stream_rate = chunks / total_elapsed if total_elapsed > 0 else 0.0
+
+            # The live progress line has served its purpose — the permanent
+            # turn-summary line below carries the same data with the final
+            # numbers. Two widgets at once would just be noise.
+            await self._remove_progress(progress)
 
             # Track session usage (approximate — streaming has no usage payload).
             self.session.record(
@@ -403,10 +423,12 @@ class ScalpelApp(App[None]):
             else:
                 footer.status = "● idle"
         except asyncio.CancelledError:
+            await self._remove_progress(progress)
             output.print_status("● Cancelled.")
             footer.status = "● idle"
             raise
         except Exception as e:
+            await self._remove_progress(progress)
             output.print_error(f"Error: {e}")
             footer.status = "● error"
 
@@ -436,6 +458,17 @@ class ScalpelApp(App[None]):
             if widget.is_mounted:
                 return
             await sleep(0.02)
+
+    async def _remove_progress(self, progress: Widget) -> None:
+        """Best-effort removal of the inline turn-progress widget. Tolerates
+        the not-yet-mounted race (mount goes through a worker) and a
+        double-remove from the success path + an exception handler — we'd
+        rather swallow than spam errors in the chat."""
+        try:
+            if progress.is_mounted:
+                await progress.remove()
+        except Exception:
+            pass
 
     # ── patch decision ────────────────────────────────────────────────────────
 

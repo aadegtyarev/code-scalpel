@@ -331,6 +331,145 @@ async def test_inline_turn_summary_appears_after_turn(sandbox: Path) -> None:
 
 
 @pytest.mark.asyncio
+async def test_turn_progress_widget_mounts_during_stream(sandbox: Path) -> None:
+    """In-chat progress widget must appear in the chat once a turn starts,
+    replacing the old `streaming · N tok/s` footer overload."""
+    from code_scalpel.tui.widgets.input import UserMessage
+    from code_scalpel.tui.widgets.turn_progress import TurnProgress
+
+    app = ScalpelApp(config=_CONFIG, cwd=sandbox)
+    # Slow enough that the progress widget has time to mount and update
+    # before the stream finalises and removes it.
+    mock = _StreamingMock(["chunk-"] * 8, delay=0.05)
+    async with app.run_test(headless=True, size=(80, 24)) as pilot:
+        await pilot.pause(0.1)
+        _attach_mock(app, mock)
+
+        app.post_message(UserMessage("hi"))
+        # Mid-stream: progress widget should be visible.
+        await pilot.pause(0.15)
+        output = app.query_one(OutputLog)
+        progress_widgets = list(output.query(TurnProgress))
+        assert progress_widgets, "expected TurnProgress widget mid-stream"
+        # And it must sit AFTER the user message — same depth as the reply.
+        children = [c for c in output.children if c.id != "_spacer"]
+        user_idx = next(
+            i
+            for i, c in enumerate(children)
+            if "msg-user" in c.classes  # type: ignore[arg-type]
+        )
+        progress_idx = next(i for i, c in enumerate(children) if isinstance(c, TurnProgress))
+        assert progress_idx > user_idx
+
+
+@pytest.mark.asyncio
+async def test_turn_progress_widget_removed_after_turn(sandbox: Path) -> None:
+    """When the turn finalises, the live progress widget must be gone —
+    the permanent inline summary line (⤷ …) takes over."""
+    from code_scalpel.tui.widgets.input import UserMessage
+    from code_scalpel.tui.widgets.turn_progress import TurnProgress
+
+    app = ScalpelApp(config=_CONFIG, cwd=sandbox)
+    mock = _StreamingMock(["short reply"])
+    async with app.run_test(headless=True, size=(80, 24)) as pilot:
+        await pilot.pause(0.1)
+        _attach_mock(app, mock)
+
+        app.post_message(UserMessage("hi"))
+        await pilot.pause(0.3)
+
+        output = app.query_one(OutputLog)
+        assert list(output.query(TurnProgress)) == [], (
+            "TurnProgress must be removed once the turn ends"
+        )
+        # Final summary line is still mounted in its place.
+        chat = "\n".join(str(c.render()) for c in output.children if c.id != "_spacer")
+        assert "⤷" in chat
+
+
+@pytest.mark.asyncio
+async def test_footer_never_shows_streaming_rate(sandbox: Path) -> None:
+    """Footer must stay clean: `◌ thinking…` while in-flight, `● idle` after.
+    The old `streaming · N tok/s` overload moved into the inline progress
+    widget — the footer must never carry numeric throughput data again."""
+    from code_scalpel.tui.widgets.footer import StatusFooter
+    from code_scalpel.tui.widgets.input import UserMessage
+
+    app = ScalpelApp(config=_CONFIG, cwd=sandbox)
+    # Lots of small chunks with a delay so we have time to sample the
+    # footer in the middle of streaming.
+    mock = _StreamingMock(["x"] * 30, delay=0.01)
+    seen_statuses: list[str] = []
+    async with app.run_test(headless=True, size=(80, 24)) as pilot:
+        await pilot.pause(0.1)
+        _attach_mock(app, mock)
+        footer = app.query_one(StatusFooter)
+
+        app.post_message(UserMessage("hi"))
+        # Sample status repeatedly while the stream runs.
+        for _ in range(10):
+            seen_statuses.append(footer.status)
+            await pilot.pause(0.03)
+        await pilot.pause(0.3)
+        seen_statuses.append(footer.status)
+
+        # No intermediate streaming-rate status ever leaked into the footer.
+        for s in seen_statuses:
+            assert "streaming" not in s, f"footer leaked streaming status: {s!r}"
+            assert "tok/s" not in s, f"footer leaked tok/s: {s!r}"
+        # Final status is the idle/end marker — not an error or stale state.
+        assert footer.status == "● idle"
+
+
+@pytest.mark.asyncio
+async def test_inline_summary_carries_tokens_duration_after_turn(sandbox: Path) -> None:
+    """After a turn closes, the chat must contain a single summary line
+    with at least tokens and duration — the data the user needs to gauge
+    cost without looking at the footer."""
+    from code_scalpel.tui.widgets.input import UserMessage
+
+    app = ScalpelApp(config=_CONFIG, cwd=sandbox)
+    # A modestly-sized reply so the token field is non-zero.
+    mock = _StreamingMock(["lorem ipsum dolor sit amet " * 20])
+    async with app.run_test(headless=True, size=(80, 24)) as pilot:
+        await pilot.pause(0.1)
+        _attach_mock(app, mock)
+
+        app.post_message(UserMessage("hi"))
+        await pilot.pause(0.3)
+
+        output = app.query_one(OutputLog)
+        chat = "\n".join(str(c.render()) for c in output.children if c.id != "_spacer")
+        assert "⤷" in chat
+        # Tokens and duration both rendered.
+        assert "tokens" in chat
+        assert "s" in chat  # the "Ns" duration field is there
+
+
+def test_turn_progress_format_grows_as_data_arrives() -> None:
+    """Format helper: drops zero-fields, includes tokens once they appear,
+    pluralises the tool noun. Same conventions as `_format_turn_summary`
+    so the live and final lines feel like the same artifact."""
+    from code_scalpel.tui.widgets.turn_progress import _format_progress
+
+    empty = _format_progress(tokens=0, tool_calls=0, elapsed_s=0.0, rate_tok_s=0.0)
+    assert empty.startswith("⋯ thinking")
+    # No noisy zero fields.
+    assert "tokens" not in empty
+    assert "tok/s" not in empty
+    assert "🔧" not in empty
+
+    growing = _format_progress(tokens=120, tool_calls=1, elapsed_s=3.2, rate_tok_s=18.0)
+    assert "↓ 120 tokens" in growing
+    assert "🔧 1 tool" in growing and "tools" not in growing
+    assert "3s" in growing
+    assert "18 tok/s" in growing
+
+    many = _format_progress(tokens=10, tool_calls=4, elapsed_s=1.0, rate_tok_s=2.0)
+    assert "🔧 4 tools" in many
+
+
+@pytest.mark.asyncio
 async def test_footer_model_reactive_renders(sandbox: Path) -> None:
     """When model is set, footer must include it in the rendered label.
     Empty model means no dim suffix — keep the bar tidy for legacy configs."""
