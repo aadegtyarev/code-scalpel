@@ -940,3 +940,37 @@ async def test_qwen_calls_list_files_on_orientation_task(tmp_path: Path) -> None
     # called and the output flowed back into the conversation.
     assert "alpha.py" in reply
     assert "beta.py" in reply
+
+
+@pytest.mark.llm
+async def test_qwen_doesnt_apologise_instead_of_calling_tools(tmp_path: Path) -> None:
+    """Probe regression 2026-05-12: model replied "Извините, но я не
+    могу найти `session.py`" without calling a single tool. The file
+    was right there. The prompt's tone block bans corporate hedging
+    AND the navigation rules say "call tools first" — but the weak
+    model finds "Извините" as a soft fallback when uncertain.
+
+    Anti-test: when the task names a project file the model can see
+    via list_files, it must NOT open with an apology / "не могу
+    найти" / "I can't find" before any tool round-trip."""
+    (tmp_path / "session.py").write_text(
+        "class Session:\n"
+        "    def mark_compacted(self) -> None:\n"
+        '        """Anchor the footer budget to the post-compact state."""\n'
+        "        pass\n"
+    )
+    agent = _make_agent(tmp_path)
+    result = await agent.ask("Покажи тело метода mark_compacted из Session")
+    head = result.reply.lstrip().lower()[:60]
+    forbidden = (
+        "извините",
+        "я не могу",
+        "i can't find",
+        "i'm sorry",
+        "i cannot",
+    )
+    assert not any(h in head for h in forbidden), (
+        f"task reply opened with an apology/disclaimer:\n{result.reply[:300]}"
+    )
+    # And the right content has to come back
+    assert "mark_compacted" in result.reply
