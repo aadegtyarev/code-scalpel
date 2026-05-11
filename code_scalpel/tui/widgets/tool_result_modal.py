@@ -18,6 +18,7 @@ from textual.screen import ModalScreen
 from textual.widgets import Static
 
 from code_scalpel.tools.agent_tools import ToolResult
+from code_scalpel.tui.widgets._map_highlight import highlight_map
 from code_scalpel.tui.widgets.tool_use import _infer_lexer_for
 
 
@@ -30,7 +31,7 @@ class ToolResultModal(ModalScreen[None]):
     }
     ToolResultModal > Vertical {
         background: #161616;
-        border: round #444444;
+        border: round #3a3a3a;
         width: 90%;
         height: 90%;
         padding: 1 2;
@@ -43,26 +44,33 @@ class ToolResultModal(ModalScreen[None]):
     }
     ToolResultModal #trm-hint {
         height: auto;
-        color: #707070;
+        color: #585858;
         padding: 1 0 0 0;
     }
     ToolResultModal VerticalScroll {
         height: 1fr;
         background: #0f0f0f;
-        border: tall #2a2a2a;
+        border: round #2a2a2a;
         padding: 0 1;
+        scrollbar-size-vertical: 1;
+        scrollbar-color: #2a2a2a;
+        scrollbar-color-hover: #404040;
+        scrollbar-color-active: #5fbf5f;
+        scrollbar-background: #0f0f0f;
+        scrollbar-background-hover: #0f0f0f;
+        scrollbar-background-active: #0f0f0f;
     }
     ToolResultModal #trm-body {
         height: auto;
         background: #0f0f0f;
-        color: #d0d0d0;
+        color: #c0c0c0;
     }
     """
 
     BINDINGS = [
         Binding("escape", "dismiss", "Close"),
         Binding("ctrl+o", "dismiss", "Close", show=False),
-        Binding("q", "dismiss", "Close"),
+        Binding("ctrl+c", "copy", "Copy"),
     ]
 
     def __init__(self, result: ToolResult) -> None:
@@ -83,10 +91,15 @@ class ToolResultModal(ModalScreen[None]):
         )
 
     def _body_renderable(self) -> RenderableType | None:
-        """Highlighted body for successful read_file; None for everything
-        else (compose() will render plain text with markup=False)."""
+        """Highlighted body for successful read_file or project_map; None for
+        everything else (compose() will render plain text with markup=False).
+        """
         if not self._result.output or not self._result.ok:
             return None
+        # Custom highlight for project_map — the format isn't valid Python,
+        # so no Pygments lexer fits. See _map_highlight.py.
+        if self._result.call.name == "project_map":
+            return highlight_map(self._result.output)
         lexer = _infer_lexer_for(self._result.call)
         if lexer:
             return Syntax(
@@ -94,9 +107,19 @@ class ToolResultModal(ModalScreen[None]):
                 lexer,
                 theme="monokai",
                 background_color="default",
-                line_numbers=False,
+                line_numbers=True,
+                word_wrap=True,
             )
         return None
+
+    @staticmethod
+    def _with_line_numbers(text: str) -> str:
+        """Prepend 1-indexed line numbers to plain-text bodies (project map,
+        grep results, run_tests output). Lines are zero-padded to the widest
+        line-number width so the columns stay aligned."""
+        lines = text.splitlines() or [""]
+        width = len(str(len(lines)))
+        return "\n".join(f"{i:>{width}}  {line}" for i, line in enumerate(lines, 1))
 
     def compose(self) -> ComposeResult:
         with Vertical():
@@ -104,13 +127,25 @@ class ToolResultModal(ModalScreen[None]):
             with VerticalScroll():
                 highlighted = self._body_renderable()
                 if highlighted is not None:
+                    # Syntax handles its own line numbers + wrap.
                     yield Static(highlighted, id="trm-body")
                 elif not self._result.output:
                     yield Static("[dim](empty output)[/dim]", id="trm-body")
                 else:
-                    # Plain text branch: markup=False so file contents
-                    # / traceback brackets don't blow up Rich.
-                    yield Static(self._result.output, id="trm-body", markup=False)
-            # `\[` escapes the literal bracket in Rich markup so `[esc]` /
-            # `[q]` aren't parsed as opening tags.
-            yield Static(r"\[esc] close · \[q] close", id="trm-hint")
+                    # Plain text: prepend our own line numbers, mark up off.
+                    yield Static(
+                        self._with_line_numbers(self._result.output),
+                        id="trm-body",
+                        markup=False,
+                    )
+            yield Static(r"\[esc] close · \[ctrl+c] copy", id="trm-hint")
+
+    def action_copy(self) -> None:
+        """Ctrl+C copies the raw tool output (not the rendered highlight)."""
+        text = self._result.output or ""
+        try:
+            self.app.copy_to_clipboard(text)
+        except Exception:
+            # Some terminals don't support OSC52; quiet fail keeps the
+            # modal usable as a fallback viewer.
+            return

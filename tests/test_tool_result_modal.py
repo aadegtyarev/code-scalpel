@@ -61,6 +61,38 @@ def test_body_non_read_file_tools_render_plain() -> None:
     assert modal._body_renderable() is None
 
 
+def test_body_project_map_uses_custom_highlight() -> None:
+    """project_map is a synthetic tool with a non-Python format — modal
+    renders it through highlight_map (returns rich.Text), not Syntax."""
+    from rich.text import Text
+
+    map_dump = (
+        "code_scalpel/agent.py [314L]\n"
+        "  class StepAgent\n"
+        "    def ask(self, task: str) -> StepResult\n"
+    )
+    modal = ToolResultModal(_result("project_map", "", map_dump))
+    body = modal._body_renderable()
+    assert isinstance(body, Text)
+    # Path styling lands on the first file path; keywords are coloured too.
+    assert "code_scalpel/agent.py" in body.plain
+    assert "class StepAgent" in body.plain
+
+
+def test_line_numbers_align_columns() -> None:
+    """Plain-text bodies get our own line numbers prepended — they must
+    be right-aligned to the widest line-number width so columns don't drift."""
+    text = "a\nb\nc"
+    out = ToolResultModal._with_line_numbers(text)
+    assert out == "1  a\n2  b\n3  c"
+
+    # 10-line input → width 2 so 1-9 get padded.
+    big = "\n".join("x" for _ in range(10))
+    out = ToolResultModal._with_line_numbers(big)
+    assert out.startswith(" 1  x")
+    assert "10  x" in out
+
+
 def test_body_empty_output_returns_none() -> None:
     """Empty output → None; compose() mounts a '(empty output)' placeholder."""
     modal = ToolResultModal(_result("grep", {"pattern": "x"}, ""))
