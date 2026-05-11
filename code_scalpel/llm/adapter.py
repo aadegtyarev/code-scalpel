@@ -53,6 +53,8 @@ class LLMAdapter(Protocol):
         **kwargs: Any,
     ) -> AsyncIterator[StreamChunk]: ...
 
+    def set_model(self, model: str) -> None: ...
+
 
 class OpenAICompatibleAdapter:
     def __init__(
@@ -70,6 +72,12 @@ class OpenAICompatibleAdapter:
         )
         self._model = model
         self._cost_per_1k = cost_per_1k
+
+    def set_model(self, model: str) -> None:
+        """Swap the model id used for subsequent requests. Called by the TUI
+        after autodetect resolves a placeholder name (`auto` / `local-model`)
+        to the real id served by the provider."""
+        self._model = model
 
     async def chat(
         self,

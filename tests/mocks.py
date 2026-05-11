@@ -60,6 +60,9 @@ class MockLLMAdapter:
         for tc in tcs:
             yield StreamChunk(tool_call=tc)
 
+    def set_model(self, model: str) -> None:
+        self.model = model
+
 
 class MockShellRunner:
     """Deterministic shell runner for tests."""

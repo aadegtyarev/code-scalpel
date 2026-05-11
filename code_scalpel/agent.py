@@ -387,9 +387,7 @@ class StepAgent:
             # Best-effort; don't crash the turn over a write failure.
             pass
 
-    def _initial_messages(
-        self, user_msg: str, *, mode: str = "ask"
-    ) -> list[dict[str, Any]]:
+    def _initial_messages(self, user_msg: str, *, mode: str = "ask") -> list[dict[str, Any]]:
         # With native function-calling, tool docs come from the API schema —
         # we don't need few-shot examples of the text <TOOL: name> format.
         system = _SYSTEM_PROMPT

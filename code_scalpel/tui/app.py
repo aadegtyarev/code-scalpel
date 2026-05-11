@@ -188,7 +188,7 @@ class ScalpelApp(App[None]):
             # Adapter was built with profile.model (likely "auto"); replace
             # so the next request carries the real id and logs cleanly.
             if self._agent is not None and model_name != profile.model:
-                self._agent._llm._model = model_name  # type: ignore[attr-defined]
+                self._agent._llm.set_model(model_name)
             if tokens:
                 self.state.context_limit = tokens
                 self._update_footer()

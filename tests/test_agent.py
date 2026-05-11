@@ -611,3 +611,60 @@ async def test_stream_ask_in_plan_mode_also_saves(project: Path) -> None:
     async for _ in agent.stream_ask("plan", mode="plan"):
         pass
     assert (project / ".code-scalpel" / "TASKS.md").is_file()
+
+
+# ── loop guard (force-answer when the model spins on identical tool calls) ──
+
+
+@pytest.mark.asyncio
+async def test_loop_guard_breaks_repeating_tool_calls(project: Path) -> None:
+    """If the model emits the SAME tool call twice in a row, the agent
+    injects a force-answer message instead of executing again. Otherwise
+    a buggy model could loop forever (or until _MAX_TOOL_ROUNDS). The
+    guard fires on the second occurrence and the third turn produces
+    the final text answer."""
+    from code_scalpel.llm.adapter import NativeToolCall
+
+    repeated = NativeToolCall(id="c1", name="read_file", arguments='{"path": "hello.py"}')
+    # Round 1: tool_call. Round 2: same tool_call → triggers guard.
+    # Round 3: plain text answer.
+    llm = MockLLMAdapter(
+        [
+            ("", [repeated]),
+            ("", [repeated]),
+            "Final answer based on what I had.",
+        ]
+    )
+    agent = StepAgent(llm=llm, cwd=project, config=_CONFIG)
+    result = await agent.ask("look")
+    assert result.reply == "Final answer based on what I had."
+    # Three chat() calls — last one received the force-answer prompt.
+    assert len(llm.calls) == 3
+    third_call = llm.calls[2]
+    contents = "\n".join(str(m.get("content") or "") for m in third_call)
+    assert "Stop calling" in contents or "answer the original question" in contents
+
+
+@pytest.mark.asyncio
+async def test_loop_guard_works_in_stream_path(project: Path) -> None:
+    """Same guard, exercised through stream_ask — TUI's actual path."""
+    from code_scalpel.llm.adapter import NativeToolCall
+
+    repeated = NativeToolCall(id="c1", name="read_file", arguments='{"path": "hello.py"}')
+    llm = MockLLMAdapter(
+        [
+            ("", [repeated]),
+            ("", [repeated]),
+            "Done.",
+        ]
+    )
+    agent = StepAgent(llm=llm, cwd=project, config=_CONFIG)
+    chunks: list[str] = []
+    async for item in agent.stream_ask("look"):
+        from code_scalpel.agent import TextDelta
+
+        if isinstance(item, TextDelta):
+            chunks.append(item.text)
+    assert "".join(chunks).endswith("Done.")
+    # Force-answer reached the third call
+    assert len(llm.calls) == 3
