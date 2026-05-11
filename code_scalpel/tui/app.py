@@ -351,13 +351,16 @@ class ScalpelApp(App[None]):
 
     def _do_skills(self) -> None:
         """Surface what the agent / TUI can currently do — built-in tools
-        (function-calling) and slash commands. This is a placeholder
-        until SkillRegistry lands (plan.md v0.3); the real /skills will
-        list user-installed Python/Docker/etc. skills with token cost,
-        same shape as Claude Code. For now we render the static catalog
-        so the user has one place to discover the surface area."""
+        (function-calling), slash commands, and detected user skills.
+
+        The skills section is the live SkillRegistry view: every skill
+        whose `detect()` fires for `self.cwd` is listed with its name,
+        description and rough token cost. Built-ins (Python, Docker)
+        appear automatically; user-registered skills appear once they
+        call `register_skill(...)`."""
         import json
 
+        from code_scalpel.skills import active_skills
         from code_scalpel.tools.agent_tools import TOOL_SCHEMAS
 
         lines: list[str] = []
@@ -376,14 +379,25 @@ class ScalpelApp(App[None]):
             lines.append(f"  {name:<18} {tokens:>4}t  {first}")
 
         lines.append("")
+        lines.append("Skills (detected) — pluggable per-stack contracts (test / lint / format)")
+        skills = active_skills(self.cwd)
+        if not skills:
+            lines.append("  (none detected for this project)")
+        else:
+            for skill in skills:
+                desc = skill.description.replace("\n", " ").strip()
+                if len(desc) > 110:
+                    desc = desc[:107] + "…"
+                lines.append(f"  {skill.name:<18} {skill.token_cost():>4}t  {desc}")
+
+        lines.append("")
         lines.append("Slash commands — TUI-side surface")
         for cmd, hint in _SLASH_COMMANDS:
             lines.append(f"  {cmd:<18}     {hint}")
 
         lines.append("")
         lines.append(
-            "(SkillRegistry — pluggable user skills with token cost — is on "
-            "the v0.3 roadmap. This view will reshape when it lands.)"
+            "Skills detected from your project — pluggable. `register_skill(...)` to add your own."
         )
         text = "\n".join(lines)
 
