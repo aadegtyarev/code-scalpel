@@ -172,9 +172,7 @@ class StepAgent:
         text, or None if history is empty."""
         if not self._history:
             return None
-        joined = "\n\n".join(
-            f"[{m['role']}]\n{m['content']}" for m in self._history
-        )
+        joined = "\n\n".join(f"[{m['role']}]\n{m['content']}" for m in self._history)
         msgs = [
             {
                 "role": "system",

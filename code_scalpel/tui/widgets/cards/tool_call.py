@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from typing import Literal
 
+from rich.console import RenderableType
+from rich.syntax import Syntax
 from textual.app import ComposeResult
 from textual.binding import Binding
 from textual.message import Message
@@ -13,21 +15,17 @@ _RUNNING = "◌"
 _DONE = "●"
 
 
-def _colorize_diff(diff: str) -> str:
-    """Return Rich markup for a unified diff string."""
-    lines: list[str] = []
-    for line in diff.splitlines():
-        if line.startswith("+++") or line.startswith("---"):
-            lines.append(f"[dim]{line}[/dim]")
-        elif line.startswith("+"):
-            lines.append(f"[#7fc090]{line}[/#7fc090]")
-        elif line.startswith("-"):
-            lines.append(f"[#d97b6c]{line}[/#d97b6c]")
-        elif line.startswith("@@"):
-            lines.append(f"[#3a3a3a]{line}[/#3a3a3a]")
-        else:
-            lines.append(line)
-    return "\n".join(lines)
+def _render_diff(diff: str) -> RenderableType:
+    """Render a unified diff with Pygments' diff lexer — gets +/- coloring AND
+    Python token highlighting within each code line."""
+    return Syntax(
+        diff,
+        "diff",
+        theme="ansi_dark",
+        background_color="default",
+        line_numbers=False,
+        word_wrap=True,
+    )
 
 
 class PatchDecision(Message):
@@ -118,12 +116,12 @@ class ToolCallCard(Widget):
         dot_color = "#d97b6c" if self._error else "#7fc090"
         return f"[{dot_color}]{_DONE}[/{dot_color}] {label}"
 
-    def _body_markup(self) -> str:
+    def _body_renderable(self) -> RenderableType:
         state = self._state
         if state == "running":
             return ""
         if state == "reviewing":
-            return _colorize_diff(self._diff)
+            return _render_diff(self._diff)
         prefix = "[#d97b6c]└ Error:[/#d97b6c]" if self._error else "[dim]└[/dim]"
         return f"{prefix} {self._summary}"
 
@@ -140,7 +138,7 @@ class ToolCallCard(Widget):
 
     def _refresh_all(self) -> None:
         self.query_one("#card-header", Static).update(self._header_line())
-        self.query_one("#card-body", Static).update(self._body_markup())
+        self.query_one("#card-body", Static).update(self._body_renderable())
         self.query_one("#card-hint", Static).update(self._hint_markup())
 
     # ── actions ───────────────────────────────────────────────────────────────

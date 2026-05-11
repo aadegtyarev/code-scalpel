@@ -126,6 +126,28 @@ async def test_slash_help_lists_commands(sandbox: Path) -> None:
 
 
 @pytest.mark.asyncio
+async def test_resume_notice_shown_when_dirty_patch(sandbox: Path) -> None:
+    """If the previous session was interrupted with dirty_patch=True, the user
+    must see an inline notice on startup — and the flag should auto-clear so
+    we don't nag them every launch."""
+    from code_scalpel.state import AgentState
+
+    # Set the flag as if the previous session died mid-apply
+    pre = AgentState(dirty_patch=True)
+    pre.save(sandbox)
+
+    app = ScalpelApp(config=_CONFIG, cwd=sandbox)
+    async with app.run_test(headless=True, size=(80, 24)) as pilot:
+        await pilot.pause(0.3)
+        # Flag must be cleared so we don't keep nagging
+        assert app.state.dirty_patch is False
+        # Confirm a notice widget was mounted in the output area
+        output = app.query_one(OutputLog)
+        msg_widgets = [c for c in output.children if c.id != "_spacer"]
+        assert len(msg_widgets) >= 1, "expected an inline resume notice"
+
+
+@pytest.mark.asyncio
 async def test_slash_command_does_not_pin_language(sandbox: Path) -> None:
     """Slash commands like '/mode plan' are not natural-language input.
     Detecting language from them would pin English even if the user is

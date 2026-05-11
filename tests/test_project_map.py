@@ -73,6 +73,47 @@ def test_empty_python_file_shows_header_only(tmp_path: Path) -> None:
     assert "empty.py [0L]" in out
 
 
+def test_map_caches_unchanged_files(tmp_path: Path) -> None:
+    """Cached blocks should be reused when mtime hasn't changed."""
+    import json
+
+    (tmp_path / "x.py").write_text("def f():\n    pass\n")
+    first = build_map(tmp_path)
+    cache_path = tmp_path / ".code-scalpel" / "INDEX.json"
+    assert cache_path.is_file()
+    cache = json.loads(cache_path.read_text())
+    assert "x.py" in cache
+
+    # Corrupt the cached block — if cache is actually being used, we'll see the
+    # corruption echoed back instead of a fresh parse.
+    cache["x.py"]["block"] = "MARKER_FROM_CACHE"
+    cache_path.write_text(json.dumps(cache))
+    second = build_map(tmp_path)
+    assert "MARKER_FROM_CACHE" in second
+
+
+def test_map_invalidates_cache_when_mtime_changes(tmp_path: Path) -> None:
+    import json
+    import os
+    import time
+
+    (tmp_path / "x.py").write_text("def f():\n    pass\n")
+    build_map(tmp_path)
+
+    # Poison the cache then bump the file's mtime
+    cache_path = tmp_path / ".code-scalpel" / "INDEX.json"
+    cache = json.loads(cache_path.read_text())
+    cache["x.py"]["block"] = "STALE"
+    cache_path.write_text(json.dumps(cache))
+    time.sleep(0.01)
+    new_mtime = time.time()
+    os.utime(tmp_path / "x.py", (new_mtime, new_mtime))
+
+    refreshed = build_map(tmp_path)
+    assert "STALE" not in refreshed
+    assert "def f()" in refreshed
+
+
 def test_map_is_substantially_smaller_than_full_content(tmp_path: Path) -> None:
     """The whole point of the map is token efficiency."""
     big = (

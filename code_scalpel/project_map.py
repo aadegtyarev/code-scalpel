@@ -15,26 +15,67 @@ becomes 0.5-1.5k.
 from __future__ import annotations
 
 import ast
+import json
 from pathlib import Path
 
 from code_scalpel.tools.files import list_files
 
+_INDEX_FILE = Path(".code-scalpel") / "INDEX.json"
 
-def build_map(root: Path, max_files: int = 200) -> str:
-    """Return a compact textual map of the project rooted at `root`."""
+
+def build_map(root: Path, max_files: int = 200, use_cache: bool = True) -> str:
+    """Return a compact textual map of the project rooted at `root`.
+
+    With `use_cache=True`, persists per-file blocks keyed by mtime so unchanged
+    files don't get re-parsed on every turn. Massive win on larger projects.
+    """
     files = list_files(root, max_files=max_files)
+    cache = _load_cache(root) if use_cache else {}
+    new_cache: dict[str, dict[str, float | str]] = {}
     blocks: list[str] = []
     for rel in files:
         path = root / rel
-        if rel.suffix == ".py":
-            try:
-                source = path.read_text(errors="replace")
-            except OSError:
-                continue
-            blocks.append(_python_block(str(rel), source))
+        rel_key = str(rel)
+        try:
+            mtime = path.stat().st_mtime
+        except OSError:
+            continue
+        cached = cache.get(rel_key)
+        if cached is not None and cached.get("mtime") == mtime:
+            block = str(cached["block"])
         else:
-            blocks.append(_plain_block(str(rel), path))
+            if rel.suffix == ".py":
+                try:
+                    source = path.read_text(errors="replace")
+                except OSError:
+                    continue
+                block = _python_block(rel_key, source)
+            else:
+                block = _plain_block(rel_key, path)
+        new_cache[rel_key] = {"mtime": mtime, "block": block}
+        blocks.append(block)
+    if use_cache:
+        _save_cache(root, new_cache)
     return "\n".join(blocks)
+
+
+def _load_cache(root: Path) -> dict[str, dict[str, float | str]]:
+    path = root / _INDEX_FILE
+    if not path.is_file():
+        return {}
+    try:
+        return dict(json.loads(path.read_text()))
+    except (OSError, json.JSONDecodeError):
+        return {}
+
+
+def _save_cache(root: Path, data: dict[str, dict[str, float | str]]) -> None:
+    target = root / _INDEX_FILE
+    try:
+        target.parent.mkdir(exist_ok=True)
+        target.write_text(json.dumps(data))
+    except OSError:
+        pass
 
 
 def _python_block(rel: str, source: str) -> str:

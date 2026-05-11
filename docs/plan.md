@@ -1640,51 +1640,45 @@ class Session:
 > Resume / crash recovery — в v0.2; `dirty_patch` в STATE.json остаётся в v0.1 для безопасности. Реализуется инлайн (notice-карточка в OutputLog при запуске, если STATE.json дёрнут), без отдельного экрана.
 > TUI: не начинать с идеальных карточек. Порядок: Input + Footer → ToolCallCard → PlanCard → остальное.
 
-### v0.2
+### ~~v0.2~~ ✓ закрыта 2026-05-11
 
 ```text
-TUI: цвет режима + Shift+Tab — подсмотрено в Claude Code (см.
-  скриншоты обсуждения). Каждый из ask/plan/step/review получает
-  свой цвет (синий/жёлтый/зелёный/пурпурный), он же красит:
-    • prompt prefix (`> ask`) в ModeInput
-    • border-title-color
-    • mini-hint в Rule под инпутом «shift+tab to cycle»
-  Переключение по Shift+Tab вместо Tab (Tab оставить для
-  автокомплита). Сейчас Tab переключает режимы — конфликт.
-native function calling (HOOK): сейчас tool-вызовы — наш кастомный
-  `<TOOL: name>` формат с парсингом регэкспом. OpenAI/Anthropic API
-  поддерживает structured function_calling — модель знает формат с
-  обучения, провайдер парсит и валидирует JSON-схему. LM Studio
-  пробрасывает к qwen2.5-coder, который умеет. Должно повысить
-  надёжность tool-loop на N% и убрать кастомный парсер. Минус:
-  привязка к провайдерам с function_calling, fallback для не-
-  поддерживающих останется на текстовом формате.
-map-as-context + tool-calls-for-reads — ключевая архитектурная правка.
-  Сейчас агент eager-стафит контекст: список файлов + первые 3 файла
-  целиком, на КАЖДОМ turn. «Привет» = 7k токенов, реальный проект =
-  5-8k токенов на каждый запрос. Это потолок v0.1.
-  Архитектура v0.2:
-    • static map: INDEX.json с AST-символами (path → classes/funcs/
-      imports), плюс опциональные 1-2 строки LLM summary на файл.
-      Карта целиком влезает в ~1-2k токенов для среднего проекта.
-    • tool-calling loop: модель сама вызывает read_file / grep /
-      run_tests когда нужно. Не вшиваем содержимое заранее.
-    • протокол: assistant → tool_call → tool_result → assistant.
-      Tool-карточки в TUI (паттерн Claude Code: имя + результат).
-  Эффект: casual «привет» = ~200 токенов, реальная правка читает
-  МНОГО файлов, но только нужные.
-task classifier (local heuristic)
-planner (LLM → TASKS.md)
-context builder (stable + dynamic + компрессия)
-step summarizer (template + LLM)
-Q&A screen (design/plan mode) + [X] Compact
-compact (TUI-only, LAST_COMPACT.md)
-debug sub-mode (traceback → fix)
-resume on launch (inline notice-card в OutputLog) + crash recovery:
-  если в STATE.json `dirty_patch=True` или другие признаки оборванной
-  сессии — при запуске показываем notice-карточку с предложением
-  восстановить/откатить. БЕЗ отдельного экрана, всё инлайн как и
-  остальная архитектура карточек.
+✓ TUI: цвет режима + Ctrl+T (Shift+Tab перехватывался Input для focus_previous)
+  • prompt prefix красится цветом mode, mini-hint в footer
+  • ask=cyan, plan=gold, step=green, review=coral
+✓ map-as-context + tool-calls-for-reads:
+  • static map: AST-символы (path → classes/funcs/constants), кеш в
+    .code-scalpel/INDEX.json с mtime-инвалидацией
+  • tool-calling loop: read_file / grep (с pure-python fallback на
+    rg отсутствие) / run_tests
+  • протокол: assistant → tool_call → tool_result → assistant
+  • Tool-карточки в TUI (Collapsible одной строкой: name + summary,
+    раскрытие по chevron)
+  • Эффект: casual «привет» = ~200 токенов вместо 7k
+✓ /compact: реальная реализация (summarize history → 1 message)
+✓ /new: чистит widgets + state.json + history
+✓ stream events типизированы: TextDelta / ToolExecuted
+✓ стрим в Static (мгновенный), на finalize → Markdown с подсветкой
+✓ tokens/sec в footer
+✓ детект языка пользователя (Russian/English) с прибавкой к task'у
+✓ ESC прерывает стрим (двойная защита: binding + on_key)
+✓ apply_edits атомарный + пустой/whitespace SEARCH = prepend
+✓ syntax highlight в diff-карточке через Rich Syntax (lexer=diff)
+✓ resume on launch: inline notice-карточка при dirty_patch=True,
+  флаг сбрасывается чтобы не нагружать каждый запуск
+✓ debug sub-mode: regen-кнопка в diff-карточке re-кормит модели
+  предыдущий патч и просит другой подход
+✓ session summary при выходе печатается в stdout (typer.echo)
+✓ Бенч: 16/16 (15 базовых + multi-file navigation) на map+tools
+✓ Тесты: 144 unit + 16 LLM
+```
+
+Перенесено в v0.3:
+- task classifier (local heuristic) — нужен для autonomous mode
+- planner mode + TASKS.md — большой кусок, рядом с autonomous
+- step summarizer — depends on step mode
+- context builder compression — пока не упираемся в лимит
+- `!cmd` shell escape в инпуте
 ! <cmd> в инпуте — выполнить bash-команду напрямую (без whitelist, вывод в поток)
 ```
 

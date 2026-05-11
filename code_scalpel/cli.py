@@ -37,4 +37,8 @@ def _launch(path: Path) -> None:
     from code_scalpel.tui.app import ScalpelApp
 
     config = load_config()
-    ScalpelApp(config=config, cwd=path).run()
+    app = ScalpelApp(config=config, cwd=path)
+    app.run()
+    summary = getattr(app, "_exit_summary", None)
+    if summary:
+        typer.echo(summary)

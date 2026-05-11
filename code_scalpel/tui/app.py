@@ -92,7 +92,33 @@ class ScalpelApp(App[None]):
         self.query_one(ModeInput).focus_input()
         self._update_footer()
         self._init_agent()
+        self._show_resume_notice()
         self.run_worker(self._detect_context(), exclusive=False)
+
+    async def on_unmount(self) -> None:
+        """Print a session summary to stdout on exit — handy for cost tracking."""
+        try:
+            line = self.session.summary_line()
+        except Exception:
+            return
+        # Stored for the user to read after the TUI exits; printed by main().
+        self._exit_summary = line
+
+    _exit_summary: str | None = None
+
+    def _show_resume_notice(self) -> None:
+        """If STATE.json reports an interrupted session, surface that inline so
+        the user knows they may need to roll back uncommitted changes."""
+        if self.state.dirty_patch:
+            output = self.query_one(OutputLog)
+            output.print_status(
+                "● Previous session ended with an unfinished patch. "
+                "Working tree may have stale edits — review with `git diff` "
+                "or `git restore .` if you want to discard them."
+            )
+            # Clear the flag so we don't nag every launch
+            self.state.dirty_patch = False
+            self.state.save(self.cwd)
 
     def _init_agent(self) -> None:
         try:
@@ -282,6 +308,21 @@ class ScalpelApp(App[None]):
             output.print_error(f"Error: {e}")
             footer.status = "● error"
 
+    async def _regenerate(self, prev_edits: list[Edit]) -> None:
+        """Ask the model to retry the patch — used after a rejected or
+        failed apply. Builds a context message with what was tried."""
+        footer = self.query_one(StatusFooter)
+        assert self._agent is not None
+        footer.status = "◌ regenerating…"
+        from code_scalpel.patch.edit_block import edits_to_diff
+
+        diff = edits_to_diff(prev_edits, self.cwd)
+        task = (
+            "Your previous patch was rejected or didn't apply. Try a different "
+            "approach. Previous attempt:\n\n" + diff
+        )
+        self.run_worker(self._run_step(task), exclusive=True, group="step")
+
     async def _wait_mounted(self, widget: Widget) -> None:
         # widget.mount is dispatched via a worker in OutputLog._append.
         # Wait a short tick so update() doesn't race the mount.
@@ -309,11 +350,13 @@ class ScalpelApp(App[None]):
 
         if action == "apply" and self._pending_edits:
             footer.status = "◌ applying…"
+            self.state.dirty_patch = True
+            self.state.save(self.cwd)
             ok, err = apply_edits(self._pending_edits, self.cwd)
             self._pending_edits = None
             if ok:
                 output.print_status("● Patch applied.")
-                self.state.dirty_patch = True
+                self.state.dirty_patch = False
                 self.state.save(self.cwd)
             else:
                 output.print_error(f"Apply failed: {err}")
@@ -325,8 +368,15 @@ class ScalpelApp(App[None]):
             footer.status = "● idle"
 
         elif action == "regen":
+            edits = self._pending_edits
             self._pending_edits = None
-            output.print_status("Regen not implemented in v0.1.")
+            if edits is None or self._agent is None:
+                footer.status = "● idle"
+            else:
+                # Debug retry: feed the apply error back to the model and ask
+                # for a fixed patch. One round only — don't spiral.
+                self.run_worker(self._regenerate(edits), exclusive=True, group="step")
+                return
             footer.status = "● idle"
 
         self.query_one(ModeInput).focus_input()
