@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 from pathlib import Path
+from typing import Any
 
 from textual import events
 from textual.app import App, ComposeResult
@@ -24,6 +25,7 @@ from code_scalpel.tui.widgets.footer import StatusFooter
 from code_scalpel.tui.widgets.input import ModeInput, UserMessage
 from code_scalpel.tui.widgets.output import OutputLog
 from code_scalpel.tui.widgets.tool_result_modal import ToolResultModal
+from code_scalpel.tui.widgets.tool_use import ToolUseCard
 
 
 class _UpwardAutoComplete(AutoComplete):
@@ -95,6 +97,8 @@ class ScalpelApp(App[None]):
         Binding("ctrl+q", "quit", "Quit"),
         Binding("ctrl+t", "cycle_mode", "Mode", show=False),
         Binding("ctrl+o", "show_last_tool_result", "Open last tool result", show=False),
+        Binding("ctrl+up", "focus_prev_card", "Previous tool card", show=False),
+        Binding("ctrl+down", "focus_next_card", "Next tool card", show=False),
         Binding("escape", "cancel_step", "Cancel", show=False),
     ]
 
@@ -307,6 +311,12 @@ class ScalpelApp(App[None]):
         footer.status = "● idle"
 
     def action_cancel_step(self) -> None:
+        # Esc on a focused tool card returns the user to the input rather
+        # than cancelling — they almost certainly meant "I'm done browsing
+        # cards, let me type again", not "kill the live step".
+        if self._focused_card() is not None:
+            self.query_one(ModeInput).focus_input()
+            return
         w = getattr(self, "_step_worker", None)
         if w is not None and not w.is_finished:
             w.cancel()
@@ -318,6 +328,55 @@ class ScalpelApp(App[None]):
             self.query_one(OutputLog).print_status("● No tool result yet in this session.")
             return
         self.push_screen(ToolResultModal(self._last_tool_result))
+
+    def action_focus_prev_card(self) -> None:
+        """Ctrl+↑ from input: jump to the most recent tool card. From an
+        already-focused card: move toward older cards. Clamps at oldest
+        instead of wrapping — wrap-around is disorienting when you can't
+        see the whole chat at once."""
+        self._step_card(-1)
+
+    def action_focus_next_card(self) -> None:
+        """Ctrl+↓: opposite direction. Past the newest card → back to
+        input, mirroring how HistoryInput's ↓-past-newest restores draft."""
+        self._step_card(+1)
+
+    def _list_tool_cards(self) -> list[ToolUseCard]:
+        return list(self.query_one(OutputLog).query(ToolUseCard))
+
+    def _focused_card(self) -> ToolUseCard | None:
+        """Return the ToolUseCard containing the currently-focused widget,
+        or None if focus is elsewhere (input, footer, modal)."""
+        focused = self.focused
+        if focused is None:
+            return None
+        node: Any = focused
+        while node is not None:
+            if isinstance(node, ToolUseCard):
+                return node
+            node = getattr(node, "parent", None)
+        return None
+
+    def _step_card(self, direction: int) -> None:
+        cards = self._list_tool_cards()
+        if not cards:
+            return
+        current = self._focused_card()
+        if current is None:
+            # Coming from input. ↑ enters at the newest card; ↓ does
+            # nothing — no "next" exists below the input.
+            if direction < 0:
+                cards[-1].focus_card()
+            return
+        idx = cards.index(current)
+        new_idx = idx + direction
+        if new_idx < 0:
+            return  # already at oldest — clamp
+        if new_idx >= len(cards):
+            # Stepped past the newest card → drop focus back into the input.
+            self.query_one(ModeInput).focus_input()
+            return
+        cards[new_idx].focus_card()
 
     def on_key(self, event: events.Key) -> None:
         """textual-autocomplete sometimes swallows Escape even when its

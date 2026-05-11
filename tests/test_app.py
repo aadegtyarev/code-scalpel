@@ -769,3 +769,120 @@ async def test_footer_model_reactive_renders(sandbox: Path) -> None:
         await pilot.pause(0.05)
         rendered = str(label.render())
         assert "qwen2.5-coder-14b" in rendered
+
+
+# ── Ctrl+↑/↓ tool-card navigation ────────────────────────────────────────────
+
+
+def _add_card(app: ScalpelApp, name: str, output: str) -> None:
+    """Mount a synthetic ToolUseCard for navigation tests — avoids dragging
+    a real LLM into the picture when all we want is multiple cards."""
+    from code_scalpel.tools.agent_tools import ToolCall, ToolResult
+
+    log = app.query_one(OutputLog)
+    call = ToolCall(name=name, body="")
+    result = ToolResult(call=call, output=output, ok=True)
+    log.add_tool_use(call, result)
+
+
+@pytest.mark.asyncio
+async def test_ctrl_up_from_input_jumps_to_newest_card(sandbox: Path) -> None:
+    """Ctrl+↑ from the input must land on the most recently added card.
+    Coming "from the input" is the common case — user is typing, wants
+    to revisit the tool output that just scrolled by."""
+    from textual.widgets._collapsible import CollapsibleTitle
+
+    app = ScalpelApp(config=_CONFIG, cwd=sandbox)
+    async with app.run_test(headless=True, size=(80, 24)) as pilot:
+        await pilot.pause(0.1)
+        _add_card(app, "read_file", "older\nstuff\n")
+        _add_card(app, "grep", "newer\nstuff\n")
+        await pilot.pause(0.2)
+
+        app.action_focus_prev_card()
+        await pilot.pause(0.05)
+        assert isinstance(app.focused, CollapsibleTitle)
+        # Newest card's title carries the grep tool name.
+        from code_scalpel.tui.widgets.tool_use import ToolUseCard
+
+        card = app._focused_card()
+        assert isinstance(card, ToolUseCard)
+        assert card._call.name == "grep"
+
+
+@pytest.mark.asyncio
+async def test_ctrl_up_then_up_walks_to_older_card(sandbox: Path) -> None:
+    app = ScalpelApp(config=_CONFIG, cwd=sandbox)
+    async with app.run_test(headless=True, size=(80, 24)) as pilot:
+        await pilot.pause(0.1)
+        _add_card(app, "read_file", "a\n")
+        _add_card(app, "grep", "b\n")
+        await pilot.pause(0.2)
+
+        app.action_focus_prev_card()  # newest = grep
+        await pilot.pause(0.05)
+        app.action_focus_prev_card()  # → older = read_file
+        await pilot.pause(0.05)
+        card = app._focused_card()
+        assert card is not None
+        assert card._call.name == "read_file"
+        # One more Ctrl+↑ clamps at the oldest, no error.
+        app.action_focus_prev_card()
+        await pilot.pause(0.05)
+        card = app._focused_card()
+        assert card is not None
+        assert card._call.name == "read_file"
+
+
+@pytest.mark.asyncio
+async def test_ctrl_down_past_newest_returns_focus_to_input(sandbox: Path) -> None:
+    """Mirrors HistoryInput's ↓-past-newest-restores-draft semantics:
+    once focus walks past the newest card, drop it back into the input."""
+    app = ScalpelApp(config=_CONFIG, cwd=sandbox)
+    async with app.run_test(headless=True, size=(80, 24)) as pilot:
+        await pilot.pause(0.1)
+        _add_card(app, "read_file", "a\n")
+        await pilot.pause(0.2)
+
+        app.action_focus_prev_card()
+        await pilot.pause(0.05)
+        assert app._focused_card() is not None
+
+        app.action_focus_next_card()
+        await pilot.pause(0.05)
+        assert app._focused_card() is None
+        assert app.focused.__class__.__name__ in ("Input", "HistoryInput")
+
+
+@pytest.mark.asyncio
+async def test_escape_on_focused_card_returns_to_input(sandbox: Path) -> None:
+    """Esc on a focused card means 'done browsing' — focus must go back
+    to the input, NOT cancel any live step (there usually isn't one when
+    the user is browsing)."""
+    app = ScalpelApp(config=_CONFIG, cwd=sandbox)
+    async with app.run_test(headless=True, size=(80, 24)) as pilot:
+        await pilot.pause(0.1)
+        _add_card(app, "read_file", "a\n")
+        await pilot.pause(0.2)
+
+        app.action_focus_prev_card()
+        await pilot.pause(0.05)
+        assert app._focused_card() is not None
+
+        app.action_cancel_step()
+        await pilot.pause(0.05)
+        assert app._focused_card() is None
+        assert app.focused.__class__.__name__ in ("Input", "HistoryInput")
+
+
+@pytest.mark.asyncio
+async def test_ctrl_up_with_no_cards_is_noop(sandbox: Path) -> None:
+    """Fresh app, no tool cards anywhere — Ctrl+↑ must not crash and
+    must not steal focus from the input."""
+    app = ScalpelApp(config=_CONFIG, cwd=sandbox)
+    async with app.run_test(headless=True, size=(80, 24)) as pilot:
+        await pilot.pause(0.1)
+        before = app.focused
+        app.action_focus_prev_card()
+        await pilot.pause(0.05)
+        assert app.focused is before

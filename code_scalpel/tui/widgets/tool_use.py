@@ -206,9 +206,29 @@ class ToolUseCard(Widget):
         # the input pages through past tool cards before reaching anything
         # actionable. Strip the title (and any child widget — read-only
         # bodies don't need keyboard focus either) out of the Tab cycle.
-        # Mouse-click on the chevron still toggles expansion because
-        # Collapsible handles that via its own click event, not focus.
+        # Programmatic focus via Ctrl+↑/↓ still works — see focus_card().
         from textual.widgets._collapsible import CollapsibleTitle
 
         for title in self.query(CollapsibleTitle):
             title.can_focus = False
+
+    def focus_card(self) -> None:
+        """Programmatically focus this card's CollapsibleTitle.
+
+        on_mount() turns can_focus off so Tab skips us; this method
+        temporarily flips it back on, focuses the title, and scrolls it
+        into view. The Tab cycle stays clean — only Ctrl+↑/↓ in
+        ScalpelApp can land here.
+
+        Enter/Space on the focused title fire Collapsible's built-in
+        toggle action; the user gets fold/unfold for free.
+        """
+        from textual.widgets._collapsible import CollapsibleTitle
+
+        try:
+            title = self.query_one(CollapsibleTitle)
+        except Exception:
+            return
+        title.can_focus = True
+        title.focus()
+        self.scroll_visible(animate=False)
