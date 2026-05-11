@@ -551,6 +551,28 @@ async def test_system_prompt_carries_grounding_rules() -> None:
     assert "dataclass" in text
 
 
+@pytest.mark.asyncio
+async def test_system_prompt_steers_diagrams_to_mermaid() -> None:
+    """When the user asks for a diagram, the model used to emit 5-screen
+    ASCII art file trees instead of a proper flowchart (probe
+    2026-05-11). The prompt now distinguishes FLOW from STRUCTURE and
+    bans ASCII boxes — diagrams ride the Mermaid path which the TUI can
+    render inline."""
+    from code_scalpel.agent import _SYSTEM_PROMPT
+
+    text = _SYSTEM_PROMPT
+    # The directive itself
+    assert "Diagrams" in text
+    # Flow vs structure distinction is explicit
+    assert "FLOW" in text and "STRUCTURE" in text
+    # Mermaid is named as the canonical format
+    assert "Mermaid" in text or "mermaid" in text
+    # The mermaid fence is shown so the model emits the right shape
+    assert "```mermaid" in text
+    # ASCII art is explicitly forbidden so the model doesn't fall back
+    assert "ASCII" in text and ("NEVER" in text or "никогда" in text.lower())
+
+
 # ── plan mode ───────────────────────────────────────────────────────────────
 
 
