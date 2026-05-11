@@ -183,10 +183,18 @@ ASCII через свой парсер, поэтому используем то
   Синтаксис: `participant Alice`, `Alice->>Bob: Request`,
   `Bob-->>Alice: Response`, `Note over Alice,Bob: …`.
 
-Всё остальное (classDiagram, stateDiagram, gantt, journey, gitgraph,
-mindmap, erDiagram) ПОКА не рендерится — модель не должна их
-использовать. Если задача про классы — рисуй flowchart с боксами
-"Class.method"; если про состояния — flowchart с decisions.
+* `classDiagram` — для всего что ПРО СТРУКТУРУ КЛАССОВ:
+    - иерархия наследования, интерфейсы
+    - связи композиция / агрегация между классами
+    - public/private API класса
+  Синтаксис: `class Name { +method() -priv() +field: int }`,
+  `Parent <|-- Child` (наследование), `Container *-- Item`
+  (композиция), `Owner o-- Asset` (агрегация), `A --> B`
+  (ассоциация), `A ..> B` (зависимость).
+
+Остальное (stateDiagram, gantt, journey, gitgraph, mindmap,
+erDiagram) ПОКА не рендерится — модель не должна их использовать.
+Если задача про состояния — рисуй flowchart с decisions.
 
 NEVER draw ASCII-art boxes-and-arrows like `+---+\n| X |\n+---+`
 вручную — терминал не делает это лучше Mermaid, а TUI потом

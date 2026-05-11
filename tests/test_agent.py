@@ -569,12 +569,14 @@ async def test_system_prompt_steers_diagrams_to_mermaid() -> None:
     assert "```mermaid" in text
     # ASCII art is explicitly forbidden so the model doesn't fall back
     assert "ASCII" in text and "NEVER" in text
-    # Two supported diagram types named so the model picks the right
+    # Three supported diagram types named so the model picks the right
     # one — flowchart for connections/flow, sequenceDiagram for actors
-    # and time. Other Mermaid types must be steered away from since the
-    # inline ASCII renderer doesn't support them.
+    # and time, classDiagram for code structure. Other Mermaid types
+    # must be steered away from since the inline ASCII renderer doesn't
+    # support them.
     assert "flowchart" in text
     assert "sequenceDiagram" in text
+    assert "classDiagram" in text
 
 
 # ── plan mode ───────────────────────────────────────────────────────────────
