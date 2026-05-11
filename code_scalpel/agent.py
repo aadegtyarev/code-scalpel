@@ -399,5 +399,13 @@ class StepAgent:
         return msgs
 
     def _user_message(self, task: str) -> str:
+        # Prepend the project map ONLY on the first turn of a session.
+        # On subsequent turns the model already has the map in its
+        # context from turn 1's prompt + can call read_file/grep for
+        # anything new. Re-prepending a 300-line map drowns short
+        # follow-ups like "Sonet" — model defaults to repeating its
+        # previous answer because the new task is buried in noise.
+        if self._history:
+            return task
         map_text = build_map(self._cwd, max_files=200)
         return f"Project map:\n{map_text}\n\nTask: {task}"

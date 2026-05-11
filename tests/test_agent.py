@@ -603,6 +603,49 @@ async def test_ask_mode_does_not_write_tasks_md(project: Path) -> None:
 
 
 @pytest.mark.asyncio
+async def test_map_only_prepended_on_first_turn(project: Path) -> None:
+    """Map is HUGE (300+ lines for a typical project). Re-prepending it
+    on every turn drowns short follow-ups — model defaults to repeating
+    its previous answer because the new task is lost in noise. Repro for
+    the 2026-05-11 'Sonet' bug: turn 1 asks "как добавить антропик
+    моделей", turn 2 says "Sonet" → model just re-output the turn 1 list
+    instead of using the clarification.
+
+    Fix: map ONLY on turn 1 (history empty). Subsequent turns send the
+    bare task; model has the map in its turn 1 prompt within history
+    and can read_file/grep for anything new."""
+    llm = MockLLMAdapter(["first reply", "second reply"])
+    agent = StepAgent(llm=llm, cwd=project, config=_CONFIG)
+
+    await agent.ask("first question")
+    await agent.ask("Sonet")
+
+    # Turn 1 user msg: contains map prefix
+    turn1_user = llm.calls[0][-1]["content"]
+    assert "Project map" in turn1_user
+    assert "first question" in turn1_user
+
+    # Turn 2 user msg: just the bare task, NO map
+    turn2_user = llm.calls[1][-1]["content"]
+    assert turn2_user == "Sonet"
+    assert "Project map" not in turn2_user
+
+
+@pytest.mark.asyncio
+async def test_map_returns_after_clear_history(project: Path) -> None:
+    """After /new (clear_history), the next turn is "turn 1" again —
+    map should be prepended."""
+    llm = MockLLMAdapter(["a", "b", "c"])
+    agent = StepAgent(llm=llm, cwd=project, config=_CONFIG)
+    await agent.ask("first")
+    await agent.ask("second")  # no map (history non-empty)
+    agent.clear_history()
+    await agent.ask("third")  # map should come back
+    third_user = llm.calls[2][-1]["content"]
+    assert "Project map" in third_user
+
+
+@pytest.mark.asyncio
 async def test_stream_ask_in_plan_mode_also_saves(project: Path) -> None:
     """TUI uses stream_ask, not ask. The plan-saving hook must fire from
     the streaming path too."""
