@@ -57,6 +57,7 @@ _SLASH_COMMANDS: list[tuple[str, str]] = [
     ("/tasks", "show the current plan from .code-scalpel/TASKS.md"),
     ("/stats", "show this session's token/cost/timing stats"),
     ("/context", "breakdown of context budget by category"),
+    ("/skills", "list available tools and slash commands"),
     ("/remember", "save a project note (e.g. /remember always run linter)"),
     ("/recall", "browse stored notes; with text — search them"),
     ("/loop", "toggle code-mode iterative patch loop (apply → test → retry)"),
@@ -348,6 +349,50 @@ class ScalpelApp(App[None]):
         output.add_tool_use(call, result, full=True)
         self._last_tool_result = result
 
+    def _do_skills(self) -> None:
+        """Surface what the agent / TUI can currently do — built-in tools
+        (function-calling) and slash commands. This is a placeholder
+        until SkillRegistry lands (plan.md v0.3); the real /skills will
+        list user-installed Python/Docker/etc. skills with token cost,
+        same shape as Claude Code. For now we render the static catalog
+        so the user has one place to discover the surface area."""
+        import json
+
+        from code_scalpel.tools.agent_tools import TOOL_SCHEMAS
+
+        lines: list[str] = []
+        lines.append("Tools — exposed to the model via function calling")
+        for spec in TOOL_SCHEMAS:
+            fn = spec.get("function", {})
+            name = fn.get("name", "?")
+            desc_full = str(fn.get("description", "")).strip()
+            # First sentence only — descriptions in TOOL_SCHEMAS are
+            # multi-paragraph (normative for the model); /skills wants a
+            # one-line summary the user can scan.
+            first = desc_full.split(".", 1)[0].strip().replace("\n", " ")
+            if len(first) > 110:
+                first = first[:107] + "…"
+            tokens = max(0, len(json.dumps(spec)) // 4)
+            lines.append(f"  {name:<18} {tokens:>4}t  {first}")
+
+        lines.append("")
+        lines.append("Slash commands — TUI-side surface")
+        for cmd, hint in _SLASH_COMMANDS:
+            lines.append(f"  {cmd:<18}     {hint}")
+
+        lines.append("")
+        lines.append(
+            "(SkillRegistry — pluggable user skills with token cost — is on "
+            "the v0.3 roadmap. This view will reshape when it lands.)"
+        )
+        text = "\n".join(lines)
+
+        output = self.query_one(OutputLog)
+        call = ToolCall(name="skills", body="")
+        result = ToolResult(call=call, output=text, ok=True)
+        output.add_tool_use(call, result, full=True)
+        self._last_tool_result = result
+
     def _do_stats(self) -> None:
         """Surface accumulated session stats as a collapsed ToolUseCard —
         same shape as /map and /tasks. The footer already shows live ctx,
@@ -576,6 +621,10 @@ class ScalpelApp(App[None]):
             # tiny repos it's instant, but route through a worker so
             # /context on a large tree doesn't freeze the UI.
             self.run_worker(self._do_context_worker(), exclusive=False, group="context")
+            return
+        if cmd == "/skills":
+            # Pure in-memory render — static catalog.
+            self._do_skills()
             return
         if cmd == "/remember" or cmd.startswith("/remember "):
             self._do_remember(cmd.removeprefix("/remember"))

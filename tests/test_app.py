@@ -1674,3 +1674,33 @@ async def test_mermaid_block_in_reply_mounts_card(sandbox: Path) -> None:
         cards = list(app.query(MermaidCard))
         assert cards, "expected one MermaidCard mounted after the turn"
         assert len(cards) == 1
+
+
+# ── /skills slash ────────────────────────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_slash_skills_lists_tools_and_slashes(sandbox: Path) -> None:
+    """/skills mounts a placeholder catalog of built-in tools + slash
+    commands. Anchors the surface so reshuffling slash names or tool
+    schemas surfaces in this one test, not silently in user-facing UX."""
+    from code_scalpel.tui.widgets.tool_use import ToolUseCard
+
+    app = ScalpelApp(config=_CONFIG, cwd=sandbox)
+    async with app.run_test(headless=True, size=(80, 24)) as pilot:
+        await pilot.pause(0.1)
+        app._handle_slash("/skills")
+        await pilot.pause(0.1)
+        cards = list(app.query_one(OutputLog).query(ToolUseCard))
+        assert cards
+        body = cards[-1]._result.output
+        # Tools section
+        assert "Tools" in body
+        for tool in ("read_file", "map_file", "goto_definition", "find_references", "grep"):
+            assert tool in body
+        # Slashes section
+        assert "Slash commands" in body
+        for slash in ("/new", "/map", "/stats", "/context", "/remember", "/loop", "/run"):
+            assert slash in body
+        # Forward-looking note that SkillRegistry is the real /skills target
+        assert "SkillRegistry" in body
