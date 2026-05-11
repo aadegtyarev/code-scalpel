@@ -220,6 +220,11 @@ def _copy_to_system_clipboard(text: str) -> str | None:
                 input=text.encode("utf-8"),
                 check=True,
                 timeout=2,
+                # Discard stdout/stderr — wl-copy on a Wayland-less box
+                # prints "Failed to connect to a Wayland server" before
+                # exiting non-zero, which would otherwise leak into the TUI.
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
             )
             return name
         except (subprocess.SubprocessError, OSError):
