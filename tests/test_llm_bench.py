@@ -325,10 +325,8 @@ async def test_qwen_produces_applicable_patch(task: BenchTask, tmp_path: Path) -
     )
     agent = StepAgent(llm=llm, cwd=tmp_path, config=_CONFIG)
 
-    result = await agent.ask(task.prompt)
-    assert result.edits, (
-        f"model produced no edit blocks. raw reply:\n{result.reply[:600]}"
-    )
+    result = await agent.ask(task.prompt, mode="code")
+    assert result.edits, f"model produced no edit blocks. raw reply:\n{result.reply[:600]}"
 
     ok, err = apply_edits(result.edits, tmp_path)
     assert ok, f"apply_edits failed: {err}\n\n--- reply ---\n{result.reply[:800]}"
@@ -355,9 +353,7 @@ async def test_qwen_history_remembers_previous_turn(tmp_path: Path) -> None:
     (tmp_path / "hello.py").write_text("def hello():\n    pass\n")
     agent = _make_agent(tmp_path)
 
-    await agent.ask(
-        "Remember the number 4242. Just acknowledge, don't write any code yet."
-    )
+    await agent.ask("Remember the number 4242. Just acknowledge, don't write any code yet.")
     result = await agent.ask("What number did I just ask you to remember?")
 
     assert "4242" in result.reply, (
@@ -371,16 +367,14 @@ async def test_qwen_history_three_turn_topic_continuity(tmp_path: Path) -> None:
     (tmp_path / "stub.py").write_text("# noop\n")
     agent = _make_agent(tmp_path)
 
-    await agent.ask(
-        "I'm thinking about adopting a pet. Just say 'OK', no advice yet."
-    )
+    await agent.ask("I'm thinking about adopting a pet. Just say 'OK', no advice yet.")
     await agent.ask("Specifically I like fluffy ones. Still just acknowledge.")
     result = await agent.ask("Given that, what pet would you suggest?")
     # No specific word required, but model must mention a fluffy animal
     lower = result.reply.lower()
-    assert any(
-        kw in lower for kw in ("cat", "dog", "rabbit", "кош", "соба", "кролик", "хом")
-    ), f"third turn ignored earlier context:\n{result.reply[:400]}"
+    assert any(kw in lower for kw in ("cat", "dog", "rabbit", "кош", "соба", "кролик", "хом")), (
+        f"third turn ignored earlier context:\n{result.reply[:400]}"
+    )
 
 
 @pytest.mark.llm
@@ -458,7 +452,9 @@ async def test_qwen_replies_in_russian_when_asked_in_russian(tmp_path: Path) -> 
     add the hint here the same way ScalpelApp._run_step does."""
     (tmp_path / "x.py").write_text("x = 1\n")
     agent = _make_agent(tmp_path)
-    result = await agent.ask("Объясни одним предложением что делает этот файл.\n\n(Reply in Russian.)")
+    result = await agent.ask(
+        "Объясни одним предложением что делает этот файл.\n\n(Reply in Russian.)"
+    )
     # Pretty robust check: response must contain Cyrillic characters
     has_cyrillic = any("Ѐ" <= ch <= "ӿ" for ch in result.reply)
     assert has_cyrillic, f"model replied without Cyrillic:\n{result.reply[:400]}"
@@ -469,7 +465,10 @@ async def test_qwen_creates_new_file_via_empty_search(tmp_path: Path) -> None:
     """Asking to create a new file should produce an empty SEARCH block."""
     (tmp_path / "existing.py").write_text("x = 1\n")
     agent = _make_agent(tmp_path)
-    result = await agent.ask("Create a new file `greet.py` containing exactly: def greet(): print('hi')")
+    result = await agent.ask(
+        "Create a new file `greet.py` containing exactly: def greet(): print('hi')",
+        mode="code",
+    )
     assert result.edits, f"no edits:\n{result.reply[:400]}"
 
     ok, err = apply_edits(result.edits, tmp_path)
@@ -506,7 +505,9 @@ async def test_qwen_uses_grep_when_asked_to_find(tmp_path: Path) -> None:
 
     agent._llm.chat = spy_chat  # type: ignore[assignment]
 
-    await agent.ask("Where in the project is the function `compute` used? Don't change anything, just tell me.")
+    await agent.ask(
+        "Where in the project is the function `compute` used? Don't change anything, just tell me."
+    )
     combined = "\n".join(tool_calls_seen)
     # Either grep was called, or read_file on multiple files. Both are
     # reasonable, but grep is the smarter choice.
@@ -542,7 +543,8 @@ async def test_qwen_navigates_multi_file_project(tmp_path: Path) -> None:
     agent = StepAgent(llm=llm, cwd=tmp_path, config=_CONFIG)
 
     result = await agent.ask(
-        "Add type hints to helpers.py: parameters and return type should be int."
+        "Add type hints to helpers.py: parameters and return type should be int.",
+        mode="code",
     )
 
     assert result.edits, f"no edits, raw reply:\n{result.reply[:600]}"

@@ -46,7 +46,7 @@ _SLASH_COMMANDS: list[tuple[str, str]] = [
     ("/help", "list commands"),
     ("/mode ask", "switch to ask mode"),
     ("/mode plan", "switch to plan mode"),
-    ("/mode step", "switch to step mode"),
+    ("/mode code", "switch to code mode"),
     ("/mode review", "switch to review mode"),
 ]
 
@@ -60,7 +60,7 @@ class ScalpelApp(App[None]):
         Binding("escape", "cancel_step", "Cancel", show=False),
     ]
 
-    _AGENT_MODES: tuple[str, ...] = ("ask", "plan", "step", "review")
+    _AGENT_MODES: tuple[str, ...] = ("ask", "plan", "code", "review")
 
     def __init__(self, config: AppConfig, cwd: Path = Path(".")) -> None:
         super().__init__()
@@ -169,7 +169,7 @@ class ScalpelApp(App[None]):
             lambda: setattr(
                 self,
                 "_step_worker",
-                self.run_worker(self._run_step(text), exclusive=True, group="step"),
+                self.run_worker(self._run_step(text, mode=mode), exclusive=True, group="step"),
             )
         )
 
@@ -236,7 +236,7 @@ class ScalpelApp(App[None]):
             return
         output.print_status(f"Unknown command: {cmd}")
 
-    async def _run_step(self, task: str) -> None:
+    async def _run_step(self, task: str, *, mode: str = "ask") -> None:
         import time
 
         output = self.query_one(OutputLog)
@@ -251,7 +251,7 @@ class ScalpelApp(App[None]):
             chunks = 0
             start = time.monotonic()
             last_tick = start
-            async for item in self._agent.stream_ask(task):
+            async for item in self._agent.stream_ask(task, mode=mode):
                 if isinstance(item, TextDelta):
                     full += item.text
                     chunks += 1
@@ -321,7 +321,9 @@ class ScalpelApp(App[None]):
             "Your previous patch was rejected or didn't apply. Try a different "
             "approach. Previous attempt:\n\n" + diff
         )
-        self.run_worker(self._run_step(task), exclusive=True, group="step")
+        # debug sub-mode bumps temperature so the retry actually diverges from
+        # the original attempt instead of regenerating something near-identical.
+        self.run_worker(self._run_step(task, mode="debug"), exclusive=True, group="step")
 
     async def _wait_mounted(self, widget: Widget) -> None:
         # widget.mount is dispatched via a worker in OutputLog._append.

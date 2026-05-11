@@ -9,6 +9,7 @@ import yaml
 from code_scalpel.config import (
     AppConfig,
     ModelProfile,
+    ModeTemperatures,
     _deep_merge,
     autodetect_context_tokens,
     load_config,
@@ -102,16 +103,61 @@ def test_load_config_no_files(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -
     assert config.language == "en"
 
 
-def test_inference_kwargs_empty_by_default() -> None:
+def test_inference_kwargs_defaults_to_ask_temperature() -> None:
     profile = ModelProfile(provider="lmstudio", model="qwen")
-    assert profile.inference_kwargs() == {}
-
-
-def test_inference_kwargs_only_set_fields() -> None:
-    profile = ModelProfile(provider="lmstudio", model="qwen", temperature=0.2, seed=42)
     kwargs = profile.inference_kwargs()
-    assert kwargs == {"temperature": 0.2, "seed": 42}
-    assert "top_p" not in kwargs
+    # ask mode is the default; top_p ships always.
+    assert kwargs == {"temperature": 0.1, "top_p": 0.9}
+
+
+def test_inference_kwargs_per_mode_temperature() -> None:
+    profile = ModelProfile(provider="lmstudio", model="qwen")
+    assert profile.inference_kwargs("ask")["temperature"] == 0.1
+    assert profile.inference_kwargs("plan")["temperature"] == 0.4
+    assert profile.inference_kwargs("code")["temperature"] == 0.2
+    assert profile.inference_kwargs("review")["temperature"] == 0.1
+    assert profile.inference_kwargs("debug")["temperature"] == 0.5
+
+
+def test_inference_kwargs_unknown_mode_falls_back_to_ask() -> None:
+    profile = ModelProfile(provider="lmstudio", model="qwen")
+    assert profile.inference_kwargs("nonsense")["temperature"] == 0.1
+
+
+def test_inference_kwargs_top_p_overridable() -> None:
+    profile = ModelProfile(provider="lmstudio", model="qwen", top_p=0.5)
+    assert profile.inference_kwargs()["top_p"] == 0.5
+
+
+def test_inference_kwargs_optional_fields_only_when_set() -> None:
+    profile = ModelProfile(provider="lmstudio", model="qwen")
+    kwargs = profile.inference_kwargs()
+    assert "frequency_penalty" not in kwargs
+    assert "seed" not in kwargs
+
+    profile2 = ModelProfile(provider="lmstudio", model="qwen", frequency_penalty=0.3, seed=42)
+    kwargs2 = profile2.inference_kwargs()
+    assert kwargs2["frequency_penalty"] == 0.3
+    assert kwargs2["seed"] == 42
+
+
+def test_temperature_scalar_shorthand_applies_to_all_modes() -> None:
+    profile = ModelProfile(provider="lmstudio", model="qwen", temperature=0.3)
+    for mode in ("ask", "plan", "code", "review", "debug"):
+        assert profile.inference_kwargs(mode)["temperature"] == 0.3
+
+
+def test_temperature_explicit_per_mode_via_dict() -> None:
+    profile = ModelProfile(
+        provider="lmstudio",
+        model="qwen",
+        temperature=ModeTemperatures(ask=0.0, code=0.5),
+    )
+    assert profile.inference_kwargs("ask")["temperature"] == 0.0
+    assert profile.inference_kwargs("code")["temperature"] == 0.5
+    # Unspecified modes keep their defaults.
+    assert profile.inference_kwargs("debug")["temperature"] == 0.5  # default
+    assert profile.inference_kwargs("plan")["temperature"] == 0.4  # default
 
 
 def test_provider_base_url_default() -> None:

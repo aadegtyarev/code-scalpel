@@ -146,9 +146,7 @@ async def test_ask_handles_tool_call_loop(project: Path) -> None:
     executes and appends a tool-role message with the result."""
     from code_scalpel.llm.adapter import NativeToolCall
 
-    tool_call = NativeToolCall(
-        id="call_1", name="read_file", arguments='{"path": "hello.py"}'
-    )
+    tool_call = NativeToolCall(id="call_1", name="read_file", arguments='{"path": "hello.py"}')
     llm = MockLLMAdapter([("", [tool_call]), "Done."])
     agent = StepAgent(llm=llm, cwd=project, config=_CONFIG)
 
@@ -239,6 +237,118 @@ async def test_history_grows_with_each_turn(project: Path) -> None:
 
     await agent.ask("c")
     assert len(agent.history) == 6
+
+
+@pytest.mark.asyncio
+async def test_ask_default_mode_is_ask_temperature(project: Path) -> None:
+    """No explicit mode → defaults to 'ask' temperature (lowest, retrieval)."""
+    from code_scalpel.config import ModeTemperatures
+
+    cfg = AppConfig(
+        profiles={
+            "local": ModelProfile(
+                provider="lmstudio",
+                model="m",
+                temperature=ModeTemperatures(ask=0.1, code=0.7),
+            )
+        },
+        agent=AgentConfig(max_files=2, max_file_lines=50),
+    )
+    llm = MockLLMAdapter(["plain reply"])
+    agent = StepAgent(llm=llm, cwd=project, config=cfg)
+
+    await agent.ask("describe hello")
+
+    assert llm.kwargs_calls[0]["temperature"] == 0.1
+
+
+@pytest.mark.asyncio
+async def test_ask_uses_per_mode_temperature(project: Path) -> None:
+    from code_scalpel.config import ModeTemperatures
+
+    cfg = AppConfig(
+        profiles={
+            "local": ModelProfile(
+                provider="lmstudio",
+                model="m",
+                temperature=ModeTemperatures(ask=0.1, plan=0.4, code=0.7, review=0.15, debug=0.9),
+            )
+        },
+        agent=AgentConfig(max_files=2, max_file_lines=50),
+    )
+    llm = MockLLMAdapter(["a", "b", "c", "d", "e"])
+    agent = StepAgent(llm=llm, cwd=project, config=cfg)
+
+    await agent.ask("question", mode="ask")
+    await agent.ask("plan a feature", mode="plan")
+    await agent.ask("write code", mode="code")
+    await agent.ask("review patch", mode="review")
+    await agent.ask("retry", mode="debug")
+
+    assert llm.kwargs_calls[0]["temperature"] == 0.1
+    assert llm.kwargs_calls[1]["temperature"] == 0.4
+    assert llm.kwargs_calls[2]["temperature"] == 0.7
+    assert llm.kwargs_calls[3]["temperature"] == 0.15
+    assert llm.kwargs_calls[4]["temperature"] == 0.9
+
+
+@pytest.mark.asyncio
+async def test_stream_ask_uses_per_mode_temperature(project: Path) -> None:
+    from code_scalpel.config import ModeTemperatures
+
+    cfg = AppConfig(
+        profiles={
+            "local": ModelProfile(
+                provider="lmstudio",
+                model="m",
+                temperature=ModeTemperatures(ask=0.1, code=0.6),
+            )
+        },
+        agent=AgentConfig(max_files=2, max_file_lines=50),
+    )
+    llm = MockLLMAdapter(["hi"])
+    agent = StepAgent(llm=llm, cwd=project, config=cfg)
+
+    async for _ in agent.stream_ask("do thing", mode="code"):
+        pass
+
+    assert llm.kwargs_calls[0]["temperature"] == 0.6
+
+
+@pytest.mark.asyncio
+async def test_compact_uses_ask_temperature(project: Path) -> None:
+    """Compact is summarization — should run at the analytical (ask) temp,
+    not whatever mode the user is currently in."""
+    from code_scalpel.config import ModeTemperatures
+
+    cfg = AppConfig(
+        profiles={
+            "local": ModelProfile(
+                provider="lmstudio",
+                model="m",
+                temperature=ModeTemperatures(ask=0.1, code=0.7),
+            )
+        },
+        agent=AgentConfig(max_files=2, max_file_lines=50),
+    )
+    llm = MockLLMAdapter(["something", "summary bullets"])
+    agent = StepAgent(llm=llm, cwd=project, config=cfg)
+
+    await agent.ask("primer", mode="code")  # populate history first
+    await agent.compact()
+
+    # Two calls total: the code ask and the compact summarization.
+    assert llm.kwargs_calls[0]["temperature"] == 0.7  # code ask
+    assert llm.kwargs_calls[1]["temperature"] == 0.1  # compact uses ask
+
+
+@pytest.mark.asyncio
+async def test_ask_passes_top_p(project: Path) -> None:
+    """top_p is shared across all modes — must show up on every call."""
+    llm = MockLLMAdapter(["ok"])
+    agent = StepAgent(llm=llm, cwd=project, config=_CONFIG)
+    await agent.ask("hi")
+    assert llm.kwargs_calls[0]["top_p"] == 0.9
 
 
 @pytest.mark.asyncio

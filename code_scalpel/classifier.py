@@ -1,7 +1,7 @@
 """Local heuristic that maps a free-text task to a TaskType.
 
 Pure function, no LLM, no I/O. Used by the planner/autonomous loop to
-decide which mode (ask / plan / step / debug) the agent should default
+decide which mode (ask / plan / code / debug) the agent should default
 to for a given user request. Plan §10 + §21.
 """
 

@@ -15,7 +15,7 @@ class UserMessage(Message):
 _MODE_COLORS: dict[str, str] = {
     "ask": "#6bc8d4",  # teal cyan — neutral, default
     "plan": "#d4a050",  # gold — thinking / outlining
-    "step": "#7fc090",  # green — action / making changes
+    "code": "#7fc090",  # green — action / making changes
     "review": "#d97b6c",  # coral — caution / examining
 }
 

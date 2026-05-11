@@ -18,6 +18,7 @@ class MockLLMAdapter:
         self._responses: list[MockResponse] = list(responses or ["OK"])
         self._index = 0
         self.calls: list[list[dict[str, Any]]] = []
+        self.kwargs_calls: list[dict[str, Any]] = []
 
     def _next(self) -> tuple[str, list[NativeToolCall]]:
         resp = self._responses[min(self._index, len(self._responses) - 1)]
@@ -31,9 +32,10 @@ class MockLLMAdapter:
         messages: list[dict[str, Any]],
         *,
         tools: list[dict[str, Any]] | None = None,  # noqa: ARG002 — accepted for interface parity
-        **kwargs: Any,  # noqa: ARG002
+        **kwargs: Any,
     ) -> ChatResponse:
         self.calls.append([dict(m) for m in messages])
+        self.kwargs_calls.append(dict(kwargs))
         content, tcs = self._next()
         return ChatResponse(
             content=content,
@@ -48,9 +50,10 @@ class MockLLMAdapter:
         messages: list[dict[str, Any]],
         *,
         tools: list[dict[str, Any]] | None = None,  # noqa: ARG002
-        **kwargs: Any,  # noqa: ARG002
+        **kwargs: Any,
     ) -> AsyncIterator[StreamChunk]:
         self.calls.append([dict(m) for m in messages])
+        self.kwargs_calls.append(dict(kwargs))
         content, tcs = self._next()
         for char in content:
             yield StreamChunk(text=char)

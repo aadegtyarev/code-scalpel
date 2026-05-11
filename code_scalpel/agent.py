@@ -108,7 +108,7 @@ class StepAgent:
     def clear_history(self) -> None:
         self._history.clear()
 
-    async def ask(self, task: str) -> StepResult:
+    async def ask(self, task: str, *, mode: str = "ask") -> StepResult:
         user_msg = self._user_message(task)
         messages = self._initial_messages(user_msg)
         profile = self._config.current_profile
@@ -117,7 +117,7 @@ class StepAgent:
         seen: set[tuple[str, str]] = set()
         for _ in range(_MAX_TOOL_ROUNDS):
             response = await self._llm.chat(
-                messages, tools=TOOL_SCHEMAS, **profile.inference_kwargs()
+                messages, tools=TOOL_SCHEMAS, **profile.inference_kwargs(mode)
             )
             messages.append(self._assistant_message(response))
 
@@ -197,7 +197,8 @@ class StepAgent:
             {"role": "user", "content": joined},
         ]
         profile = self._config.current_profile
-        response = await self._llm.chat(msgs, **profile.inference_kwargs())
+        # Compact is a summarization task — use ask-mode (low) temperature.
+        response = await self._llm.chat(msgs, **profile.inference_kwargs("ask"))
         summary = response.content.strip()
         self._history = [
             {
@@ -207,7 +208,7 @@ class StepAgent:
         ]
         return summary
 
-    async def stream_ask(self, task: str) -> AsyncIterator[StreamItem]:
+    async def stream_ask(self, task: str, *, mode: str = "ask") -> AsyncIterator[StreamItem]:
         """Yield typed events: TextDelta for model output chunks, ToolExecuted
         after each tool call resolves. Tool calls now use native OpenAI
         function-calling — model emits structured tool_calls instead of the
@@ -222,7 +223,7 @@ class StepAgent:
             full = ""
             round_tool_calls: list[NativeToolCall] = []
             async for chunk in self._llm.stream(
-                messages, tools=TOOL_SCHEMAS, **profile.inference_kwargs()
+                messages, tools=TOOL_SCHEMAS, **profile.inference_kwargs(mode)
             ):
                 if chunk.text:
                     full += chunk.text

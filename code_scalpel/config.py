@@ -7,7 +7,7 @@ from typing import Any
 import httpx
 import yaml
 from dotenv import load_dotenv
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 SYSTEM_CONFIG = Path.home() / ".config" / "code-scalpel" / "config.yaml"
 PROJECT_CONFIG = Path(".code-scalpel") / "config.yaml"
@@ -32,25 +32,50 @@ class AgentConfig(BaseModel):
     compact_threshold: float = 0.50
 
 
+class ModeTemperatures(BaseModel):
+    """Per-mode sampling temperature. ask/review default low (retrieval,
+    analytical), plan moderate, code low-mid (single-shot patch generation),
+    debug higher to give the retry diversity when the first patch fails."""
+
+    ask: float = 0.1
+    plan: float = 0.4
+    code: float = 0.2
+    review: float = 0.1
+    debug: float = 0.5
+
+    def for_mode(self, mode: str) -> float:
+        # Unknown modes fall back to ask — safest default for surprising callers.
+        return getattr(self, mode, self.ask)
+
+
 class ModelProfile(BaseModel):
     provider: str
     model: str
     base_url: str | None = None
     context_tokens: int | None = None
     cost_per_1k: dict[str, float] | None = None
-    # LLM inference parameters — passed directly to chat/stream calls
-    temperature: float | None = None
-    top_p: float | None = None
+    # Per-mode temperature; the float shorthand applies one value to all modes.
+    temperature: ModeTemperatures = Field(default_factory=ModeTemperatures)
+    # Shared across all modes
+    top_p: float = 0.9
     frequency_penalty: float | None = None
     seed: int | None = None
 
-    def inference_kwargs(self) -> dict[str, Any]:
-        """Return only explicitly set inference params for passing to LLM calls."""
-        result: dict[str, Any] = {}
-        if self.temperature is not None:
-            result["temperature"] = self.temperature
-        if self.top_p is not None:
-            result["top_p"] = self.top_p
+    @field_validator("temperature", mode="before")
+    @classmethod
+    def _temperature_scalar_shorthand(cls, v: Any) -> Any:
+        if isinstance(v, int | float):
+            value = float(v)
+            return {"ask": value, "plan": value, "code": value, "review": value, "debug": value}
+        return v
+
+    def inference_kwargs(self, mode: str = "ask") -> dict[str, Any]:
+        """Return inference params for a given mode. Temperature is per-mode;
+        top_p / frequency_penalty / seed are shared."""
+        result: dict[str, Any] = {
+            "temperature": self.temperature.for_mode(mode),
+            "top_p": self.top_p,
+        }
         if self.frequency_penalty is not None:
             result["frequency_penalty"] = self.frequency_penalty
         if self.seed is not None:
