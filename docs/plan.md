@@ -1637,7 +1637,7 @@ class Session:
 ```
 
 > UI язык: English only. i18n — см. v0.4.
-> Resume screen и crash recovery UI — в v0.2; `dirty_patch` в STATE.json остаётся в v0.1 для безопасности.
+> Resume / crash recovery — в v0.2; `dirty_patch` в STATE.json остаётся в v0.1 для безопасности. Реализуется инлайн (notice-карточка в OutputLog при запуске, если STATE.json дёрнут), без отдельного экрана.
 > TUI: не начинать с идеальных карточек. Порядок: Input + Footer → ToolCallCard → PlanCard → остальное.
 
 ### v0.2
@@ -1680,7 +1680,11 @@ step summarizer (template + LLM)
 Q&A screen (design/plan mode) + [X] Compact
 compact (TUI-only, LAST_COMPACT.md)
 debug sub-mode (traceback → fix)
-resume screen + crash recovery UI
+resume on launch (inline notice-card в OutputLog) + crash recovery:
+  если в STATE.json `dirty_patch=True` или другие признаки оборванной
+  сессии — при запуске показываем notice-карточку с предложением
+  восстановить/откатить. БЕЗ отдельного экрана, всё инлайн как и
+  остальная архитектура карточек.
 ! <cmd> в инпуте — выполнить bash-команду напрямую (без whitelist, вывод в поток)
 ```
 
