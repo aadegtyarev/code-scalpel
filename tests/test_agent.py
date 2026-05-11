@@ -843,6 +843,81 @@ async def test_code_with_retry_fixes_failing_test(project: Path) -> None:
 
 
 @pytest.mark.asyncio
+async def test_code_with_retry_rolls_back_workspace_on_exhaustion(project: Path) -> None:
+    """After all retries fail, the workspace must be restored to the
+    pre-loop state. Without rollback, N successive patches would land
+    on disk and the user could only [r]eject the LAST visible diff —
+    earlier mutations would persist silently. Code-review bug from
+    the 12-commit session audit."""
+    from code_scalpel.tools.shell import ShellResult
+    from tests.mocks import MockShellRunner
+
+    original_text = (project / "hello.py").read_text()
+    bad_patch_self_idempotent = """\
+hello.py
+```python
+<<<<<<< SEARCH
+def hello():
+    return "wrong"
+=======
+def hello():
+    return "wrong"
+>>>>>>> REPLACE
+```
+"""
+    llm = MockLLMAdapter(
+        [_BAD_PATCH, bad_patch_self_idempotent, bad_patch_self_idempotent, _BAD_PATCH]
+    )
+    shell = MockShellRunner([ShellResult("still failing", 1)] * 5)
+    agent = StepAgent(
+        llm=llm,
+        cwd=project,
+        config=_retry_config(max_debug_attempts=2),
+        shell_runner=shell,
+    )
+
+    await agent.code_with_retry("fix something impossible")
+
+    # Workspace returned to its pre-loop state — no cumulative damage.
+    assert (project / "hello.py").read_text() == original_text
+
+
+@pytest.mark.asyncio
+async def test_code_with_retry_rollback_removes_newly_created_files(project: Path) -> None:
+    """If a retry attempt created a file from scratch (empty SEARCH),
+    the rollback must delete it — otherwise the workspace ends up with
+    half-finished scaffolding the user didn't ask to keep."""
+    from code_scalpel.tools.shell import ShellResult
+    from tests.mocks import MockShellRunner
+
+    new_file_patch = """\
+new_module.py
+```python
+<<<<<<< SEARCH
+=======
+def stub():
+    pass
+>>>>>>> REPLACE
+```
+"""
+    # All attempts produce a new file then run_tests fails.
+    llm = MockLLMAdapter([new_file_patch] * 3)
+    shell = MockShellRunner([ShellResult("FAIL", 1)] * 3)
+    agent = StepAgent(
+        llm=llm,
+        cwd=project,
+        config=_retry_config(max_debug_attempts=2),
+        shell_runner=shell,
+    )
+
+    await agent.code_with_retry("create a module")
+
+    assert not (project / "new_module.py").exists(), (
+        "new file from a failed loop must be deleted by rollback"
+    )
+
+
+@pytest.mark.asyncio
 async def test_code_with_retry_stops_at_max_attempts(project: Path) -> None:
     """Model never produces a passing patch. After max_debug_attempts retries
     (so 1 + N total calls) we stop and return the last attempt."""

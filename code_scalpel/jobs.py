@@ -20,6 +20,7 @@ dependency, no app reach-around.
 
 from __future__ import annotations
 
+import threading
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager, suppress
 from dataclasses import dataclass, field
@@ -52,6 +53,11 @@ class JobRegistry:
     _jobs: dict[int, Job] = field(default_factory=dict)
     _ids: Iterator[int] = field(default_factory=lambda: count(1))
     _listeners: list[_Listener] = field(default_factory=list)
+    # The registry advertises "framework-agnostic, plugin-friendly" —
+    # plugins might call start() / finish() from raw threading.Threads.
+    # Without a lock, concurrent start() calls race on next(_ids) and
+    # on _jobs.__setitem__. Lock is cheap; correctness is not optional.
+    _lock: threading.Lock = field(default_factory=threading.Lock, repr=False, compare=False)
 
     def start(self, kind: str, description: str) -> int:
         """Register a new job; returns its id. Caller is responsible for
@@ -62,20 +68,23 @@ class JobRegistry:
             raise ValueError("Job kind must be a non-empty label")
         if not description:
             raise ValueError("Job description must be a non-empty sentence")
-        job_id = next(self._ids)
-        self._jobs[job_id] = Job(
-            id=job_id,
-            kind=kind,
-            description=description,
-            started_at=datetime.now(UTC),
-        )
+        with self._lock:
+            job_id = next(self._ids)
+            self._jobs[job_id] = Job(
+                id=job_id,
+                kind=kind,
+                description=description,
+                started_at=datetime.now(UTC),
+            )
         self._notify()
         return job_id
 
     def finish(self, job_id: int) -> None:
         """Remove a job. Idempotent — finishing an unknown id is a no-op
         so a `finally:` block after a crashed call doesn't double-fail."""
-        if self._jobs.pop(job_id, None) is not None:
+        with self._lock:
+            removed = self._jobs.pop(job_id, None) is not None
+        if removed:
             self._notify()
 
     @contextmanager
@@ -92,29 +101,39 @@ class JobRegistry:
     def snapshot(self) -> tuple[Job, ...]:
         """Immutable view of the current jobs, sorted by start time so
         the bar reads chronologically."""
-        return tuple(sorted(self._jobs.values(), key=lambda j: j.started_at))
+        with self._lock:
+            jobs = list(self._jobs.values())
+        return tuple(sorted(jobs, key=lambda j: j.started_at))
 
     def __len__(self) -> int:
-        return len(self._jobs)
+        with self._lock:
+            return len(self._jobs)
 
     def subscribe(self, listener: _Listener) -> Callable[[], None]:
         """Register a callback fired on every change. Returns an
         unsubscribe function — TUI widgets call it on unmount so a
         recycled registry doesn't keep references to dead widgets."""
-        self._listeners.append(listener)
+        with self._lock:
+            self._listeners.append(listener)
 
         def _unsubscribe() -> None:
-            with suppress(ValueError):
+            with self._lock, suppress(ValueError):
                 self._listeners.remove(listener)
 
         return _unsubscribe
 
     def _notify(self) -> None:
         snap = self.snapshot()
+        # Copy under lock so a concurrent subscribe/unsubscribe doesn't
+        # mutate the iterator. Listener callbacks run outside the lock
+        # — they're allowed to be slow (Textual reactive set, log write)
+        # and must NOT deadlock if they reach back into the registry.
+        with self._lock:
+            listeners = list(self._listeners)
         # Listeners must not be allowed to crash the registry. A buggy
         # widget that throws inside its refresh handler shouldn't kill
         # the worker that triggered the notify.
-        for listener in list(self._listeners):
+        for listener in listeners:
             try:
                 listener(snap)
             except Exception:

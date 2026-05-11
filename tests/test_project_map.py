@@ -506,3 +506,28 @@ def test_find_references_caps_results(tmp_path: Path) -> None:
 def test_find_references_empty_name_returns_empty(tmp_path: Path) -> None:
     (tmp_path / "a.py").write_text("x = 1\n")
     assert find_references(tmp_path, "") == []
+
+
+def test_find_references_skips_binary_suffixes(tmp_path: Path) -> None:
+    """A `.png` containing bytes that happen to spell out the symbol
+    name must not match — the file is binary, the "match" is bogus,
+    and reading it as text via errors=replace would materialise a
+    multi-MB string for nothing. Code-review fix."""
+    (tmp_path / "logo.png").write_bytes(b"\x89PNG widget data widget bytes\x00")
+    (tmp_path / "real.py").write_text("def widget(): pass\nwidget()\n")
+    refs = find_references(tmp_path, "widget")
+    assert all(r.rel_path != "logo.png" for r in refs)
+    assert any(r.rel_path == "real.py" for r in refs)
+
+
+def test_find_references_skips_oversized_text_files(tmp_path: Path) -> None:
+    """A `.txt` happens to be a 3 MB fixture or log — past the 2 MB cap
+    we skip it. Otherwise a single huge file dominates the search cost
+    on every navigation call."""
+    big = tmp_path / "fixture.txt"
+    # 3 MB of "haystack haystack haystack…" — far above the 2 MB cap.
+    big.write_text("haystack " * (3 * 1024 * 1024 // 9))
+    (tmp_path / "small.py").write_text("haystack = 1\n")
+    refs = find_references(tmp_path, "haystack")
+    assert all(r.rel_path != "fixture.txt" for r in refs)
+    assert any(r.rel_path == "small.py" for r in refs)

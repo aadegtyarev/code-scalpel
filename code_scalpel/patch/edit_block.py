@@ -19,6 +19,7 @@ Multiple edits = multiple blocks back-to-back.
 from __future__ import annotations
 
 import re
+from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -285,7 +286,7 @@ def _no_match_error(edit: Edit, source: str) -> str:
 # ── synthesis for display ────────────────────────────────────────────────────
 
 
-def edits_to_diff(edits: list[Edit], root: Path) -> str:
+def edits_to_diff(edits: Sequence[Edit], root: Path) -> str:
     """Synthesize a unified-diff-like string for UI display. Read-only."""
     chunks: list[str] = []
     for e in edits:

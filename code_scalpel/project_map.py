@@ -194,6 +194,39 @@ class Reference:
     text: str
 
 
+_TEXT_SUFFIXES: frozenset[str] = frozenset(
+    {
+        ".py",
+        ".pyi",
+        ".md",
+        ".rst",
+        ".txt",
+        ".toml",
+        ".cfg",
+        ".ini",
+        ".yaml",
+        ".yml",
+        ".json",
+        ".html",
+        ".css",
+        ".scss",
+        ".js",
+        ".jsx",
+        ".ts",
+        ".tsx",
+        ".go",
+        ".rs",
+        ".sh",
+        ".bash",
+        ".zsh",
+        ".sql",
+        ".tcss",
+        ".env",
+    }
+)
+_MAX_REFERENCE_BYTES = 2 * 1024 * 1024  # 2 MB — anything larger is data, not code
+
+
 def find_references(
     root: Path,
     name: str,
@@ -202,10 +235,16 @@ def find_references(
     max_results: int = 50,
 ) -> list[Reference]:
     """Scan the project for word-bounded matches of `name`. Skips
-    binary-looking files and the same paths `list_files` filters out
-    (gitignore + hidden dirs). Results are truncated to `max_results`
-    — for the typical "where is X used" question, anything past ~50
-    hits is just noise the user has to scroll through anyway.
+    binary-looking files (suffix allowlist + a 2 MB size cap), and the
+    same paths `list_files` filters out (gitignore + hidden dirs).
+    Results are truncated to `max_results` — for "where is X used",
+    anything past ~50 hits is noise the user has to scroll through.
+
+    The suffix allowlist is the cheap pre-filter; the byte cap is the
+    backstop for a `.txt` that happens to be a 50 MB fixture or log.
+    A binary-detected file would otherwise be read with
+    `errors="replace"`, materialise tens of MB of replacement
+    characters in memory, and emit bogus "matches" inside image bytes.
     """
     if not name:
         return []
@@ -213,7 +252,15 @@ def find_references(
     out: list[Reference] = []
     files = list_files(root, max_files=max_files)
     for rel in files:
+        if rel.suffix and rel.suffix.lower() not in _TEXT_SUFFIXES:
+            continue
         path = root / rel
+        try:
+            size = path.stat().st_size
+        except OSError:
+            continue
+        if size > _MAX_REFERENCE_BYTES:
+            continue
         try:
             text = path.read_text(errors="replace")
         except OSError:

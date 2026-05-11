@@ -65,7 +65,7 @@ def _top_level_symbols(root: Node, source: bytes) -> list[Symbol]:
             out.append(
                 Symbol(
                     name=fn_name,
-                    kind="async_function" if _is_async(child) else "function",
+                    kind="async function" if _is_async(child) else "function",
                     qualified_name=fn_name,
                     lineno=raw_child.start_point[0] + 1,
                     end_lineno=raw_child.end_point[0] + 1,
@@ -90,7 +90,7 @@ def _class_methods(class_node: Node, source: bytes, class_name: str) -> list[Sym
         out.append(
             Symbol(
                 name=m_name,
-                kind="async_method" if _is_async(m) else "method",
+                kind="async method" if _is_async(m) else "method",
                 qualified_name=f"{class_name}.{m_name}",
                 lineno=raw_m.start_point[0] + 1,
                 end_lineno=raw_m.end_point[0] + 1,

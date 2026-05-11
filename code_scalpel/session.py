@@ -93,7 +93,8 @@ class Session:
         the bits that live in app config (current mode, model name, ctx
         ceiling). Everything else comes from the accumulated ChatResponses.
         """
-        secs = int(self.elapsed_seconds)
+        elapsed_f = self.elapsed_seconds
+        secs = int(elapsed_f)
         mins, sec_rem = divmod(secs, 60)
         hrs, mins = divmod(mins, 60)
         if hrs:
@@ -104,7 +105,9 @@ class Session:
             elapsed = f"{sec_rem}s"
 
         total = self.total_prompt_tokens + self.total_completion_tokens
-        avg_tps = self.total_completion_tokens / secs if secs > 0 else 0.0
+        # Use the float elapsed for the rate so a sub-second first
+        # turn still reports a meaningful tok/s instead of 0.
+        avg_tps = self.total_completion_tokens / elapsed_f if elapsed_f > 0 else 0.0
         ctx_used = self.context_used_tokens
 
         rows: list[tuple[str, str]] = []

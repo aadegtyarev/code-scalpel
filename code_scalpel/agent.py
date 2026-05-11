@@ -198,9 +198,13 @@ Rules for plan mode:
 @dataclass(frozen=True)
 class PatchAttempt:
     """One iteration of the code_with_retry loop. Records what the model
-    proposed, whether the patch applied, and what the tests said after."""
+    proposed, whether the patch applied, and what the tests said after.
 
-    edits: list[Edit]
+    `edits` is a tuple so `frozen=True` is honest — a `list` field
+    would still let callers mutate the contents in place, silently
+    invalidating any cached view of the attempt history."""
+
+    edits: tuple[Edit, ...]
     apply_ok: bool
     apply_error: str  # "" when apply_ok
     test_output: str  # "" when tests not run (apply failed)
@@ -311,6 +315,26 @@ class StepAgent:
         max_retries = max(0, self._config.agent.max_debug_attempts)
         attempts: list[PatchAttempt] = []
         prompt = task
+        # Lazy pre-loop snapshot of every file we end up touching. Lets us
+        # roll back to the original state if the loop exhausts retries —
+        # otherwise the workspace ends up with N-1 cumulative half-applied
+        # patches and the user can only [r]eject the LAST diff that the
+        # TUI surfaces, leaving the earlier mutations silently on disk.
+        pre_loop_snapshot: dict[Path, str | None] = {}
+
+        def _snapshot_targets(edits: list[Edit]) -> None:
+            for edit in edits:
+                target = self._cwd / edit.path
+                if target in pre_loop_snapshot:
+                    continue
+                if target.is_file():
+                    try:
+                        pre_loop_snapshot[target] = target.read_text()
+                    except OSError:
+                        pre_loop_snapshot[target] = None  # treat as "did not exist"
+                else:
+                    pre_loop_snapshot[target] = None
+
         # Initial attempt + up to max_retries retries.
         last_result: StepResult | None = None
         for i in range(max_retries + 1):
@@ -321,11 +345,12 @@ class StepAgent:
                 # clarifying question). Return as-is; nothing to retry on.
                 return result
 
+            _snapshot_targets(result.edits)
             ok, err = apply_edits(result.edits, self._cwd)
             if not ok:
                 attempts.append(
                     PatchAttempt(
-                        edits=result.edits,
+                        edits=tuple(result.edits),
                         apply_ok=False,
                         apply_error=err,
                         test_output="",
@@ -340,7 +365,7 @@ class StepAgent:
             test_output, tests_passed = await self._run_tests()
             attempts.append(
                 PatchAttempt(
-                    edits=result.edits,
+                    edits=tuple(result.edits),
                     apply_ok=True,
                     apply_error="",
                     test_output=test_output,
@@ -359,8 +384,20 @@ class StepAgent:
                 break
             prompt = _TESTS_FAILED_PROMPT.format(output=test_output)
 
-        # Exhausted retries. Surface the last attempt verbatim so the TUI can
-        # show "tests still red after N tries" plus the diff/output history.
+        # Exhausted retries. Roll the workspace back to its pre-loop state
+        # so a `git diff` is clean for the user to inspect — the attempts
+        # history still carries every patch so the TUI can render what
+        # was tried and let the user re-apply any of them by hand.
+        for target, original in pre_loop_snapshot.items():
+            try:
+                if original is None:
+                    target.unlink(missing_ok=True)
+                else:
+                    target.write_text(original)
+            except OSError:
+                continue
+        # Surface the last attempt verbatim so the TUI can show "tests
+        # still red after N tries" plus the diff/output history.
         assert last_result is not None
         return StepResult(
             reply=last_result.reply,

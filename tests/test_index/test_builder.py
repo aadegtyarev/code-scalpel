@@ -46,7 +46,7 @@ def test_build_real_file(tmp_path: Path) -> None:
     assert by_qn["Foo"].kind == "class"
     assert by_qn["Foo"].docstring == "Foo doc."
     assert by_qn["Foo.bar"].kind == "method"
-    assert by_qn["top"].kind == "async_function"
+    assert by_qn["top"].kind == "async function"
     # Internal imports surfaced, stdlib dropped
     assert "pkg.other.Thing" in idx.imports
     assert all(imp != "os" for imp in idx.imports)

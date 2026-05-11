@@ -41,8 +41,8 @@ def test_async_function_and_method_kinds() -> None:
     )
     by_qn = {s.qualified_name: s.kind for s in symbols}
     assert by_qn["Net"] == "class"
-    assert by_qn["Net.fetch"] == "async_method"
-    assert by_qn["top"] == "async_function"
+    assert by_qn["Net.fetch"] == "async method"
+    assert by_qn["top"] == "async function"
 
 
 def test_line_numbers_are_one_based_and_end_lineno_set() -> None:
@@ -183,7 +183,7 @@ def test_decorated_class_and_function_are_unwrapped() -> None:
     assert by_qn["Foo.make"].kind == "method"
     assert by_qn["top"].kind == "function"
     assert by_qn["top"].docstring == "Top doc."
-    assert by_qn["atop"].kind == "async_function"
+    assert by_qn["atop"].kind == "async function"
     # lineno should include the decorator line (the decorator IS the
     # symbol's span as far as the editor is concerned).
     assert by_qn["top"].lineno < by_qn["top"].end_lineno
