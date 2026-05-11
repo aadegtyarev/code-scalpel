@@ -115,6 +115,15 @@ async def test_system_prompt_carries_identity_anchor(project: Path) -> None:
     assert "ONLY" in system
     assert "кто ты" in system
     assert "what are you" in system
+    # Anti-example for task-shaped messages — user reported 2026-05-11
+    # that "найди место чтобы в футер вывести системное время" got an
+    # identity-blurb reply with zero tool calls. The block now names
+    # task-words explicitly and tells the model to call tools instead.
+    assert "найди" in system or "find" in system.lower()
+    assert "list_files" in system or "tools" in system.lower()
+    # No "Я — code-scalpel, как помочь?" template — that exact phrase
+    # was the bug shape and we ban it specifically.
+    assert "NEVER answer" in system or "никогда" in system.lower()
 
 
 @pytest.mark.asyncio
@@ -134,22 +143,25 @@ async def test_ask_sends_system_and_task_only(project: Path) -> None:
 
 
 @pytest.mark.asyncio
-async def test_ask_includes_project_overview_not_file_content(project: Path) -> None:
-    """v0.3: the user message carries a lightweight overview (paths + line
-    counts), not full file bodies and not the symbol-level map. Per-file
-    drilldown happens on demand via the `map_file` tool."""
+async def test_ask_user_message_is_just_the_task(project: Path) -> None:
+    """User flagged 2026-05-11: 800-1000t of auto-mixed "Project files"
+    prefixed every task. Task got buried; short follow-ups got drowned
+    in the listing. Fix: user message is ONLY the task — the model
+    explores via the `list_files` tool when it actually needs to. No
+    Project overview / Project files block, no file paths leaked,
+    no symbols."""
     llm = MockLLMAdapter(["OK"])
     agent = StepAgent(llm=llm, cwd=project, config=_CONFIG)
 
     await agent.ask("do something")
 
     real_task_msg = llm.calls[0][-1]["content"]
-    assert "Project overview" in real_task_msg
-    assert "hello.py" in real_task_msg  # path appears in overview
-    # Full file body should NOT be there
-    assert "def hello():\n    pass" not in real_task_msg
-    # Symbols are NOT in the overview either — model calls map_file/read_file
-    assert "def hello(" not in real_task_msg
+    # Just the task. No project listing leaks.
+    assert real_task_msg == "do something" or real_task_msg.startswith("do something")
+    assert "Project overview" not in real_task_msg
+    assert "Project files" not in real_task_msg
+    assert "hello.py" not in real_task_msg
+    assert "def hello" not in real_task_msg
 
 
 @pytest.mark.asyncio
@@ -163,23 +175,25 @@ async def test_ask_records_response_stats(project: Path) -> None:
 
 
 @pytest.mark.asyncio
-async def test_map_lists_files_in_subdirs(tmp_path: Path) -> None:
-    """Subdirectory files must appear in the project map — not only top-level."""
+async def test_list_files_tool_walks_subdirs(tmp_path: Path) -> None:
+    """The list_files tool returns paths from nested directories, not
+    just top-level. This is the model's main orientation entry point
+    since user_message no longer auto-injects the project listing."""
+    from code_scalpel.tools.agent_tools import ToolCall, execute
+
     (tmp_path / "top.py").write_text("x = 1\n")
     (tmp_path / "pkg").mkdir()
     (tmp_path / "pkg" / "deep.py").write_text("def f():\n    pass\n")
     (tmp_path / "pkg" / "sub").mkdir()
     (tmp_path / "pkg" / "sub" / "deeper.py").write_text("def g():\n    pass\n")
 
-    llm = MockLLMAdapter(["OK"])
-    agent = StepAgent(llm=llm, cwd=tmp_path, config=_CONFIG)
-
-    await agent.ask("do something")
-
-    real_task_msg = llm.calls[0][-1]["content"]
-    assert "top.py" in real_task_msg
-    assert "pkg/deep.py" in real_task_msg
-    assert "pkg/sub/deeper.py" in real_task_msg
+    call = ToolCall(name="list_files", body="{}")
+    result = await execute(call, tmp_path)
+    assert result.ok
+    out = result.output
+    assert "top.py" in out
+    assert "pkg/deep.py" in out
+    assert "pkg/sub/deeper.py" in out
 
 
 @pytest.mark.asyncio
@@ -680,32 +694,26 @@ async def test_ask_mode_does_not_write_tasks_md(project: Path) -> None:
 
 
 @pytest.mark.asyncio
-async def test_user_message_puts_task_before_overview(project: Path) -> None:
-    """Task FIRST, overview second. The previous "Project map:\\n<300 lines>\\n
-    Task: X" layout caused short follow-ups (e.g. "Sonet") to drown in
-    the map — model defaulted to its prior reply because the new task
-    was buried at the end of a massive block. With task on top the
-    short user input has the salient first position; the overview (paths +
-    line counts only) is brief enough that it can sit after the task
-    without burying it."""
+async def test_user_message_carries_only_the_task(project: Path) -> None:
+    """User message is now ONLY the task verbatim. The previous
+    "Task: X\\nProject overview\\n…" layout buried short follow-ups
+    under 800-1000 tokens of paths; auto-injection is gone. Model
+    explores the project via the `list_files` tool when needed.
+    Memory recall stays inline because it's quiet by default."""
     llm = MockLLMAdapter(["first reply", "second reply"])
     agent = StepAgent(llm=llm, cwd=project, config=_CONFIG)
 
     await agent.ask("Sonnet")
     user_msg = llm.calls[0][-1]["content"]
-    # Task is the very first non-empty content the model sees
-    assert user_msg.startswith("Task: Sonnet")
-    # Overview is the labelled reference, not "Project map" anymore
-    assert "Project overview" in user_msg
-    # Overview comes AFTER the task in byte order
-    assert user_msg.index("Task: Sonnet") < user_msg.index("Project overview")
+    # The whole user message is the task, no decoration
+    assert user_msg.strip() == "Sonnet"
 
 
 @pytest.mark.asyncio
-async def test_user_message_overview_present_on_every_turn(project: Path) -> None:
-    """The overview is structural context the model needs to pick files for
-    map_file / read_file / grep. It must be in every turn — not just turn
-    1 — otherwise multi-turn flows leave the model blind on the follow-up."""
+async def test_user_message_stays_clean_on_every_turn(project: Path) -> None:
+    """No "Project files" / "Project overview" block on any turn, ever.
+    Multi-turn follow-ups stay tight; model uses list_files to refresh
+    its view of the project."""
     llm = MockLLMAdapter(["a", "b", "c"])
     agent = StepAgent(llm=llm, cwd=project, config=_CONFIG)
     await agent.ask("first")
@@ -713,7 +721,9 @@ async def test_user_message_overview_present_on_every_turn(project: Path) -> Non
     await agent.ask("third")
     for i in range(3):
         msg = llm.calls[i][-1]["content"]
-        assert "Project overview" in msg, f"turn {i + 1} lost the overview"
+        assert "Project overview" not in msg
+        assert "Project files" not in msg
+        assert "hello.py" not in msg
 
 
 @pytest.mark.asyncio

@@ -41,12 +41,12 @@ def _tokens(text: str) -> int:
 # Keys must match ContextSegment.name.
 _SEGMENT_NOTES: dict[str, str] = {
     "System prompt": "static rules: identity, tone, grounding",
-    "Tools schema": "function-calling schema for 6 tools",
+    "Tools schema": "function-calling schema for project tools",
     "Skills": "active test/lint/format contracts",
     "Recipes": "learned templates (learn --type recipe)",
-    "Project files": "paths + line counts of cwd",
+    "Project files": "on-demand via list_files tool — 0 until the model calls it",
     "Memory recall": "top-3 hits from /remember notes",
-    "Conversation": "history; shrinks via /compact and auto summaries",
+    "Conversation": "history (incl. tool results); /compact + auto summaries shrink",
     "Free space": "left for the next model reply",
 }
 

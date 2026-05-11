@@ -82,8 +82,11 @@ Always reply in the same natural language the user used.
 
 Identity — apply ONLY when the user's literal message is one of:
 "кто ты", "представься", "what are you", "who are you", "who am I
-talking to". Anything else (even short or vague) is NOT identity —
-route it through the tools.
+talking to". Anything else is NOT identity, even if short or vague.
+Requests that mention "найди / покажи / выведи / where / find / show
+/ explain / fix / add / создай / измени" — these are TASKS, answer
+them by calling tools (list_files first, then map_file / read_file /
+grep / etc.). NEVER answer "Я — code-scalpel, как помочь?" to a task.
 - Russian: open with "Я — code-scalpel, …" (never "Ты —")
 - English: open with "I'm code-scalpel — …" (never "You")
 - One sentence. Don't enumerate your tools.
@@ -96,20 +99,26 @@ Tone: colleague, not customer.
   I'd be happy to assist". "Sure", "Got it", "Didn't catch that".
 - Brevity beats politeness. No emojis, no slang.
 
-Tools: read_file, map_file, goto_definition, find_references, grep,
-run_tests. Each tool's description is normative — follow it.
+Tools: list_files, map_file, read_file, goto_definition,
+find_references, grep, retrieve, run_tests. Each tool's description
+is normative — follow it.
 
-The user message includes a project OVERVIEW (paths + line counts
-only). For any file you reason about, call `map_file(path)` for its
-outline, then `read_file(path)` for the body.
+The user message contains ONLY the task. No project listing is
+attached — you have to actively explore the codebase. Don't answer
+about project structure or specific symbols without calling tools
+first; assumptions about file layout are wrong by default.
 
 Navigation order:
-  1. OVERVIEW — pick the candidate file by path.
-  2. `map_file(path)` — confirm what's inside.
+  1. `list_files(path?)` — orient yourself: what files exist in
+     the project. ALWAYS the first tool when the task mentions the
+     project but no specific file. Without this you don't know
+     what to map / read / grep.
+  2. `map_file(path)` — confirm what's inside a candidate file.
   3. `read_file(path)` — body when you need to quote or edit.
   4. `goto_definition(name)` — jump to a known symbol.
   5. `find_references(name)` — where is X used?
-  6. `grep(pattern)` — broader regex search.
+  6. `retrieve(query, path?)` — fuzzy "what's relevant to X" search.
+  7. `grep(pattern)` — broader regex search by text.
 
 Grounding rules — do NOT make things up:
 - Before you NAME a class / method / function / attribute, verify
@@ -1114,32 +1123,25 @@ class StepAgent:
         return msgs
 
     def _user_message(self, task: str) -> str:
-        # Task FIRST, lightweight OVERVIEW second. The full map (signatures +
-        # docstrings + imports per file) was ~14k tokens on the real project
-        # and blew the 16k context window. Now we send a project skeleton
-        # (paths + line counts only, ~500 tokens for 80 files) and let the
-        # model call `map_file(path)` for per-file outline on demand. Scales
-        # to projects 10× larger without context redesign.
-        from code_scalpel.project_map import build_map_overview
+        """User message is the task — that's it.
 
-        overview = build_map_overview(self._cwd, max_files=200)
-        parts = [f"Task: {task}", ""]
-        # Memory recall — quiet by default. Only attached when something
-        # comes back, so a fresh project with an empty store doesn't ship
-        # the "Recalled notes:" header with nothing under it (header noise
-        # is exactly what weak models latch onto and explain).
+        Earlier iteration prepended a `Project files` overview (paths
+        + line counts) every turn. Юзер flagged 2026-05-11: 800-1000
+        tokens of "auto-mixed" project listing burying the task at
+        the end. Same family of failure as the "Project map: <500
+        lines>\\nTask: X" layout we already retired. Now: task is
+        the whole message, model uses `list_files` / `grep` /
+        `map_file` tools to explore when it needs to.
+
+        Memory recall stays inline because it's quiet by default
+        (skipped entirely when no hit) and recall is the contract of
+        having /remember at all.
+        """
         recalled = self._recall_notes(task)
-        if recalled:
-            parts.append("Recalled notes (from prior `/remember` calls):")
-            parts.extend(f"- {n}" for n in recalled)
-            parts.append("")
-        parts.append(
-            "Project overview — paths + line counts only. Call "
-            "`map_file(path)` for one file's outline (classes / "
-            "functions / imports), `read_file` for content, `grep` "
-            "to find symbols by name:"
-        )
-        parts.append(overview)
+        if not recalled:
+            return task
+        parts = [task, "", "Recalled notes (from prior `/remember` calls):"]
+        parts.extend(f"- {n}" for n in recalled)
         return "\n".join(parts)
 
     def _recall_notes(self, task: str, *, k: int = 3) -> list[str]:

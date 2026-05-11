@@ -302,26 +302,34 @@ class ScalpelApp(App[None]):
         self._last_tool_result = result
 
     def _do_context(self) -> None:
-        """Render a context-budget breakdown by category. Reads the same
-        building blocks the agent would send on the next turn (system
-        prompt, tools schema, overview, history) so the user sees
-        ground-truth, not a guess from session counters."""
+        """Render a context-budget breakdown by category. Reads the
+        same building blocks the agent would send on the next turn
+        (system prompt, tools schema, overview, skills, history) so
+        the user sees ground-truth, not a guess from session counters.
+
+        Skills feed into the Skills segment even though they're not
+        currently injected into the model prompt — the cost shown is
+        what we WOULD pay if/when we wire them in, an honest preview
+        of /skills cost rather than a permanent zero."""
         import json
 
         from code_scalpel.agent import _PLAN_MODE_ADDENDUM, _SYSTEM_PROMPT
         from code_scalpel.context_report import build
-        from code_scalpel.project_map import build_map_overview
+        from code_scalpel.skills import active_skills
         from code_scalpel.tools.agent_tools import TOOL_SCHEMAS
 
         output = self.query_one(OutputLog)
         model = self.config.current_profile.model
         mode = self._AGENT_MODES[self._mode_index]
         system = _SYSTEM_PROMPT + (_PLAN_MODE_ADDENDUM if mode == "plan" else "")
-        try:
-            overview = build_map_overview(self.cwd, max_files=200)
-        except Exception:
-            overview = ""
         tools_text = json.dumps(TOOL_SCHEMAS)
+        try:
+            skills_text = "\n".join(f"{s.name}: {s.description}" for s in active_skills(self.cwd))
+        except Exception:
+            skills_text = ""
+        # Project listing is no longer auto-injected — it lives behind
+        # the `list_files` tool now. Its cost lands in Conversation
+        # if/when the model calls it, not in a permanent segment.
         # Stringify history as the model sees it — role + content per
         # row joined; this is the same approximation used everywhere
         # else and matches what session.context_used_tokens estimates.
@@ -335,9 +343,10 @@ class ScalpelApp(App[None]):
             ctx_limit=self.state.context_limit,
             system_prompt=system,
             tools_schema_text=tools_text,
-            overview_text=overview,
+            overview_text="",
             recall_text="",
             history_text=history,
+            skills_text=skills_text,
         )
         call = ToolCall(name="context_report", body="")
         result = ToolResult(call=call, output=report.render(), ok=True)

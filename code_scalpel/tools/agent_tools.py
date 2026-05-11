@@ -78,6 +78,33 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
     {
         "type": "function",
         "function": {
+            "name": "list_files",
+            "description": (
+                "List project files with line counts: `path [N L]` per "
+                "row. Use FIRST when the user's task mentions the "
+                "project without a specific file name — you need to "
+                "know what files exist before you can pick which one "
+                "to read. Optional `path` narrows to a subdirectory. "
+                "Cheaper than map_file (no symbols, no imports) — only "
+                "use this for orientation. Once you spot the right "
+                "file, call map_file or read_file on it."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "path": {
+                        "type": "string",
+                        "description": (
+                            "Optional relative subdirectory. Omit to list the whole project."
+                        ),
+                    },
+                },
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "map_file",
             "description": (
                 "Drill into ONE file's structural details: top-level "
@@ -300,6 +327,8 @@ async def execute(
     """Dispatch a tool call by name. Returns a ToolResult — never raises."""
     if call.name == "read_file":
         return _tool_read_file(call, cwd, max_lines=max_lines)
+    if call.name == "list_files":
+        return _tool_list_files(call, cwd)
     if call.name == "map_file":
         return _tool_map_file(call, cwd)
     if call.name == "goto_definition":
@@ -461,6 +490,32 @@ def _tool_retrieve(call: ToolCall, cwd: Path) -> ToolResult:
         for h in hits
     ]
     return ToolResult(call, output="\n".join(lines), ok=True)
+
+
+def _tool_list_files(call: ToolCall, cwd: Path) -> ToolResult:
+    """args: {path?: str}. Returns one row per file: `path [N L]`.
+    Uses the lightweight overview builder from project_map — same
+    output shape the user gets from /map but tool-callable."""
+    from code_scalpel.project_map import build_map_overview
+
+    args = _decode_args(call.body)
+    rel = str(args.get("path") or args.get("_raw", "")).strip()
+    where = cwd
+    if rel:
+        if rel.startswith("/") or ".." in Path(rel).parts:
+            return ToolResult(call, output=f"error: path must be inside project: {rel}", ok=False)
+        where = cwd / rel
+        if not where.exists():
+            return ToolResult(call, output=f"error: path not found: {rel}", ok=False)
+        if not _is_inside_project(where, cwd):
+            return ToolResult(call, output=f"error: path must be inside project: {rel}", ok=False)
+    try:
+        listing = build_map_overview(where, max_files=200)
+    except OSError as e:
+        return ToolResult(call, output=f"error: {e}", ok=False)
+    if not listing:
+        return ToolResult(call, output="(no files)", ok=True)
+    return ToolResult(call, output=listing, ok=True)
 
 
 def _tool_map_file(call: ToolCall, cwd: Path) -> ToolResult:
