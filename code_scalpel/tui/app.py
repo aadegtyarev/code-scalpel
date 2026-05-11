@@ -26,6 +26,7 @@ from code_scalpel.tui.widgets.cards.tool_call import PatchDecision, ToolCallCard
 from code_scalpel.tui.widgets.footer import StatusFooter
 from code_scalpel.tui.widgets.input import ModeInput, UserMessage
 from code_scalpel.tui.widgets.jobs_bar import JobsBar
+from code_scalpel.tui.widgets.jobs_modal import JobsModal
 from code_scalpel.tui.widgets.output import OutputLog
 from code_scalpel.tui.widgets.tool_result_modal import ToolResultModal
 from code_scalpel.tui.widgets.tool_use import ToolUseCard
@@ -104,6 +105,7 @@ class ScalpelApp(App[None]):
         Binding("ctrl+q", "quit", "Quit"),
         Binding("ctrl+t", "cycle_mode", "Mode", show=False),
         Binding("ctrl+o", "show_last_tool_result", "Open last tool result", show=False),
+        Binding("ctrl+j", "show_jobs", "Show background jobs", show=False),
         Binding("ctrl+up", "focus_prev_card", "Previous tool card", show=False),
         Binding("ctrl+down", "focus_next_card", "Next tool card", show=False),
         Binding("escape", "cancel_step", "Cancel", show=False),
@@ -418,6 +420,13 @@ class ScalpelApp(App[None]):
             self.query_one(OutputLog).print_status("● No tool result yet in this session.")
             return
         self.push_screen(ToolResultModal(self._last_tool_result))
+
+    def action_show_jobs(self) -> None:
+        """Ctrl+J: open the full jobs view. JobsBar (inline above the
+        footer) only shows kinds; this modal carries description and
+        elapsed age per job — the picture you need when supervised
+        autonomous mode is running and several things stack up."""
+        self.push_screen(JobsModal(self.jobs))
 
     def action_focus_prev_card(self) -> None:
         """Ctrl+↑ from input: jump to the most recent tool card. From an

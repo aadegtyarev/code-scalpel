@@ -1472,3 +1472,58 @@ async def test_loop_slash_toggles_config_flag(sandbox: Path) -> None:
         assert app.config.agent.iterative_patch_loop is False
         chat = "\n".join(str(c.render()) for c in output.children if c.id != "_spacer")
         assert "off" in chat.lower()
+
+
+# ── Ctrl+J jobs modal ────────────────────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_ctrl_j_opens_jobs_modal(sandbox: Path) -> None:
+    """Ctrl+J pushes the full-view jobs modal regardless of whether
+    anything is running — the modal itself handles the empty state.
+    User shouldn't have to wait for a job to land to find the shortcut."""
+    from code_scalpel.tui.widgets.jobs_modal import JobsModal
+
+    app = ScalpelApp(config=_CONFIG, cwd=sandbox)
+    async with app.run_test(headless=True, size=(80, 24)) as pilot:
+        await pilot.pause(0.1)
+        await pilot.press("ctrl+j")
+        await pilot.pause(0.1)
+        assert isinstance(app.screen, JobsModal)
+
+
+@pytest.mark.asyncio
+async def test_ctrl_j_modal_shows_live_jobs(sandbox: Path) -> None:
+    """Modal mounts after a job is registered — every row in the snapshot
+    must appear. Validates that the modal reads the registry the app owns,
+    not a stale copy."""
+    from code_scalpel.tui.widgets.jobs_modal import JobsModal
+
+    app = ScalpelApp(config=_CONFIG, cwd=sandbox)
+    async with app.run_test(headless=True, size=(80, 24)) as pilot:
+        await pilot.pause(0.1)
+        app.jobs.start("map", "Building project map")
+        app.jobs.start("step", "ask: hello")
+        await pilot.press("ctrl+j")
+        await pilot.pause(0.1)
+        modal = app.screen
+        assert isinstance(modal, JobsModal)
+        rows = list(modal.query(".jm-row"))
+        assert len(rows) == 2
+
+
+@pytest.mark.asyncio
+async def test_escape_closes_jobs_modal(sandbox: Path) -> None:
+    """Esc must dismiss the modal — otherwise the user has no keyboard
+    way back to the input. We pop_screen via the binding."""
+    from code_scalpel.tui.widgets.jobs_modal import JobsModal
+
+    app = ScalpelApp(config=_CONFIG, cwd=sandbox)
+    async with app.run_test(headless=True, size=(80, 24)) as pilot:
+        await pilot.pause(0.1)
+        await pilot.press("ctrl+j")
+        await pilot.pause(0.1)
+        assert isinstance(app.screen, JobsModal)
+        await pilot.press("escape")
+        await pilot.pause(0.1)
+        assert not isinstance(app.screen, JobsModal)
