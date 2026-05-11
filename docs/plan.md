@@ -1729,6 +1729,68 @@ v0.3 hooks captured in v0.2 (см. ниже):
 ### v0.3
 
 ```text
+project memory + retrieval (BIG, ставит фундамент для всего ниже):
+  Сейчас агент видит ТОЛЬКО project map в каждом turn'е. Map хорош но
+  плоский: signatures + docstrings + imports. Нужна **многослойная
+  память** проекта чтобы агент не зависел от того что юзер помнит
+  сказать «прочитай файл X» каждый раз.
+  Слои:
+  • Tree-sitter / AST индекс — granular nodes (functions, classes,
+    methods) с позициями, типами параметров, control-flow shape (есть
+    ли try/loop/if, количество ветвей). Не только Python — JS, Go,
+    Rust. Indexed at session start, invalidated by mtime.
+  • File-scoped summaries — для каждого файла >50 LOC хранить
+    сгенерированную моделью одну-две абзаца «что этот файл делает,
+    с чем связан». Дешевле чем читать body, точнее чем docstring.
+    Регенерация по mtime (как INDEX.json сейчас).
+  • Symbol graph — где каждая функция/класс вызывается. Inverse-index
+    imports. Pre-computed via AST walk. Дает ответ на «где X
+    используется?» без grep.
+  • Retrieval API — `retrieve(query, k=5, scope=file|symbol|all)`
+    возвращает k наиболее релевантных фрагментов (chunks с BM25 +
+    optional embeddings). Используется агентом как ещё одна tool в
+    дополнение к read_file/grep.
+  Архитектура: `code_scalpel/memory/` директория с `indexer.py`
+  (tree-sitter), `summaries.py` (LLM-generated per-file blurbs),
+  `graph.py` (call graph), `retrieve.py` (BM25 + tool wrapper).
+  Замена иди дополнение к project_map.
+
+summaries вместо giant context: когда история turn'ов или
+  read_file результаты накапливаются — суммировать через LLM в
+  компактные note'ы. Уже есть /compact для history; нужно
+  расширить на «read_file output после N turn'ов теряет detail,
+  превращается в summary». Освобождает контекст для нового.
+
+iterative patch loop: после SEARCH/REPLACE apply'а — запускать
+  тесты автоматически, если падают — снова отдавать модели c
+  error message и просить fix. Сейчас это ручной regen через
+  кнопку в diff-карточке. Должно быть автоматическим в `code`
+  и `run` режимах. Stop condition: N попыток (e.g. 3).
+
+mandatory tests: для каждой задачи в plan'е модель должна заявлять
+  testы которые покрывают изменение. Если testов нет — задача не
+  считается выполненной. Это policy уровня executor: после apply
+  проверяем что а) тесты что были — зелёные, б) новые тесты есть
+  если задача implement/refactor. Конфликтует с simple `code` mode
+  где юзер просит просто patch — нужен toggle.
+
+file-scoped retrieval: вместо «дай k chunks из всего проекта»
+  иногда лучше «из этого файла». Полезно когда юзер уже выбрал
+  файл (через map или предыдущий turn). API: `retrieve(query,
+  path=...)`. Имплементируется поверх tree-sitter индекса.
+
+model bench когда агент допишется (TODO, прямое сравнение на нашей
+  v0.3+ сюите, не v0.2):
+  • qwen3-8b (новая generation, для проверки поколения)
+  • qwen3.5-9b (dense general, уже мерили на v0.2 — 79%, ожидаем
+    рост с обогащённой map)
+  • qwen2.5-coder-14b (текущий baseline)
+  Цель: понять окупается ли coder-специализация vs более новая
+  generic-модель + наша обогащённая map. Если qwen3-8b vs coder-14b
+  даст близко по качеству при половине RAM — переключаем дефолт.
+  Прогоняется на полной сюите (включая retrieval/grounding кейсы,
+  которые v0.2 бенч не покрывал).
+
 enforce-read-before-show (HOOK): qwen-coder-14b в простых кейсах (например
   dataclass с предсказуемыми полями) дампит «код метода» из обучения мимо
   read_file даже с явным правилом в промте. Тест помечен xfail в
