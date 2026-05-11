@@ -48,25 +48,23 @@ def test_body_read_file_python_is_syntax_highlighted() -> None:
     assert body.lexer.name == "Python"
 
 
-def test_body_failed_call_skips_highlighting() -> None:
-    """Error messages aren't source — render as plain text."""
+def test_body_failed_call_returns_none_for_plain_render() -> None:
+    """Errors / non-highlightable bodies return None — compose() falls
+    back to a Static(text, markup=False) so file/traceback brackets
+    don't trip Rich's markup parser."""
     modal = ToolResultModal(_result("read_file", {"path": "x.py"}, "ENOENT", ok=False))
-    body = modal._body_renderable()
-    assert not isinstance(body, Syntax)
+    assert modal._body_renderable() is None
 
 
 def test_body_non_read_file_tools_render_plain() -> None:
     modal = ToolResultModal(_result("grep", {"pattern": "x"}, "a.py:1: x\n"))
-    body = modal._body_renderable()
-    assert not isinstance(body, Syntax)
+    assert modal._body_renderable() is None
 
 
-def test_body_empty_output_shows_placeholder() -> None:
+def test_body_empty_output_returns_none() -> None:
+    """Empty output → None; compose() mounts a '(empty output)' placeholder."""
     modal = ToolResultModal(_result("grep", {"pattern": "x"}, ""))
-    body = modal._body_renderable()
-    # Empty result must still render something — not literally empty.
-    assert isinstance(body, str)
-    assert "empty" in body
+    assert modal._body_renderable() is None
 
 
 # ── integration via the running app ──────────────────────────────────────────

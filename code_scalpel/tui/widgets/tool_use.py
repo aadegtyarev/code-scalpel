@@ -8,6 +8,7 @@ from __future__ import annotations
 import json
 
 from rich.console import RenderableType
+from rich.markup import escape
 from rich.syntax import Syntax
 from textual.app import ComposeResult
 from textual.widget import Widget
@@ -106,12 +107,16 @@ class ToolUseCard(Widget):
 
     def _title(self) -> str:
         dot = "[#5fbf5f]●[/]" if self._result.ok else "[#bf6060]●[/]"
-        # arguments — compact, single-line
+        # arguments — compact, single-line; escaped because tool args
+        # often contain brackets/quotes that Rich's markup parser eats.
         args = self._call.body.replace("\n", " ").strip()
         if len(args) > 60:
             args = args[:57] + "…"
         summary = self._summarize_output()
-        return f"{dot} [bold]{self._call.name}[/bold]([dim]{args}[/dim]) [dim]· {summary}[/dim]"
+        return (
+            f"{dot} [bold]{self._call.name}[/bold]"
+            f"([dim]{escape(args)}[/dim]) [dim]· {escape(summary)}[/dim]"
+        )
 
     def _summarize_output(self) -> str:
         out = self._result.output
@@ -144,30 +149,32 @@ class ToolUseCard(Widget):
         head = "\n".join(lines[: self._PREVIEW_LINES])
         return head, len(lines) - self._PREVIEW_LINES
 
-    def _preview_renderable(self) -> RenderableType:
-        """Build the body renderable. For successful read_file calls we
-        syntax-highlight the preview based on the file extension; everything
-        else stays plain (avoids dragging Pygments into shell/grep output)."""
-        head, hidden = self._preview_text()
+    def _preview_renderable(self) -> RenderableType | None:
+        """Body renderable for the preview. For successful read_file calls
+        we syntax-highlight via Rich's Syntax (its own renderer, markup
+        irrelevant). Everything else returns None — the compose() path then
+        renders raw text in a Static with markup=False, which is the proper
+        way to display file/grep output without Rich parsing brackets."""
+        head, _hidden = self._preview_text()
         lexer = self._infer_lexer()
         if lexer and self._result.ok:
             return Syntax(head, lexer, theme="monokai", background_color="default")
-        if hidden:
-            return f"{head}\n[dim]… {hidden} more lines (Ctrl+O for full view)[/]"
-        return head
+        return None
 
     def _infer_lexer(self) -> str | None:
         return _infer_lexer_for(self._call)
 
     def compose(self) -> ComposeResult:
         with Collapsible(title=self._title(), collapsed=True):
-            renderable = self._preview_renderable()
+            highlighted = self._preview_renderable()
             head, hidden = self._preview_text()
-            # When the renderable is a Syntax object the truncation hint
-            # doesn't live inside it — emit it as a separate dim line so the
-            # user still sees "more lines" without polluting the highlight.
-            yield Static(renderable, classes="body")
-            if hidden and isinstance(renderable, Syntax):
+            if highlighted is not None:
+                yield Static(highlighted, classes="body")
+            else:
+                # Plain branch: markup=False so brackets/equals in file
+                # bodies or grep matches don't blow up Rich's parser.
+                yield Static(head, classes="body", markup=False)
+            if hidden:
                 yield Static(
                     f"[dim]… {hidden} more lines (Ctrl+O for full view)[/]",
                     classes="body",

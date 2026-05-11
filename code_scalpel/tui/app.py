@@ -296,9 +296,12 @@ class ScalpelApp(App[None]):
             text = build_map(self.cwd)
             line_count = text.count("\n") + 1 if text else 0
             char_count = len(text)
+            # markup=False because the map is raw Python signatures —
+            # `[`, `]`, `=True/False` would otherwise break Rich.
             output.print_status(
                 f"● Project map ({line_count} lines, {char_count} chars — "
-                f"sent to the model on every turn):\n{text}"
+                f"sent to the model on every turn):\n{text}",
+                markup=False,
             )
             return
         if cmd.startswith("/mode "):

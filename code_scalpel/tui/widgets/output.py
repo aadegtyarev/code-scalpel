@@ -75,7 +75,12 @@ class OutputLog(VerticalScroll):
         self.call_after_refresh(self.scroll_end, animate=False)
 
     def print_user(self, text: str) -> None:
-        self.run_worker(self._append(Static(text, classes="msg-user")), exclusive=False)
+        # User input may contain `[...]` (e.g. a literal bracketed phrase) —
+        # markup=False so Rich doesn't try to parse it as a tag.
+        self.run_worker(
+            self._append(Static(text, classes="msg-user", markup=False)),
+            exclusive=False,
+        )
 
     def print_assistant(self, text: str) -> Markdown:
         widget = Markdown(text)
@@ -100,11 +105,20 @@ class OutputLog(VerticalScroll):
         self.call_after_refresh(self.scroll_end, animate=False)
         return md
 
-    def print_status(self, text: str) -> None:
-        self.run_worker(self._append(Static(text, classes="msg-status")), exclusive=False)
+    def print_status(self, text: str, *, markup: bool = True) -> None:
+        """Mount a status line. markup=False for raw text that contains
+        brackets / Python code (project map dumps, file paths) which would
+        otherwise blow up Rich's markup parser."""
+        self.run_worker(
+            self._append(Static(text, classes="msg-status", markup=markup)),
+            exclusive=False,
+        )
 
-    def print_error(self, text: str) -> None:
-        self.run_worker(self._append(Static(text, classes="msg-error")), exclusive=False)
+    def print_error(self, text: str, *, markup: bool = True) -> None:
+        self.run_worker(
+            self._append(Static(text, classes="msg-error", markup=markup)),
+            exclusive=False,
+        )
 
     def add_tool_use(self, call: ToolCall, result: ToolResult) -> None:
         self.run_worker(self._append(ToolUseCard(call, result)), exclusive=False)

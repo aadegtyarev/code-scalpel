@@ -9,6 +9,7 @@ possible, scrollable. Escape closes.
 from __future__ import annotations
 
 from rich.console import RenderableType
+from rich.markup import escape
 from rich.syntax import Syntax
 from textual.app import ComposeResult
 from textual.binding import Binding
@@ -77,25 +78,39 @@ class ToolResultModal(ModalScreen[None]):
         if len(args) > 80:
             args = args[:77] + "…"
         return (
-            f"{self._result.call.name}([dim]{args}[/dim])  "
+            f"{self._result.call.name}([dim]{escape(args)}[/dim])  "
             f"[dim]· {status} · {line_count} lines · {char_count} chars[/dim]"
         )
 
-    def _body_renderable(self) -> RenderableType:
-        out = self._result.output or "[dim](empty output)[/dim]"
-        if not self._result.ok:
-            # Errors are short, no point syntax-highlighting them.
-            return out
+    def _body_renderable(self) -> RenderableType | None:
+        """Highlighted body for successful read_file; None for everything
+        else (compose() will render plain text with markup=False)."""
+        if not self._result.output or not self._result.ok:
+            return None
         lexer = _infer_lexer_for(self._result.call)
         if lexer:
             return Syntax(
-                out, lexer, theme="monokai", background_color="default", line_numbers=False
+                self._result.output,
+                lexer,
+                theme="monokai",
+                background_color="default",
+                line_numbers=False,
             )
-        return out
+        return None
 
     def compose(self) -> ComposeResult:
         with Vertical():
             yield Static(self._header_text(), id="trm-header")
             with VerticalScroll():
-                yield Static(self._body_renderable(), id="trm-body")
-            yield Static("[esc] close · [q] close", id="trm-hint")
+                highlighted = self._body_renderable()
+                if highlighted is not None:
+                    yield Static(highlighted, id="trm-body")
+                elif not self._result.output:
+                    yield Static("[dim](empty output)[/dim]", id="trm-body")
+                else:
+                    # Plain text branch: markup=False so file contents
+                    # / traceback brackets don't blow up Rich.
+                    yield Static(self._result.output, id="trm-body", markup=False)
+            # `\[` escapes the literal bracket in Rich markup so `[esc]` /
+            # `[q]` aren't parsed as opening tags.
+            yield Static(r"\[esc] close · \[q] close", id="trm-hint")
