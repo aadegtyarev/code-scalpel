@@ -81,20 +81,36 @@ async def test_ask_sends_system_prompt(project: Path) -> None:
 
 @pytest.mark.asyncio
 async def test_system_prompt_carries_identity_anchor(project: Path) -> None:
-    """When the user asks "кто ты", weak LLMs translate the system prompt
-    back verbatim ("Ты — ассистент…") instead of self-introducing. The
-    Identity block has to give them a first-person template so the answer
-    starts with "Я — code-scalpel", not "Ты —". This test guards the
-    block — if the anchor disappears, the "кто ты" probe regresses."""
+    """The Identity block guards two distinct failures:
+    (1) "кто ты" regressing to "Ты — ассистент…" — weak LLM
+        translating the English system prompt back verbatim;
+    (2) Identity overreach — answering a short context-question
+        ("где сжимается?") with the identity blurb because the
+        block tugs too hard. Probe regression 2026-05-11.
+
+    Anchors checked:
+    - First-person openings present for both languages.
+    - Explicit trigger list AND an "ONLY" / negative-example clause
+      so the block can't apply to ambient short questions."""
     llm = MockLLMAdapter(["OK"])
     agent = StepAgent(llm=llm, cwd=project, config=_CONFIG)
     await agent.ask("do something")
     system = llm.calls[0][0]["content"]
     assert "Identity" in system
     assert "code-scalpel" in system
-    # Concrete templates — without them weak models hallucinate from scratch.
+    # First-person anchors — without them the model invents English
+    # identity blurbs in a Russian conversation and vice versa.
     assert "Я — code-scalpel" in system
     assert "I'm code-scalpel" in system
+    # Tight scoping: triggers enumerated, "ONLY" written explicitly.
+    # NB: no negative example here. An earlier iteration listed
+    # context-shaped questions as "NOT identity" — the model latched
+    # onto those examples and started answering legit context
+    # questions with "Не понял, переспроси?". Whitelist of triggers
+    # beats a blacklist of counterexamples for 14B.
+    assert "ONLY" in system
+    assert "кто ты" in system
+    assert "what are you" in system
 
 
 @pytest.mark.asyncio
