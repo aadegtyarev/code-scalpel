@@ -14,6 +14,7 @@ from textual_autocomplete import AutoComplete, DropdownItem
 
 from code_scalpel.agent import StepAgent, TextDelta, ToolExecuted
 from code_scalpel.config import AppConfig, autodetect_context_tokens, resolve_model_name
+from code_scalpel.jobs import JobRegistry
 from code_scalpel.llm.adapter import ChatResponse, OpenAICompatibleAdapter
 from code_scalpel.memory import MemoryStore
 from code_scalpel.patch.edit_block import Edit, apply_edits, edits_to_diff, extract_edits
@@ -24,6 +25,7 @@ from code_scalpel.tools.shell import AsyncShellRunner
 from code_scalpel.tui.widgets.cards.tool_call import PatchDecision, ToolCallCard
 from code_scalpel.tui.widgets.footer import StatusFooter
 from code_scalpel.tui.widgets.input import ModeInput, UserMessage
+from code_scalpel.tui.widgets.jobs_bar import JobsBar
 from code_scalpel.tui.widgets.output import OutputLog
 from code_scalpel.tui.widgets.tool_result_modal import ToolResultModal
 from code_scalpel.tui.widgets.tool_use import ToolUseCard
@@ -124,6 +126,11 @@ class ScalpelApp(App[None]):
         # at construction so tests / lightweight callers that never touch
         # /remember don't get a .code-scalpel/memory.db materialised.
         self._memory: MemoryStore | None = None
+        # In-session registry of background jobs (map build, LLM step,
+        # /compact, pytest retry, …). The JobsBar widget subscribes; any
+        # worker that wants to be visible wraps itself in
+        # `self.jobs.track(kind, description)`.
+        self.jobs = JobRegistry()
 
     # ── compose ───────────────────────────────────────────────────────────────
 
@@ -132,6 +139,9 @@ class ScalpelApp(App[None]):
         yield Rule(line_style="solid", classes="input-rule")
         yield ModeInput(mode=self._AGENT_MODES[0])
         yield Rule(line_style="solid", classes="input-rule")
+        # JobsBar sits between the input rule and the footer; collapses to
+        # height 0 (display:none) when idle so the user gets the row back.
+        yield JobsBar(self.jobs)
         yield StatusFooter()
         yield _UpwardAutoComplete(
             target="#textarea",
@@ -247,19 +257,20 @@ class ScalpelApp(App[None]):
         inline. UI must NEVER freeze — even fast paths route through here
         so /map feels the same on a 5-file repo and a 500-file one."""
         output = self.query_one(OutputLog)
-        output.print_status("● Building project map…", markup=True)
-        # Give the event loop a chance to paint the notice before we go
-        # CPU-bound on AST parsing.
-        await asyncio.sleep(0)
-        from code_scalpel.project_map import build_map
+        with self.jobs.track("map", "Building project map"):
+            output.print_status("● Building project map…", markup=True)
+            # Give the event loop a chance to paint the notice before we go
+            # CPU-bound on AST parsing.
+            await asyncio.sleep(0)
+            from code_scalpel.project_map import build_map
 
-        loop = asyncio.get_running_loop()
-        text = await loop.run_in_executor(None, build_map, self.cwd)
+            loop = asyncio.get_running_loop()
+            text = await loop.run_in_executor(None, build_map, self.cwd)
 
-        call = ToolCall(name="project_map", body="")
-        result = ToolResult(call=call, output=text, ok=True)
-        output.add_tool_use(call, result)
-        self._last_tool_result = result
+            call = ToolCall(name="project_map", body="")
+            result = ToolResult(call=call, output=text, ok=True)
+            output.add_tool_use(call, result)
+            self._last_tool_result = result
 
     async def _do_tasks(self) -> None:
         """Surface the current plan (.code-scalpel/TASKS.md) inline as a
@@ -364,21 +375,22 @@ class ScalpelApp(App[None]):
         output = self.query_one(OutputLog)
         footer = self.query_one(StatusFooter)
         assert self._agent is not None
-        footer.status = "◌ compacting…"
-        try:
-            summary = await self._agent.compact()
-        except Exception as e:
-            output.print_error(f"Compact failed: {e}")
-            footer.status = "● error"
-            return
-        if summary is None:
-            output.print_status("Nothing to compact.")
-        else:
-            output.print_status(f"● Compacted. Summary:\n{summary}")
-            # Anchor the footer budget to "post-compact" so the bar drops.
-            self.session.mark_compacted()
-            self._update_ctx()
-        footer.status = "● idle"
+        with self.jobs.track("compact", "Summarising history"):
+            footer.status = "◌ compacting…"
+            try:
+                summary = await self._agent.compact()
+            except Exception as e:
+                output.print_error(f"Compact failed: {e}")
+                footer.status = "● error"
+                return
+            if summary is None:
+                output.print_status("Nothing to compact.")
+            else:
+                output.print_status(f"● Compacted. Summary:\n{summary}")
+                # Anchor the footer budget to "post-compact" so the bar drops.
+                self.session.mark_compacted()
+                self._update_ctx()
+            footer.status = "● idle"
 
     def action_cancel_step(self) -> None:
         # Esc on a focused tool card returns the user to the input rather
@@ -520,6 +532,11 @@ class ScalpelApp(App[None]):
 
         progress = output.start_turn_progress()
         placeholder = output.start_streaming()
+        # Job covers the whole turn (stream + any tool round-trips +
+        # post-processing). Mode is the more useful label here than
+        # the generic "step" since the user sees ask/plan/code/review
+        # in the input prompt.
+        job_id = self.jobs.start(mode, f"{mode}: {task[:60]}")
         try:
             await self._wait_mounted(progress)
             await self._wait_mounted(placeholder)
@@ -628,6 +645,10 @@ class ScalpelApp(App[None]):
             await self._remove_progress(progress)
             output.print_error(f"Error: {e}")
             footer.status = "● error"
+        finally:
+            # Cover every exit (success / cancel / error) — a stuck job
+            # would otherwise stay in the JobsBar forever.
+            self.jobs.finish(job_id)
 
     async def _regenerate(self, prev_edits: list[Edit]) -> None:
         """Ask the model to retry the patch — used after a rejected or

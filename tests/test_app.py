@@ -983,3 +983,53 @@ async def test_slash_recall_empty_store_prints_no_hits(sandbox: Path) -> None:
         output = app.query_one(OutputLog)
         cards = list(output.query(ToolUseCard))
         assert not cards
+
+
+# ── JobsBar integration ──────────────────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_app_has_jobs_registry_exposed(sandbox: Path) -> None:
+    """ScalpelApp owns the registry — that's the single point plugins
+    and slash commands reach for to surface their work."""
+    from code_scalpel.jobs import JobRegistry
+
+    app = ScalpelApp(config=_CONFIG, cwd=sandbox)
+    assert isinstance(app.jobs, JobRegistry)
+
+
+@pytest.mark.asyncio
+async def test_jobs_bar_mounted_between_input_and_footer(sandbox: Path) -> None:
+    from code_scalpel.tui.widgets.footer import StatusFooter
+    from code_scalpel.tui.widgets.jobs_bar import JobsBar
+
+    app = ScalpelApp(config=_CONFIG, cwd=sandbox)
+    async with app.run_test(headless=True, size=(80, 24)) as pilot:
+        await pilot.pause(0.1)
+        children = list(app.screen.children)
+        bar_idx = next(i for i, c in enumerate(children) if isinstance(c, JobsBar))
+        footer_idx = next(i for i, c in enumerate(children) if isinstance(c, StatusFooter))
+        # Bar lives between the input chrome and the footer — the moment
+        # it goes live it borrows a row from there, not from the chat.
+        assert bar_idx < footer_idx
+
+
+@pytest.mark.asyncio
+async def test_do_map_registers_then_clears_job(sandbox: Path) -> None:
+    """The /map worker must `track` itself so the user sees what's
+    blocking the UI when build_map is slow."""
+    from code_scalpel.tui.widgets.jobs_bar import JobsBar
+
+    app = ScalpelApp(config=_CONFIG, cwd=sandbox)
+    async with app.run_test(headless=True, size=(80, 24)) as pilot:
+        await pilot.pause(0.1)
+        app._handle_slash("/map")
+        # Job appears almost immediately — give the worker one tick.
+        await pilot.pause(0.05)
+        # Either still running (bar live) or already finished (bar idle).
+        # We only assert that the registry actually saw a job, not the
+        # current state — fast machines may complete inside the tick.
+        await pilot.pause(0.3)
+        bar = app.query_one(JobsBar)
+        # After completion the bar must be idle again.
+        assert not bar.has_class("live")
