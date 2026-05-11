@@ -496,8 +496,10 @@ async def test_system_prompt_carries_grounding_rules() -> None:
 
     text = _SYSTEM_PROMPT.lower()
     assert "grounding" in text
-    # Map authority claim is the core of the rule
-    assert "authoritative" in text or "does not exist" in text
+    # Naming must be cross-checked against the MAP
+    assert "verify" in text or "does not exist" in text
+    # Anti-confabulation rule: similar names don't justify invention
+    assert "mark_compacted" in text and "compact" in text
     # Calling read_file before quoting code is explicit
     assert "read_file" in text and ("quote" in text or "show" in text)
     # And don't reconstruct from memory

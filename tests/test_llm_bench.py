@@ -594,6 +594,11 @@ _ADMITS_MISSING = (
     "тут нет",
     "не нашёл",
     "не нашел",
+    "не указан",
+    "не указано",
+    "не в map",
+    "not in the map",
+    "not listed",
 )
 
 
@@ -680,6 +685,40 @@ async def test_qwen_does_not_invent_class_method_from_intent(tmp_path: Path) -> 
     if invented:
         assert _admits_missing(result.reply), (
             f"model invented {invented} without flagging it as missing:\n{result.reply[:600]}"
+        )
+
+
+@pytest.mark.llm
+async def test_qwen_does_not_invent_method_from_neighbouring_name(tmp_path: Path) -> None:
+    """Direct reproduction of the 2026-05-11 turn-1 bug: class has a
+    `mark_compacted` method, user asks where summarisation lives, model
+    answers naming `compact` — a name that's NOT in the MAP. The grounding
+    rule must catch this: never name a method that isn't listed."""
+    import textwrap
+
+    (tmp_path / "session.py").write_text(
+        textwrap.dedent("""\
+            class Session:
+                def record(self, response):
+                    pass
+
+                def mark_compacted(self):
+                    pass
+
+                def summary_line(self):
+                    return ""
+        """)
+    )
+    agent = _make_agent(tmp_path)
+    result = await agent.ask("где в проекте суммаризация контекста?")
+    low = result.reply.lower()
+    # Forbidden: claiming Session has a `compact` method (it has
+    # mark_compacted, that's a different name).
+    if "compact" in low and "mark_compacted" not in low:
+        # If the model only mentions `compact`, it must explicitly admit
+        # the method isn't there — otherwise it's fabricating.
+        assert _admits_missing(result.reply), (
+            f"model named `compact` (not in MAP) without admitting absence:\n{result.reply[:600]}"
         )
 
 
