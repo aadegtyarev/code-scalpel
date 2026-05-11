@@ -1688,7 +1688,9 @@ class Session:
 ```
 
 Перенесено в v0.3:
-- task classifier (local heuristic) — нужен для autonomous mode
+- ✓ task classifier (local heuristic) — `code_scalpel/classifier.py`, pure
+  function, word-boundary regex (чуть строже псевдокода в §21 чтобы
+  "prefix" не триггерил "fix"). 29 unit-тестов.
 - planner mode + TASKS.md — большой кусок, рядом с autonomous
 - step summarizer — depends on step mode
 - context builder compression — пока не упираемся в лимит
