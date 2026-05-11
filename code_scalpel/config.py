@@ -26,6 +26,10 @@ class AgentConfig(BaseModel):
     max_files: int = 3
     max_file_lines: int = 400
     max_debug_attempts: int = 2
+    # Opt-in: when on, code/run modes auto-run tests after a patch applies and
+    # ask the model to fix on failure, up to max_debug_attempts retries.
+    # Off by default — the TUI flips this once the iterative loop is wired in.
+    iterative_patch_loop: bool = False
     answer_reserve_tokens: int = 4000
     context_budget_warn: float = 0.70
     context_budget_critical: float = 0.90

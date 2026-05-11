@@ -7,7 +7,7 @@ from typing import Any
 
 from code_scalpel.config import AppConfig
 from code_scalpel.llm.adapter import ChatResponse, LLMAdapter, NativeToolCall
-from code_scalpel.patch.edit_block import Edit, extract_edits
+from code_scalpel.patch.edit_block import Edit, apply_edits, extract_edits
 from code_scalpel.project_map import build_map
 from code_scalpel.tools.agent_tools import (
     TOOL_SCHEMAS,
@@ -15,8 +15,24 @@ from code_scalpel.tools.agent_tools import (
     ToolResult,
     execute,
 )
+from code_scalpel.tools.shell import ShellRunner
 
 _MAX_TOOL_ROUNDS = 6
+
+# Retry prompts for code_with_retry. We feed the failure verbatim — weak local
+# models reliably benefit from a short, blame-free framing of WHAT broke.
+_APPLY_FAILED_PROMPT = (
+    "Your previous SEARCH/REPLACE patch did not apply cleanly. The applier "
+    "reported:\n\n{error}\n\nProduce a corrected patch. Re-read the target "
+    "file first if you're not sure the SEARCH text matches character-for-"
+    "character."
+)
+_TESTS_FAILED_PROMPT = (
+    "Your previous patch was applied, but the test suite is now red. Pytest "
+    "output:\n\n{output}\n\nProduce a follow-up patch that fixes the failing "
+    "test(s). Don't revert the original change unless that's truly the only "
+    "way forward."
+)
 
 _FORCE_ANSWER_MSG: dict[str, Any] = {
     "role": "user",
@@ -147,10 +163,25 @@ Rules for plan mode:
 
 
 @dataclass(frozen=True)
+class PatchAttempt:
+    """One iteration of the code_with_retry loop. Records what the model
+    proposed, whether the patch applied, and what the tests said after."""
+
+    edits: list[Edit]
+    apply_ok: bool
+    apply_error: str  # "" when apply_ok
+    test_output: str  # "" when tests not run (apply failed)
+    tests_passed: bool
+
+
+@dataclass(frozen=True)
 class StepResult:
     reply: str
     edits: list[Edit]
     response: ChatResponse
+    # Empty for non-retry paths (regular ask / first-shot success). Populated
+    # by code_with_retry so the TUI can show patch+test history.
+    attempts: tuple[PatchAttempt, ...] = ()
 
     @property
     def patch(self) -> list[Edit] | None:
@@ -184,10 +215,21 @@ class StepAgent:
     ask() do NOT enter the history — they are internal to that turn.
     """
 
-    def __init__(self, llm: LLMAdapter, cwd: Path, config: AppConfig) -> None:
+    def __init__(
+        self,
+        llm: LLMAdapter,
+        cwd: Path,
+        config: AppConfig,
+        *,
+        shell_runner: ShellRunner | None = None,
+    ) -> None:
         self._llm = llm
         self._cwd = cwd
         self._config = config
+        # Optional shell runner override — used by tests and by callers that
+        # want to point pytest at a sandbox. When None, agent_tools.execute
+        # constructs the default AsyncShellRunner per tool call.
+        self._shell_runner = shell_runner
         self._history: list[dict[str, str]] = []
 
     @property
@@ -202,6 +244,100 @@ class StepAgent:
         if mode == "plan":
             self._maybe_save_plan(result.reply)
         return result
+
+    async def code_with_retry(self, task: str, *, mode: str = "code") -> StepResult:
+        """Iterative patch loop: ask the model, apply, run tests, retry on failure.
+
+        Up to ``agent.max_debug_attempts`` retries (in addition to the initial
+        attempt — so ``max_debug_attempts=2`` means at most 3 total model
+        calls). Stops as soon as a patch applies AND tests pass. Each
+        iteration's outcome is recorded on the returned ``StepResult.attempts``
+        tuple so the TUI can render a history view.
+
+        When the model returns no SEARCH/REPLACE blocks we treat it as a
+        plain-text answer and return immediately — there's nothing to apply
+        and nothing to retry. The successful tail iteration returns
+        ``StepResult.edits == []`` because the patch is already on disk; the
+        caller has no reason to re-apply.
+
+        The retry path is gated on ``agent.iterative_patch_loop``; when off,
+        this method falls back to a single ``ask`` call so callers can switch
+        on the method unconditionally without surprising existing users.
+        """
+        if not self._config.agent.iterative_patch_loop:
+            return await self.ask(task, mode=mode)
+
+        max_retries = max(0, self._config.agent.max_debug_attempts)
+        attempts: list[PatchAttempt] = []
+        prompt = task
+        # Initial attempt + up to max_retries retries.
+        last_result: StepResult | None = None
+        for i in range(max_retries + 1):
+            result = await self._chat_loop(prompt, mode=mode)
+            last_result = result
+            if not result.edits:
+                # Plain text — model decided no patch is needed (or asked a
+                # clarifying question). Return as-is; nothing to retry on.
+                return result
+
+            ok, err = apply_edits(result.edits, self._cwd)
+            if not ok:
+                attempts.append(
+                    PatchAttempt(
+                        edits=result.edits,
+                        apply_ok=False,
+                        apply_error=err,
+                        test_output="",
+                        tests_passed=False,
+                    )
+                )
+                if i == max_retries:
+                    break
+                prompt = _APPLY_FAILED_PROMPT.format(error=err)
+                continue
+
+            test_output, tests_passed = await self._run_tests()
+            attempts.append(
+                PatchAttempt(
+                    edits=result.edits,
+                    apply_ok=True,
+                    apply_error="",
+                    test_output=test_output,
+                    tests_passed=tests_passed,
+                )
+            )
+            if tests_passed:
+                # Patch is on disk; clear edits so the caller doesn't re-apply.
+                return StepResult(
+                    reply=result.reply,
+                    edits=[],
+                    response=result.response,
+                    attempts=tuple(attempts),
+                )
+            if i == max_retries:
+                break
+            prompt = _TESTS_FAILED_PROMPT.format(output=test_output)
+
+        # Exhausted retries. Surface the last attempt verbatim so the TUI can
+        # show "tests still red after N tries" plus the diff/output history.
+        assert last_result is not None
+        return StepResult(
+            reply=last_result.reply,
+            edits=last_result.edits,
+            response=last_result.response,
+            attempts=tuple(attempts),
+        )
+
+    async def _run_tests(self) -> tuple[str, bool]:
+        """Invoke the run_tests tool and return (output, passed)."""
+        call = ToolCall(name="run_tests", body="{}")
+        result = await execute(
+            call,
+            self._cwd,
+            max_lines=self._config.agent.max_file_lines,
+            runner=self._shell_runner,
+        )
+        return result.output, result.ok
 
     async def _chat_loop(self, task: str, *, mode: str = "ask") -> StepResult:
         user_msg = self._user_message(task)
@@ -268,7 +404,12 @@ class StepAgent:
 
     async def _execute_native(self, tc: NativeToolCall) -> ToolResult:
         call = ToolCall(name=tc.name, body=tc.arguments)
-        return await execute(call, self._cwd, max_lines=self._config.agent.max_file_lines)
+        return await execute(
+            call,
+            self._cwd,
+            max_lines=self._config.agent.max_file_lines,
+            runner=self._shell_runner,
+        )
 
     def _remember(self, user_msg: str, assistant_msg: str) -> None:
         self._history.append({"role": "user", "content": user_msg})

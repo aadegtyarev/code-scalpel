@@ -705,3 +705,233 @@ async def test_loop_guard_works_in_stream_path(project: Path) -> None:
     assert "".join(chunks).endswith("Done.")
     # Force-answer reached the third call
     assert len(llm.calls) == 3
+
+
+# ── iterative patch loop (code_with_retry) ──────────────────────────────────
+
+
+_BAD_PATCH = """\
+hello.py
+```python
+<<<<<<< SEARCH
+def hello():
+    pass
+=======
+def hello():
+    return "wrong"
+>>>>>>> REPLACE
+```
+"""
+
+_GOOD_PATCH = """\
+hello.py
+```python
+<<<<<<< SEARCH
+def hello():
+    return "wrong"
+=======
+def hello():
+    return "hi"
+>>>>>>> REPLACE
+```
+"""
+
+# Direct fix from the pristine `pass` body (used when round 1 didn't change
+# the file because its SEARCH didn't match).
+_GOOD_PATCH_FROM_ORIGINAL = """\
+hello.py
+```python
+<<<<<<< SEARCH
+def hello():
+    pass
+=======
+def hello():
+    return "hi"
+>>>>>>> REPLACE
+```
+"""
+
+
+def _retry_config(*, max_debug_attempts: int = 2) -> AppConfig:
+    return AppConfig(
+        profiles={
+            "local": ModelProfile(
+                provider="lmstudio",
+                model="local-model",
+                temperature=0.1,
+            )
+        },
+        agent=AgentConfig(
+            max_files=2,
+            max_file_lines=50,
+            max_debug_attempts=max_debug_attempts,
+            iterative_patch_loop=True,
+        ),
+    )
+
+
+@pytest.mark.asyncio
+async def test_code_with_retry_fixes_failing_test(project: Path) -> None:
+    """Round 1: bad patch applies but tests fail. Round 2: model receives the
+    test output as context, emits the good patch, tests pass, return."""
+    from code_scalpel.tools.shell import ShellResult
+    from tests.mocks import MockShellRunner
+
+    llm = MockLLMAdapter([_BAD_PATCH, _GOOD_PATCH])
+    shell = MockShellRunner(
+        [
+            ShellResult("FAILED tests/test_hello.py::test_hello - assert 'wrong' == 'hi'", 1),
+            ShellResult("1 passed", 0),
+        ]
+    )
+    agent = StepAgent(llm=llm, cwd=project, config=_retry_config(), shell_runner=shell)
+
+    result = await agent.code_with_retry("make hello return 'hi'")
+
+    assert len(result.attempts) == 2
+    assert result.attempts[0].apply_ok is True
+    assert result.attempts[0].tests_passed is False
+    assert "wrong" in result.attempts[0].test_output
+    assert result.attempts[1].tests_passed is True
+    # Final patch is on disk — edits cleared so caller doesn't re-apply.
+    assert result.edits == []
+    # File on disk reflects the good patch
+    assert 'return "hi"' in (project / "hello.py").read_text()
+    # Two model calls — the retry got the test output as context
+    assert len(llm.calls) == 2
+    second_task = llm.calls[1][-1]["content"]
+    assert "test suite is now red" in second_task or "test" in second_task.lower()
+    assert "wrong" in second_task  # the failure output got fed back
+
+
+@pytest.mark.asyncio
+async def test_code_with_retry_stops_at_max_attempts(project: Path) -> None:
+    """Model never produces a passing patch. After max_debug_attempts retries
+    (so 1 + N total calls) we stop and return the last attempt."""
+    from code_scalpel.tools.shell import ShellResult
+    from tests.mocks import MockShellRunner
+
+    # Each round the model emits a patch that's a no-op rewrite of itself
+    # (`return "wrong"` → `return "wrong"`). The first round mutates the
+    # file; rounds 2 and 3 re-emit the same patch which keeps applying
+    # because SEARCH still matches. Tests fail every time.
+    bad_patch_self_idempotent = """\
+hello.py
+```python
+<<<<<<< SEARCH
+def hello():
+    return "wrong"
+=======
+def hello():
+    return "wrong"
+>>>>>>> REPLACE
+```
+"""
+    llm = MockLLMAdapter(
+        [_BAD_PATCH, bad_patch_self_idempotent, bad_patch_self_idempotent, _BAD_PATCH]
+    )
+    shell = MockShellRunner([ShellResult("still failing", 1)] * 5)
+    agent = StepAgent(
+        llm=llm,
+        cwd=project,
+        config=_retry_config(max_debug_attempts=2),
+        shell_runner=shell,
+    )
+
+    result = await agent.code_with_retry("fix something impossible")
+
+    assert len(result.attempts) == 3  # initial + 2 retries
+    assert all(not a.tests_passed for a in result.attempts)
+    # Last attempt's edits remain on the result so the TUI can show them
+    assert result.edits, "exhausted-retries case must surface the last patch"
+    assert len(llm.calls) == 3
+    # We invoked run_tests once per attempt (3 times), because all 3 patches
+    # applied cleanly and only the tests rejected them.
+    pytest_calls = [c for c in shell.calls if c and c[0] == "pytest"]
+    assert len(pytest_calls) == 3
+
+
+@pytest.mark.asyncio
+async def test_code_with_retry_disabled_flag_falls_back_to_ask(project: Path) -> None:
+    """When iterative_patch_loop=False, code_with_retry is a pass-through to
+    ask() — no tests run, no auto-retry, existing behavior preserved."""
+    from code_scalpel.tools.shell import ShellResult
+    from tests.mocks import MockShellRunner
+
+    cfg = AppConfig(
+        profiles={"local": ModelProfile(provider="lmstudio", model="m")},
+        agent=AgentConfig(
+            max_files=2,
+            max_file_lines=50,
+            iterative_patch_loop=False,  # off — opt-in
+        ),
+    )
+    llm = MockLLMAdapter([_BAD_PATCH])
+    shell = MockShellRunner([ShellResult("would-be tests", 1)])
+    agent = StepAgent(llm=llm, cwd=project, config=cfg, shell_runner=shell)
+
+    result = await agent.code_with_retry("just apply once")
+
+    # No retries recorded — we went through the regular ask path.
+    assert result.attempts == ()
+    # Edits surfaced as the regular ask result (caller applies, not us).
+    assert len(result.edits) == 1
+    # Only one model call, no pytest invocations.
+    assert len(llm.calls) == 1
+    assert not any(c and c[0] == "pytest" for c in shell.calls)
+
+
+@pytest.mark.asyncio
+async def test_code_with_retry_no_edits_returns_immediately(project: Path) -> None:
+    """If the model replies in plain text (no SEARCH/REPLACE), there's nothing
+    to apply and nothing to retry — return on the first attempt without
+    running tests."""
+    from tests.mocks import MockShellRunner
+
+    llm = MockLLMAdapter(["No changes needed — the file already does that."])
+    shell = MockShellRunner([])
+    agent = StepAgent(llm=llm, cwd=project, config=_retry_config(), shell_runner=shell)
+
+    result = await agent.code_with_retry("what do you think?")
+
+    assert result.attempts == ()
+    assert result.edits == []
+    assert shell.calls == []
+    assert len(llm.calls) == 1
+
+
+@pytest.mark.asyncio
+async def test_code_with_retry_records_apply_failure(project: Path) -> None:
+    """When the patch does NOT apply (SEARCH text doesn't match), we record
+    the apply error and feed it back to the model for retry — without trying
+    to run tests on a half-applied tree."""
+    from code_scalpel.tools.shell import ShellResult
+    from tests.mocks import MockShellRunner
+
+    no_match_patch = """\
+hello.py
+```python
+<<<<<<< SEARCH
+def nonexistent():
+    return 42
+=======
+def replaced():
+    return 1
+>>>>>>> REPLACE
+```
+"""
+    llm = MockLLMAdapter([no_match_patch, _GOOD_PATCH_FROM_ORIGINAL])
+    shell = MockShellRunner([ShellResult("1 passed", 0)])
+    agent = StepAgent(llm=llm, cwd=project, config=_retry_config(), shell_runner=shell)
+
+    result = await agent.code_with_retry("make hello return 'hi'")
+
+    assert len(result.attempts) == 2
+    assert result.attempts[0].apply_ok is False
+    assert result.attempts[0].apply_error  # non-empty
+    assert result.attempts[0].test_output == ""  # tests not run
+    assert result.attempts[1].apply_ok is True
+    assert result.attempts[1].tests_passed is True
+    # The retry prompt mentions the apply error
+    second_task = llm.calls[1][-1]["content"]
+    assert "did not apply" in second_task or "apply" in second_task.lower()
