@@ -1730,3 +1730,61 @@ async def test_slash_skills_shows_detected_python_skill(tmp_path: Path) -> None:
         assert "pytest" in body  # description mentions pytest
         # Token-cost column (the "t" suffix from the formatter).
         assert "t  " in body
+
+
+# ── Ctrl+Y copy from focused tool card ──────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_ctrl_y_without_focused_card_notifies(sandbox: Path) -> None:
+    """Ctrl+Y is meaningful only on a focused ToolUseCard. Pressing it
+    with no card focused should warn, not silently no-op or crash."""
+    app = ScalpelApp(config=_CONFIG, cwd=sandbox)
+    notifications: list[str] = []
+    async with app.run_test(headless=True, size=(80, 24)) as pilot:
+        await pilot.pause(0.1)
+        # Intercept notifications so we can assert on them.
+        app.notify = lambda message, *_a, **_kw: notifications.append(str(message))  # type: ignore[assignment,method-assign]
+        app.action_copy_focused()
+        await pilot.pause(0.05)
+    assert notifications
+    assert "Focus a tool card" in notifications[0]
+
+
+@pytest.mark.asyncio
+async def test_ctrl_y_on_focused_card_invokes_clipboard(sandbox: Path) -> None:
+    """With a focused card, Ctrl+Y calls the clipboard helper with the
+    card's raw output. We monkeypatch the helper to capture the call
+    so the test doesn't actually shell out to wl-copy/xclip."""
+    from code_scalpel.tools.agent_tools import ToolCall, ToolResult
+
+    captured: list[str] = []
+    app = ScalpelApp(config=_CONFIG, cwd=sandbox)
+
+    async with app.run_test(headless=True, size=(80, 24)) as pilot:
+        await pilot.pause(0.1)
+        log = app.query_one(OutputLog)
+        call = ToolCall(name="read_file", body='{"path": "x.py"}')
+        result = ToolResult(call=call, output="def hello(): pass\n", ok=True)
+        log.add_tool_use(call, result)
+        await pilot.pause(0.2)
+
+        app.action_focus_prev_card()
+        await pilot.pause(0.05)
+        assert app._focused_card() is not None
+
+        import code_scalpel.clipboard as clip_mod
+
+        def _fake(text: str) -> str:
+            captured.append(text)
+            return "wl-copy"
+
+        original = clip_mod.copy_to_system_clipboard
+        clip_mod.copy_to_system_clipboard = _fake  # type: ignore[assignment]
+        try:
+            app.action_copy_focused()
+            await pilot.pause(0.05)
+        finally:
+            clip_mod.copy_to_system_clipboard = original  # type: ignore[assignment]
+
+    assert captured == ["def hello(): pass\n"]

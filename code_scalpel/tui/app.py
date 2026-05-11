@@ -105,6 +105,7 @@ class ScalpelApp(App[None]):
         Binding("ctrl+t", "cycle_mode", "Mode", show=False),
         Binding("ctrl+o", "show_last_tool_result", "Open last tool result", show=False),
         Binding("ctrl+j", "show_jobs", "Show background jobs", show=False),
+        Binding("ctrl+y", "copy_focused", "Copy focused card output", show=False),
         Binding("ctrl+up", "focus_prev_card", "Previous tool card", show=False),
         Binding("ctrl+down", "focus_next_card", "Next tool card", show=False),
         Binding("escape", "cancel_step", "Cancel", show=False),
@@ -525,6 +526,47 @@ class ScalpelApp(App[None]):
         elapsed age per job — the picture you need when supervised
         autonomous mode is running and several things stack up."""
         self.push_screen(JobsModal(self.jobs))
+
+    def action_copy_focused(self) -> None:
+        """Ctrl+Y: copy the focused ToolUseCard's raw output into the
+        system clipboard. Terminal mouse-selection inside Textual is
+        blocked because the framework captures mouse events for its
+        own interactions — Ctrl+Y is the keyboard-only escape hatch.
+        Yank-style binding (emacs/readline tradition); Ctrl+C would
+        collide with the input's standard "abort" semantics."""
+        from code_scalpel.clipboard import copy_to_system_clipboard
+
+        card = self._focused_card()
+        if card is None:
+            self.notify(
+                "Focus a tool card first (Ctrl+↑/↓) before pressing Ctrl+Y.",
+                title="Copy",
+                severity="warning",
+                timeout=2,
+            )
+            return
+        text = card._result.output or ""
+        if not text:
+            self.notify("Card output is empty.", title="Copy", timeout=2)
+            return
+        method = copy_to_system_clipboard(text)
+        if method is None:
+            try:
+                self.copy_to_clipboard(text)
+                method = "OSC52"
+            except Exception:
+                self.notify(
+                    "Couldn't copy — install xclip/wl-clipboard or use terminal selection.",
+                    title="Copy",
+                    severity="warning",
+                    timeout=3,
+                )
+                return
+        self.notify(
+            f"Copied {len(text)} chars via {method}.",
+            title="Copy",
+            timeout=2,
+        )
 
     def action_focus_prev_card(self) -> None:
         """Ctrl+↑ from input: jump to the most recent tool card. From an

@@ -18,6 +18,7 @@ from textual.containers import Vertical, VerticalScroll
 from textual.screen import ModalScreen
 from textual.widgets import Static
 
+from code_scalpel.clipboard import copy_to_system_clipboard
 from code_scalpel.tools.agent_tools import ToolResult
 from code_scalpel.tui.widgets._map_highlight import highlight_map
 from code_scalpel.tui.widgets.tool_use import _infer_lexer_for
@@ -192,44 +193,7 @@ class ToolResultModal(ModalScreen[None]):
         )
 
 
-def _copy_to_system_clipboard(text: str) -> str | None:
-    """Try cross-platform clipboard binaries in order. Returns the name of
-    the tool that worked, or None if nothing's available. Each candidate
-    is fed text via stdin so multi-line / large inputs are handled.
-
-    Order chosen by likelihood on a developer machine:
-    wl-copy (Wayland), xclip (X11), xsel (X11), pbcopy (macOS),
-    clip.exe (WSL → Windows host).
-    """
-    import shutil
-    import subprocess
-
-    candidates: list[tuple[str, list[str]]] = [
-        ("wl-copy", ["wl-copy"]),
-        ("xclip", ["xclip", "-selection", "clipboard"]),
-        ("xsel", ["xsel", "--clipboard", "--input"]),
-        ("pbcopy", ["pbcopy"]),
-        ("clip.exe", ["clip.exe"]),
-    ]
-    for name, cmd in candidates:
-        if shutil.which(cmd[0]) is None:
-            continue
-        try:
-            subprocess.run(
-                cmd,
-                input=text.encode("utf-8"),
-                check=True,
-                timeout=2,
-                # Discard stdout/stderr — wl-copy on a Wayland-less box
-                # prints "Failed to connect to a Wayland server" before
-                # exiting non-zero, which would otherwise leak into the TUI.
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-            )
-            return name
-        except (subprocess.SubprocessError, OSError):
-            continue
-    return None
+_copy_to_system_clipboard = copy_to_system_clipboard  # backward compat for local callers
 
 
 def _prepend_line_numbers(text: Text) -> Text:
