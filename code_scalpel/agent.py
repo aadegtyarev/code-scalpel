@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import os
+import re
 from collections.abc import AsyncIterator, Callable
 from contextlib import suppress
 from dataclasses import dataclass
@@ -779,8 +780,6 @@ class StepAgent:
         the first heading is conversational lead-in and gets dropped.
         Silent no-op when the reply doesn't contain a recognised plan
         (e.g. model asked a clarifying question)."""
-        import re
-
         m = re.search(r"^##\s+T\d{3}:", reply, flags=re.MULTILINE)
         if m is None:
             return
@@ -848,8 +847,6 @@ class StepAgent:
         """
         if self._memory is None:
             return []
-        import re
-
         tokens = re.findall(r"\w+", task, flags=re.UNICODE)
         if not tokens:
             return []
