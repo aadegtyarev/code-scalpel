@@ -1,25 +1,19 @@
 """Tools the LLM can invoke during an agent turn.
 
-Format (model emits in its response):
+The default protocol is OpenAI-compatible native function calling —
+TOOL_SCHEMAS is sent with each chat() request and the model emits
+structured `tool_calls` in the response. The agent dispatches each
+call through `execute()`, feeds the result back as a tool-role
+message, and loops until the model produces a turn with no tool
+calls (then we look for SEARCH/REPLACE blocks).
 
-    <TOOL: read_file>
-    path/to/file.py
-    </TOOL>
+The legacy `<TOOL: name>` / `</TOOL>` text format is still parsed as
+a fallback for older / non-function-calling models — see
+`parse_tool_calls` and `_TOOL_RE`. Don't write new code against it.
 
-Result (we feed back as the next user message):
-
-    <RESULT: read_file>
-    path: path/to/file.py
-    ---
-    <file content here>
-    </RESULT>
-
-The agent loops on this until the model produces a turn with no tool calls
-(at which point we treat the message as final and look for SEARCH/REPLACE
-blocks).
-
-For v0.2 we ship one tool: `read_file`. `grep`, `list_files`, `run_tests`
-are next.
+Current tools: read_file, map_file, goto_definition, find_references,
+grep, run_tests. Schemas with normative descriptions live in
+TOOL_SCHEMAS below.
 """
 
 from __future__ import annotations
