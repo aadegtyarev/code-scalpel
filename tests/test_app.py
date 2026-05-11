@@ -239,27 +239,58 @@ async def test_escape_cancels_streaming_worker(sandbox: Path) -> None:
         assert worker.is_cancelled or worker.is_finished
 
 
-def test_format_step_status_no_tools_shows_warning() -> None:
-    from code_scalpel.tui.app import _format_step_status
+def test_format_turn_summary_no_tools_shows_warning() -> None:
+    from code_scalpel.tui.app import _format_turn_summary
 
-    assert _format_step_status(0, 0.0) == "● idle · [yellow]⚠ no tools used[/yellow]"
-    assert _format_step_status(0, 5.4) == "● idle · [yellow]⚠ no tools used[/yellow] · 5 tok/s"
+    out = _format_turn_summary(
+        tool_calls=0,
+        rate=5.4,
+        completion_tokens=234,
+        duration=1.4,
+        ctx_used=1024,
+        ctx_limit=16384,
+    )
+    assert "⚠ no tools used" in out
+    assert "↓ 234 tokens" in out
+    assert "5 tok/s" in out
+    assert "1.4s" in out
+    assert "ctx 1k/16k" in out
+    # Surrounding dim wrapper keeps the summary visually quiet.
+    assert out.startswith("[dim]⤷ ")
+    assert out.endswith("[/dim]")
 
 
-def test_format_step_status_pluralises_tool_noun() -> None:
-    from code_scalpel.tui.app import _format_step_status
+def test_format_turn_summary_pluralises_tool_noun() -> None:
+    from code_scalpel.tui.app import _format_turn_summary
 
-    # 1 → singular ("1 tool"); 2+ → plural ("2 tools")
-    assert _format_step_status(1, 0.0) == "● idle · 🔧 1 tool"
-    assert _format_step_status(2, 0.0) == "● idle · 🔧 2 tools"
-    assert _format_step_status(5, 8.7) == "● idle · 🔧 5 tools · 9 tok/s"
+    one = _format_turn_summary(
+        tool_calls=1, rate=0.0, completion_tokens=0, duration=0.0, ctx_used=0, ctx_limit=0
+    )
+    assert "🔧 1 tool" in one and "tools" not in one
+
+    many = _format_turn_summary(
+        tool_calls=3, rate=0.0, completion_tokens=0, duration=0.0, ctx_used=0, ctx_limit=0
+    )
+    assert "🔧 3 tools" in many
+
+
+def test_format_turn_summary_drops_zero_fields() -> None:
+    """Zero rate / zero tokens / no ctx limit shouldn't add empty noise."""
+    from code_scalpel.tui.app import _format_turn_summary
+
+    out = _format_turn_summary(
+        tool_calls=2, rate=0.0, completion_tokens=0, duration=0.0, ctx_used=0, ctx_limit=0
+    )
+    assert "tok/s" not in out
+    assert "tokens" not in out
+    assert "ctx " not in out
 
 
 @pytest.mark.asyncio
-async def test_footer_flags_when_model_used_no_tools(sandbox: Path) -> None:
-    """The reply was generated without any read_file/grep — show a warning
-    in the footer so the user can spot the kind of answer the screenshot
-    bug produced ('summary_line() exists, trust me')."""
+async def test_inline_turn_summary_flags_no_tools(sandbox: Path) -> None:
+    """The reply was generated without any read_file/grep — the inline
+    turn summary must flag it so the user spots the kind of ungrounded
+    answer the 2026-05-11 screenshot bug produced."""
     from code_scalpel.tui.widgets.footer import StatusFooter
     from code_scalpel.tui.widgets.input import UserMessage
 
@@ -270,11 +301,19 @@ async def test_footer_flags_when_model_used_no_tools(sandbox: Path) -> None:
         _attach_mock(app, mock)
 
         app.post_message(UserMessage("hi"))
-        # Let stream finish — short content, no delay.
         await pilot.pause(0.3)
 
-        status = app.query_one(StatusFooter).status
-        assert "no tools used" in status, f"footer didn't flag ungrounded reply: {status!r}"
+        # Footer is minimal — should NOT carry the warning anymore.
+        footer_status = app.query_one(StatusFooter).status
+        assert "no tools used" not in footer_status, (
+            f"footer should be minimal, not carry the warning: {footer_status!r}"
+        )
+        # The warning lives inline in the chat now.
+        output = app.query_one(OutputLog)
+        chat = "\n".join(str(c.render()) for c in output.children if c.id != "_spacer")
+        assert "no tools used" in chat, f"inline summary missing from chat:\n{chat}"
+        # And it includes a duration field.
+        assert "0.0s" in chat or "0.1s" in chat or "0.2s" in chat
 
 
 @pytest.mark.asyncio

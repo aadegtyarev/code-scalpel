@@ -54,17 +54,37 @@ _SLASH_COMMANDS: list[tuple[str, str]] = [
 ]
 
 
-def _format_step_status(tool_calls: int, rate: float) -> str:
-    """Footer line shown after a turn ends. Surfaces tool-call usage so
-    the user can spot an ungrounded reply (the common shape of a
-    confabulated answer) at a glance."""
+def _format_turn_summary(
+    *,
+    tool_calls: int,
+    rate: float,
+    completion_tokens: int,
+    duration: float,
+    ctx_used: int,
+    ctx_limit: int,
+) -> str:
+    """One-line summary printed inline after each turn — Claude-Code style.
+    Replaces the old footer overload; the footer only carries state now.
+
+    Tools / no-tools warning is surfaced so the user can spot ungrounded
+    replies. Tokens / rate / duration / ctx round out the cost picture
+    without dragging the user back to the bottom of the screen."""
+    parts: list[str] = []
     if tool_calls == 0:
-        tool_summary = "[yellow]⚠ no tools used[/yellow]"
+        parts.append("[yellow]⚠ no tools used[/yellow]")
     else:
         noun = "tool" if tool_calls == 1 else "tools"
-        tool_summary = f"🔧 {tool_calls} {noun}"
-    rate_str = f" · {rate:.0f} tok/s" if rate else ""
-    return f"● idle · {tool_summary}{rate_str}"
+        parts.append(f"🔧 {tool_calls} {noun}")
+    if completion_tokens:
+        parts.append(f"↓ {completion_tokens} tokens")
+    if rate:
+        parts.append(f"{rate:.0f} tok/s")
+    if duration > 0:
+        parts.append(f"{duration:.1f}s")
+    if ctx_limit:
+        pct = ctx_used / ctx_limit * 100
+        parts.append(f"ctx {ctx_used // 1000}k/{ctx_limit // 1000}k ({pct:.0f}%)")
+    return "[dim]⤷ " + " · ".join(parts) + "[/dim]"
 
 
 class ScalpelApp(App[None]):
@@ -346,6 +366,18 @@ class ScalpelApp(App[None]):
             )
             self._update_ctx()
 
+            # Inline turn summary — replaces the old crowded footer. Mounted
+            # for every completed turn, before any review/apply card.
+            summary = _format_turn_summary(
+                tool_calls=tool_calls,
+                rate=self._last_stream_rate,
+                completion_tokens=len(full) // 4,
+                duration=total_elapsed,
+                ctx_used=self.session.context_used_tokens,
+                ctx_limit=self.state.context_limit,
+            )
+            output.print_status(summary)
+
             edits = extract_edits(full)
             if edits:
                 await md.remove()
@@ -355,7 +387,7 @@ class ScalpelApp(App[None]):
                 self._pending_edits = edits
                 footer.status = "● reviewing"
             else:
-                footer.status = _format_step_status(tool_calls, self._last_stream_rate)
+                footer.status = "● idle"
         except asyncio.CancelledError:
             output.print_status("● Cancelled.")
             footer.status = "● idle"
@@ -450,20 +482,13 @@ class ScalpelApp(App[None]):
     # ── footer helpers ────────────────────────────────────────────────────────
 
     def _update_footer(self) -> None:
+        """Footer is minimal — hints + status + model. Per-turn metrics live
+        inline in the chat now (see _format_turn_summary)."""
         footer = self.query_one(StatusFooter)
-        limit = self.state.context_limit
         footer.hints = r"\[ctrl+t] cycle mode · \[ctrl+q] quit"
-        footer.ctx = f"0k/{limit // 1000}k"
 
     def _update_ctx(self) -> None:
-        # context_used_tokens drops back to ~0 after /compact; totals stay
-        # intact for the exit cost summary.
-        used = self.session.context_used_tokens
-        limit = self.state.context_limit
-        ctx = self.session.context_bar(
-            used,
-            limit,
-            self.config.agent.context_budget_warn,
-            self.config.agent.context_budget_critical,
-        )
-        self.query_one(StatusFooter).ctx = ctx
+        """No-op kept for callsite compatibility — context usage is shown in
+        the inline turn summary instead of the footer now. Callers like
+        /compact still invoke it; we no longer touch the footer."""
+        return
