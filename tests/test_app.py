@@ -11,7 +11,7 @@ import pytest
 
 from code_scalpel.agent import StepAgent
 from code_scalpel.config import AgentConfig, AppConfig, ModelProfile
-from code_scalpel.llm.adapter import ChatResponse, StreamChunk
+from code_scalpel.llm.adapter import ChatResponse, StreamChunk, StreamUsage
 from code_scalpel.tui.app import ScalpelApp
 from code_scalpel.tui.widgets.input import ModeInput
 from code_scalpel.tui.widgets.output import OutputLog
@@ -49,10 +49,21 @@ class _StreamingMock:
         **kwargs: Any,
     ) -> AsyncIterator[StreamChunk]:
         self.calls.append(messages)
+        total_chars = 0
         for chunk in self._chunks:
             if self._delay:
                 await asyncio.sleep(self._delay)
+            total_chars += len(chunk)
             yield StreamChunk(text=chunk)
+        # Mirror what a real provider does when stream_options.include_usage
+        # is set — close the stream with a usage chunk so the agent can yield
+        # a UsageReport instead of relying on char-count estimates.
+        yield StreamChunk(
+            usage=StreamUsage(
+                prompt_tokens=sum(len(str(m.get("content", ""))) for m in messages) // 4,
+                completion_tokens=max(1, total_chars // 4),
+            )
+        )
 
 
 def _attach_mock(app: ScalpelApp, mock: _StreamingMock) -> None:

@@ -234,6 +234,27 @@ async def test_stream_ask_yields_chunks(project: Path) -> None:
 
 
 @pytest.mark.asyncio
+async def test_stream_ask_emits_usage_report(project: Path) -> None:
+    """The agent must surface real provider usage so the TUI doesn't have to
+    guess from char counts (the bug where a tool-call-only turn reported
+    `↓0k` because no final text was emitted)."""
+    from code_scalpel.agent import UsageReport
+
+    llm = MockLLMAdapter(["hello world"])
+    agent = StepAgent(llm=llm, cwd=project, config=_CONFIG)
+
+    items = [c async for c in agent.stream_ask("hi")]
+    usage = [c for c in items if isinstance(c, UsageReport)]
+
+    # Exactly one UsageReport, always at end-of-turn. Numbers come straight
+    # from the mock-provided usage chunk, not from len(text) heuristics.
+    assert len(usage) == 1
+    assert usage[0].completion_tokens > 0
+    assert usage[0].prompt_tokens > 0
+    assert items[-1] is usage[0]
+
+
+@pytest.mark.asyncio
 async def test_stream_ask_builds_same_messages_as_ask(project: Path) -> None:
     """Both code paths should construct identical initial messages for the
     same task — history shouldn't sneak into one but not the other."""

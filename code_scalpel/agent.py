@@ -326,7 +326,27 @@ class ToolExecuted:
     result: ToolResult
 
 
-StreamItem = TextDelta | ToolExecuted
+@dataclass(frozen=True)
+class UsageReport:
+    """Real token usage from the provider, aggregated across every tool-call
+    round of a single `stream_ask` turn. Yielded once at end-of-stream so the
+    TUI can record exact numbers instead of estimating from char counts."""
+
+    prompt_tokens: int
+    completion_tokens: int
+
+
+@dataclass(frozen=True)
+class RetryNotice:
+    """Emitted when the enforce-read-before-show HOOK rolls a turn back and
+    asks the model to read `path` first. The TUI surfaces this as an inline
+    notice so the user understands why a second stream starts after the
+    first one looked complete."""
+
+    path: str
+
+
+StreamItem = TextDelta | ToolExecuted | UsageReport | RetryNotice
 
 
 def _hash_text(text: str) -> str:
@@ -482,10 +502,36 @@ class StepAgent:
         self._memory = store
 
     async def ask(self, task: str, *, mode: str = "ask") -> StepResult:
-        result = await self._chat_loop_with_hook(task, mode=mode)
-        if mode == "plan":
-            self._maybe_save_plan(result.reply)
-        return result
+        """Non-streaming entrypoint — collects `stream_ask` into a StepResult.
+
+        Both the streaming TUI and the non-streaming callers (probe, bench,
+        `code_with_retry`) now share one engine: HOOK, history bookkeeping,
+        tool-result compression and usage tracking live in `stream_ask` and
+        apply uniformly regardless of who's listening for chunks. The plan-
+        saving side-effect is handled inside `stream_ask`; we don't repeat
+        it here."""
+        reply_parts: list[str] = []
+        usage: UsageReport | None = None
+        async for item in self.stream_ask(task, mode=mode):
+            if isinstance(item, TextDelta):
+                reply_parts.append(item.text)
+            elif isinstance(item, RetryNotice):
+                # HOOK fired — discard the first attempt's text and keep
+                # only what the retry produces. This matches how the
+                # previous non-stream HOOK worked (it returned just the
+                # second pass).
+                reply_parts.clear()
+            elif isinstance(item, UsageReport):
+                usage = item
+        reply = "".join(reply_parts)
+        edits = extract_edits(reply)
+        response = ChatResponse(
+            content=reply,
+            prompt_tokens=usage.prompt_tokens if usage is not None else 0,
+            completion_tokens=usage.completion_tokens if usage is not None else 0,
+            cost=None,
+        )
+        return StepResult(reply=reply, edits=edits, response=response)
 
     async def code_with_retry(self, task: str, *, mode: str = "code") -> StepResult:
         """Iterative patch loop: ask the model, apply, run tests, retry on failure.
@@ -535,7 +581,7 @@ class StepAgent:
         # Initial attempt + up to max_retries retries.
         last_result: StepResult | None = None
         for i in range(max_retries + 1):
-            result = await self._chat_loop_with_hook(prompt, mode=mode)
+            result = await self.ask(prompt, mode=mode)
             last_result = result
             if not result.edits:
                 # Plain text — model decided no patch is needed (or asked a
@@ -720,41 +766,6 @@ class StepAgent:
         )
         return result.output, result.ok
 
-    async def _chat_loop_with_hook(self, task: str, *, mode: str = "ask") -> StepResult:
-        """Run `_chat_loop`, then apply the enforce-read-before-show HOOK
-        and the tool-result-compression hook.
-
-        If the model produced a SEARCH/REPLACE block (or fenced python
-        body for a project file the user named) without ever calling
-        `read_file` on that path — in this turn or any prior — we
-        re-prompt once asking it to read first. The second pass is
-        returned regardless of whether it satisfied the rule; the cap
-        keeps a confused model from looping indefinitely.
-
-        After the turn settles (whether via the first pass or the HOOK
-        retry), walk history and replace long, stale `tool` messages
-        with a one-line marker. The model's own assistant reply from
-        the turn that owned each tool call already distills what
-        mattered; preserving the raw bytes burns context budget on
-        every subsequent turn.
-        """
-        result = await self._chat_loop(task, mode=mode)
-        if self._config.agent.enforce_read_before_show:
-            reprompt = self._check_read_before_show(task, result.reply)
-            if reprompt is not None:
-                # One retry. We drop the unread reply from history first
-                # so the hallucinated patch doesn't look like a
-                # committed turn.
-                self._rollback_last_turn()
-                result = await self._chat_loop(reprompt, mode=mode)
-        # Compression last — must NEVER break the turn, so any failure
-        # in the marker construction is swallowed. We trade exact
-        # recall of an old tool output for a kilo-tokens of headroom.
-        if self._config.agent.compress_tool_results:
-            with suppress(Exception):
-                self._compress_old_tool_results()
-        return result
-
     def _compress_old_tool_results(self) -> int:
         """Walk `self._history` and replace stale tool-role messages
         with a compact marker. Returns the number of messages rewritten
@@ -806,69 +817,6 @@ class StepAgent:
             compressed += 1
         return compressed
 
-    async def _chat_loop(self, task: str, *, mode: str = "ask") -> StepResult:
-        user_msg = self._user_message(task)
-        messages = self._initial_messages(user_msg, mode=mode)
-        profile = self._config.current_profile
-
-        # Commit the bare task to history up-front so any tool messages
-        # we record below have their "owning" user-turn boundary in
-        # place. The full user_msg (task + project overview) goes to
-        # the LLM only — history keeps the bare task to avoid
-        # duplicating the overview on every subsequent turn.
-        turn_history: list[dict[str, Any]] = [{"role": "user", "content": task}]
-
-        response: ChatResponse | None = None
-        seen: set[tuple[str, str]] = set()
-        for _ in range(_MAX_TOOL_ROUNDS):
-            response = await self._llm.chat(
-                messages, tools=TOOL_SCHEMAS, **profile.inference_kwargs(mode)
-            )
-            asst_msg = self._assistant_message(response)
-            messages.append(asst_msg)
-
-            if not response.tool_calls:
-                edits = extract_edits(response.content)
-                turn_history.append({"role": "assistant", "content": response.content})
-                self._history.extend(turn_history)
-                return StepResult(reply=response.content, edits=edits, response=response)
-
-            # Record the intermediate assistant message (carries tool_calls
-            # — the matching `tool` messages below depend on it).
-            turn_history.append(asst_msg)
-
-            if self._is_loop(response.tool_calls, seen):
-                messages.append(_FORCE_ANSWER_MSG)
-                continue
-            for tc in response.tool_calls:
-                result = await self._execute_native(tc)
-                self._note_read_file(tc, result)
-                tool_msg = {
-                    "role": "tool",
-                    "tool_call_id": tc.id,
-                    "content": result.output,
-                    # Stash name/args so compress_tool_message can build
-                    # an informative marker without re-parsing the
-                    # matching assistant tool_calls entry. These extras
-                    # are ignored by the OpenAI-compat API.
-                    "_tool_name": tc.name,
-                    "_tool_args": tc.arguments,
-                }
-                messages.append(
-                    {
-                        "role": "tool",
-                        "tool_call_id": tc.id,
-                        "content": result.output,
-                    }
-                )
-                turn_history.append(tool_msg)
-
-        assert response is not None
-        edits = extract_edits(response.content)
-        turn_history.append({"role": "assistant", "content": response.content})
-        self._history.extend(turn_history)
-        return StepResult(reply=response.content, edits=edits, response=response)
-
     @staticmethod
     def _is_loop(tcs: tuple[NativeToolCall, ...], seen: set[tuple[str, str]]) -> bool:
         looped = False
@@ -878,20 +826,6 @@ class StepAgent:
                 looped = True
             seen.add(key)
         return looped
-
-    @staticmethod
-    def _assistant_message(response: ChatResponse) -> dict[str, Any]:
-        msg: dict[str, Any] = {"role": "assistant", "content": response.content or None}
-        if response.tool_calls:
-            msg["tool_calls"] = [
-                {
-                    "id": tc.id,
-                    "type": "function",
-                    "function": {"name": tc.name, "arguments": tc.arguments},
-                }
-                for tc in response.tool_calls
-            ]
-        return msg
 
     async def _execute_native(self, tc: NativeToolCall) -> ToolResult:
         call = ToolCall(name=tc.name, body=tc.arguments)
@@ -1024,18 +958,96 @@ class StepAgent:
         return summary
 
     async def stream_ask(self, task: str, *, mode: str = "ask") -> AsyncIterator[StreamItem]:
-        """Yield typed events: TextDelta for model output chunks, ToolExecuted
-        after each tool call resolves. Tool calls now use native OpenAI
-        function-calling — model emits structured tool_calls instead of the
-        old <TOOL: name> text format."""
+        """Canonical turn engine — used by both the streaming TUI and the
+        non-streaming `ask()` wrapper.
+
+        Yields typed events:
+          - `TextDelta` for model output chunks
+          - `ToolExecuted` after each tool call resolves
+          - `RetryNotice` when the enforce-read-before-show HOOK rolls the
+            turn back and a second stream is about to begin
+          - `UsageReport` once at end-of-turn with aggregated provider usage
+
+        HOOK + tool-result compression now live here too, so every entry
+        point (TUI, probe, bench, `code_with_retry`) benefits from them —
+        previously the HOOK only ran in the non-streaming `ask()` path,
+        which left the TUI silently un-protected from the same hallucinate-
+        before-reading failure mode the HOOK was added to catch.
+        """
+        prompt_total = 0
+        completion_total = 0
+
+        attempt_task = task
+        final_assistant = ""
+        for attempt in range(2):
+            # Run one tool loop. The helper yields chunks back to us as it
+            # streams; we re-yield them to our own consumer and read the
+            # aggregates back through `collected` once it's done.
+            collected: dict[str, Any] = {}
+            async for item in self._run_tool_loop(attempt_task, mode, collected):
+                yield item
+            final_assistant = collected.get("final_assistant", "")
+            prompt_total = collected.get("prompt_total", 0) or prompt_total
+            completion_total += collected.get("completion_total", 0)
+
+            # HOOK — only fires once, second iteration is the retry and
+            # whatever it produces is final.
+            if attempt == 0 and self._config.agent.enforce_read_before_show:
+                reprompt = self._check_read_before_show(task, final_assistant)
+                if reprompt is not None:
+                    # Drop the unread reply from history so the
+                    # hallucinated patch doesn't look like a committed
+                    # turn, and tell the consumer we're retrying.
+                    self._rollback_last_turn()
+                    yield RetryNotice(path=self._extract_retry_path(reprompt))
+                    attempt_task = reprompt
+                    continue
+            break
+
+        # Compression last — must NEVER break the turn, so any failure in
+        # the marker construction is swallowed. We trade exact recall of
+        # an old tool output for a kilo-tokens of headroom.
+        if self._config.agent.compress_tool_results:
+            with suppress(Exception):
+                self._compress_old_tool_results()
+
+        if mode == "plan":
+            self._maybe_save_plan(final_assistant)
+
+        # Emit aggregate usage last so the TUI can record real numbers
+        # alongside the turn summary it draws right after the stream ends.
+        yield UsageReport(
+            prompt_tokens=prompt_total,
+            completion_tokens=completion_total,
+        )
+
+    async def _run_tool_loop(
+        self,
+        task: str,
+        mode: str,
+        out: dict[str, Any],
+    ) -> AsyncIterator[StreamItem]:
+        """One full tool-calling loop against the LLM stream.
+
+        Yields TextDelta / ToolExecuted up to the consumer; mutates `out`
+        with the aggregate numbers the caller needs after the stream ends
+        (`final_assistant`, `prompt_total`, `completion_total`). Splitting
+        this out lets `stream_ask` retry the loop once when the HOOK fires
+        without duplicating the round-management code.
+        """
         user_msg = self._user_message(task)
         messages = self._initial_messages(user_msg, mode=mode)
         profile = self._config.current_profile
-        final_assistant = ""
 
-        # Same shape as `_chat_loop`: user task first, intermediate
-        # assistant+tool round-trips, then the final assistant reply.
+        # Commit the bare task to history up-front so any tool messages
+        # we record below have their owning user-turn boundary in place.
+        # The full user_msg (task + recalled notes) goes to the LLM only —
+        # history keeps the bare task so subsequent turns aren't padded.
         turn_history: list[dict[str, Any]] = [{"role": "user", "content": task}]
+
+        final_assistant = ""
+        prompt_total = 0
+        completion_total = 0
 
         seen: set[tuple[str, str]] = set()
         for _ in range(_MAX_TOOL_ROUNDS):
@@ -1049,6 +1061,12 @@ class StepAgent:
                     yield TextDelta(chunk.text)
                 if chunk.tool_call is not None:
                     round_tool_calls.append(chunk.tool_call)
+                if chunk.usage is not None:
+                    # Each round's usage chunk reports the FULL prompt the
+                    # model saw on that call; keep the latest as the prompt
+                    # total and sum completion across rounds.
+                    prompt_total = chunk.usage.prompt_tokens
+                    completion_total += chunk.usage.completion_tokens
 
             asst_msg: dict[str, Any] = {"role": "assistant", "content": full or None}
             if round_tool_calls:
@@ -1066,9 +1084,6 @@ class StepAgent:
                 final_assistant = full
                 break
 
-            # Intermediate assistant message goes into the cross-turn
-            # transcript — its tool_calls own the tool messages we
-            # append next.
             turn_history.append(asst_msg)
 
             if self._is_loop(tuple(round_tool_calls), seen):
@@ -1101,8 +1116,21 @@ class StepAgent:
 
         turn_history.append({"role": "assistant", "content": final_assistant})
         self._history.extend(turn_history)
-        if mode == "plan":
-            self._maybe_save_plan(final_assistant)
+
+        out["final_assistant"] = final_assistant
+        out["prompt_total"] = prompt_total
+        out["completion_total"] = completion_total
+
+    @staticmethod
+    def _extract_retry_path(reprompt: str) -> str:
+        """Pull the path out of the HOOK reprompt for the UI label.
+
+        The reprompt template is `_READ_BEFORE_SHOW_PROMPT.format(path=...)`.
+        We extract the path so the UI can show *which* file the model needs
+        to read. Falls back to "(file)" when the template changes — the
+        notice still renders, just with less specificity."""
+        m = re.search(r"`([^`]+)`", reprompt)
+        return m.group(1) if m else "(file)"
 
     def _maybe_save_plan(self, reply: str) -> None:
         """Persist the planner's TASKS.md output to .code-scalpel/TASKS.md.

@@ -37,39 +37,59 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
         "function": {
             "name": "read_file",
             "description": (
-                "Read a project file in full. Returns the file content with "
-                "line numbers. You MUST call this in any of these cases:\n"
-                "(1) Before producing a SEARCH/REPLACE block for that file — "
-                "your SEARCH text has to match the file character-for-"
-                "character including the body, and the MAP doesn't show "
-                "bodies. Using a MAP signature as SEARCH text will fail.\n"
-                "(2) The user asks you to SHOW, QUOTE, or DISPLAY a function/"
-                "method body, or a file's content.\n"
-                "(3) You're about to claim a fact about what a method does, "
-                "what its arguments look like, or what fields a class has — "
-                "anything beyond the top-level signature listed in the MAP.\n"
-                "(4) You're about to describe an algorithm 'step by step', "
-                "number the steps a function takes, or explain 'how it "
-                "works' internally. Signatures + docstrings let you LOCATE "
-                "the function; they do not let you correctly enumerate the "
-                "branches, loops, or local variables inside it. Inventing "
-                "steps that aren't in the source is a common bug — read the "
-                "file first.\n"
-                "The MAP contains signatures only — no function bodies, no "
-                "field defaults, no decorators. Recognising a familiar "
-                "pattern (dataclass, BaseModel) is NOT a substitute for "
-                "this tool."
+                "Read the body of a file with 1-based line numbers. "
+                "Three modes — pick by which args you pass:\n"
+                "• whole file: just `path` (caps at 400 lines, then "
+                "`… N more lines` footer).\n"
+                "• window: `path` + `start_line` and/or `end_line` "
+                "(1-based, inclusive). Use after a project_map hit or "
+                "a failing-test line number — drops you straight onto "
+                "the region.\n"
+                "• find: `path` + `find=<substring>` returns every "
+                "match plus `context` lines around it (default 20), "
+                "merged into non-overlapping windows. Use when you "
+                "want to read around a name without knowing its line."
+                "\nHeavy — use only when you need the actual code. For "
+                "'what's in this file', use `project_map(path=...)`."
             ),
             "parameters": {
                 "type": "object",
                 "properties": {
                     "path": {
                         "type": "string",
+                        "description": "Relative path from the project root.",
+                    },
+                    "start_line": {
+                        "type": "integer",
                         "description": (
-                            "Relative path from the project root, exactly as "
-                            "it appears in the MAP. No leading 'path/' prefix."
+                            "Optional. 1-based start of the window. "
+                            "If omitted but end_line is set, defaults "
+                            "to 1."
                         ),
-                    }
+                    },
+                    "end_line": {
+                        "type": "integer",
+                        "description": (
+                            "Optional. 1-based end of the window "
+                            "(inclusive). If omitted, extends to "
+                            "start_line + 400 or end of file."
+                        ),
+                    },
+                    "find": {
+                        "type": "string",
+                        "description": (
+                            "Optional substring search. Returns every "
+                            "hit plus `context` lines around it. "
+                            "Mutually exclusive with the window args."
+                        ),
+                    },
+                    "context": {
+                        "type": "integer",
+                        "description": (
+                            "Optional lines-of-context for `find` mode "
+                            "(default 20). Ignored without `find`."
+                        ),
+                    },
                 },
                 "required": ["path"],
             },
@@ -80,8 +100,14 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
         "function": {
             "name": "project_map",
             "description": (
-                "Look at the project — files, classes, functions, "
-                "methods. Pass a file `path` to drill into it."
+                "See what's in the project — files, classes, "
+                "functions, methods. No bodies. Without `path` — a "
+                "list of files with line counts. With `path` set to "
+                "a file — that file's classes/functions/methods with "
+                "their signatures and imports (no implementation). "
+                "Prefer this over `read_file` for 'what's there' "
+                "questions; reach for read_file only when you need "
+                "the actual code body."
             ),
             "parameters": {
                 "type": "object",
@@ -367,11 +393,39 @@ def _tool_read_file(call: ToolCall, cwd: Path, *, max_lines: int) -> ToolResult:
         return ToolResult(
             call, output=f"error: path must be inside the project: {path_str}", ok=False
         )
+    # Optional slicing args — keep raw read_file as the fallback for
+    # whole-file reads while letting the model land on a specific region
+    # of a long file without burning context on the rest.
+    start_line = _coerce_int(args.get("start_line"))
+    end_line = _coerce_int(args.get("end_line"))
+    find_str = args.get("find")
+    find_arg = str(find_str).strip() if isinstance(find_str, str) and find_str.strip() else None
+    context_lines = _coerce_int(args.get("context"))
     try:
-        content = read_file(path, max_lines=max_lines)
+        content = read_file(
+            path,
+            max_lines=max_lines,
+            start_line=start_line,
+            end_line=end_line,
+            find=find_arg,
+            context=context_lines if context_lines is not None else 20,
+        )
     except OSError as e:
         return ToolResult(call, output=f"error: {e}", ok=False)
     return ToolResult(call, output=f"path: {path_str}\n---\n{content}", ok=True)
+
+
+def _coerce_int(value: Any) -> int | None:
+    """Some clients pass numeric args as strings — accept both."""
+    if value is None:
+        return None
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int):
+        return value
+    if isinstance(value, str) and value.strip().lstrip("-").isdigit():
+        return int(value)
+    return None
 
 
 def _tool_goto_definition(call: ToolCall, cwd: Path) -> ToolResult:

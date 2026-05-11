@@ -27,7 +27,10 @@ async def test_mock_stream_yields_chars() -> None:
     mock = MockLLMAdapter(["abc"])
     chunks = []
     async for chunk in mock.stream([{"role": "user", "content": "hi"}]):
-        chunks.append(chunk.text)
+        # The final usage chunk has empty text; skip so we're just
+        # inspecting the model's character-level stream.
+        if chunk.text:
+            chunks.append(chunk.text)
     assert chunks == ["a", "b", "c"]
 
 

@@ -27,12 +27,23 @@ class ChatResponse:
 
 
 @dataclass(frozen=True)
+class StreamUsage:
+    """Final usage payload from a streaming chat. Emitted once when the
+    provider includes a usage chunk (requested via `include_usage`)."""
+
+    prompt_tokens: int
+    completion_tokens: int
+
+
+@dataclass(frozen=True)
 class StreamChunk:
-    """One event from a streaming chat. Either text delta or a fully-formed
-    tool call (yielded once at end of stream when accumulation completes)."""
+    """One event from a streaming chat: either a text delta, a fully-formed
+    tool call (yielded once when accumulation completes), or a usage payload
+    (yielded once at the end of the stream)."""
 
     text: str = ""
     tool_call: NativeToolCall | None = None
+    usage: StreamUsage | None = None
 
 
 @runtime_checkable
@@ -131,6 +142,9 @@ class OpenAICompatibleAdapter:
         params: dict[str, Any] = dict(kwargs)
         if tools:
             params["tools"] = tools
+        # Ask for a final usage chunk so the caller can stop estimating tokens
+        # from char counts. LM Studio honours stream_options; OpenAI does too.
+        params.setdefault("stream_options", {"include_usage": True})
         response = cast(
             AsyncStream[ChatCompletionChunk],
             await self._client.chat.completions.create(
@@ -143,7 +157,16 @@ class OpenAICompatibleAdapter:
         # Accumulate per-index tool calls across chunks (id and name come once,
         # arguments come incrementally).
         buf: dict[int, dict[str, str]] = {}
+        usage_chunk: StreamUsage | None = None
         async for chunk in response:
+            # The usage chunk arrives with empty choices; pick it up before
+            # the early-continue below.
+            chunk_usage = getattr(chunk, "usage", None)
+            if chunk_usage is not None:
+                usage_chunk = StreamUsage(
+                    prompt_tokens=int(getattr(chunk_usage, "prompt_tokens", 0) or 0),
+                    completion_tokens=int(getattr(chunk_usage, "completion_tokens", 0) or 0),
+                )
             if not chunk.choices:
                 continue
             delta = chunk.choices[0].delta
@@ -170,6 +193,8 @@ class OpenAICompatibleAdapter:
                         arguments=slot["args"] or "{}",
                     )
                 )
+        if usage_chunk is not None:
+            yield StreamChunk(usage=usage_chunk)
 
     def _calc_cost(self, usage: Any) -> float | None:
         if usage is None:

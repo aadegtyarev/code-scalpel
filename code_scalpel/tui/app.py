@@ -12,7 +12,14 @@ from textual.widget import Widget
 from textual.widgets import Rule
 from textual_autocomplete import AutoComplete, DropdownItem
 
-from code_scalpel.agent import PatchAttempt, StepAgent, TextDelta, ToolExecuted
+from code_scalpel.agent import (
+    PatchAttempt,
+    RetryNotice,
+    StepAgent,
+    TextDelta,
+    ToolExecuted,
+    UsageReport,
+)
 from code_scalpel.config import AppConfig, autodetect_context_tokens, resolve_model_name
 from code_scalpel.diagrams import extract_mermaid_blocks
 from code_scalpel.jobs import JobRegistry
@@ -122,6 +129,10 @@ class ScalpelApp(App[None]):
         self._mode_index = 0
         self._pending_edits: list[Edit] | None = None
         self._last_stream_rate: float = 0.0
+        # Real token usage stashed by `_run_first_attempt_streamed` so the
+        # /loop path can hand it to `_record_loop_usage` without threading
+        # it through every branch of the patch-loop control flow.
+        self._last_stream_usage: UsageReport | None = None
         self._runner = AsyncShellRunner()
         self._agent: StepAgent | None = None
         # Latest tool round-trip from the agent — Ctrl+O opens it in a modal.
@@ -828,6 +839,7 @@ class ScalpelApp(App[None]):
             full = ""
             chunks = 0
             tool_calls = 0
+            usage: UsageReport | None = None
             start = time.monotonic()
             last_tick = start
             async for item in self._agent.stream_ask(task, mode=mode):
@@ -839,10 +851,10 @@ class ScalpelApp(App[None]):
                     now = time.monotonic()
                     if now - last_tick > 0.25:
                         elapsed = now - start
-                        # Tokens here is an approximation — we have chunk
-                        # count, not tokenizer output. ~4 chars/token is the
-                        # same rough ratio used in session accounting, so the
-                        # number the user sees matches the final summary.
+                        # Live tick — we don't have the final usage payload
+                        # yet, so the meter still leans on the char-count
+                        # heuristic. The end-of-turn summary uses the real
+                        # numbers from UsageReport.
                         approx_tokens = len(full) // 4
                         rate = chunks / elapsed if elapsed > 0 else 0.0
                         progress.update_progress(
@@ -865,6 +877,21 @@ class ScalpelApp(App[None]):
                     full = ""
                     placeholder = output.start_streaming()
                     await self._wait_mounted(placeholder)
+                elif isinstance(item, UsageReport):
+                    usage = item
+                elif isinstance(item, RetryNotice):
+                    # HOOK fired. The first attempt's text was discarded
+                    # from history; we also reset the visible buffer so
+                    # the upcoming retry stream replaces it cleanly,
+                    # instead of stacking under a now-stale answer.
+                    await output.finalize_streaming(placeholder, "")
+                    output.print_status(
+                        f"↻ Re-reading {item.path} before patching",
+                        markup=False,
+                    )
+                    full = ""
+                    placeholder = output.start_streaming()
+                    await self._wait_mounted(placeholder)
             # Final render: swap the streaming Static for a Markdown widget so
             # code fences and lists render properly.
             md = await output.finalize_streaming(placeholder, full)
@@ -877,12 +904,22 @@ class ScalpelApp(App[None]):
             # numbers. Two widgets at once would just be noise.
             await self._remove_progress(progress)
 
-            # Track session usage (approximate — streaming has no usage payload).
+            # Real usage comes from the provider's final stream chunk
+            # (`include_usage`). Fall back to the char-count heuristic only if
+            # the provider didn't emit one — older LM Studio builds, etc. The
+            # heuristic was lying about completion=0 whenever a turn ended on
+            # a tool-call round with no follow-up text.
+            if usage is not None:
+                prompt_tokens = usage.prompt_tokens
+                completion_tokens = usage.completion_tokens
+            else:
+                prompt_tokens = len(task) // 4 + 1000
+                completion_tokens = len(full) // 4
             self.session.record(
                 ChatResponse(
                     content=full,
-                    prompt_tokens=len(task) // 4 + 1000,
-                    completion_tokens=len(full) // 4,
+                    prompt_tokens=prompt_tokens,
+                    completion_tokens=completion_tokens,
                     cost=None,
                 )
             )
@@ -893,7 +930,7 @@ class ScalpelApp(App[None]):
             summary = _format_turn_summary(
                 tool_calls=tool_calls,
                 rate=self._last_stream_rate,
-                completion_tokens=len(full) // 4,
+                completion_tokens=completion_tokens,
                 duration=total_elapsed,
             )
             output.print_turn_summary(summary)
@@ -1114,6 +1151,23 @@ class ScalpelApp(App[None]):
                 full = ""
                 placeholder = output.start_streaming()
                 await self._wait_mounted(placeholder)
+            elif isinstance(item, UsageReport):
+                # The /loop path reads back the real usage through
+                # `_last_stream_usage`; stashing it on the app avoids
+                # threading an extra return value through every loop branch.
+                self._last_stream_usage = item
+            elif isinstance(item, RetryNotice):
+                # HOOK fired mid-loop. Drop the unread first attempt from
+                # the visible placeholder and surface the retry so the
+                # user understands the second stream isn't a duplicate.
+                await output.finalize_streaming(placeholder, "")
+                output.print_status(
+                    f"↻ Re-reading {item.path} before patching",
+                    markup=False,
+                )
+                full = ""
+                placeholder = output.start_streaming()
+                await self._wait_mounted(placeholder)
 
         # The live stream is done; we'll render the result as cards from
         # here on. Clean up the placeholder/progress so they don't sit
@@ -1242,15 +1296,27 @@ class ScalpelApp(App[None]):
         return "\n".join(parts)
 
     def _record_loop_usage(self, task: str, reply: str, duration: float, attempts: int) -> None:
-        """Mirror the streaming-path session bookkeeping: token usage is
-        approximate (no streaming usage payload) and the inline summary
-        carries duration + ctx so the user can gauge cost without the
-        footer."""
+        """Session bookkeeping for the /loop path.
+
+        Prefers the real usage payload stashed by `_run_first_attempt_streamed`
+        (`stream_ask` aggregates provider numbers across rounds). Falls back to
+        the char-count heuristic only when the streaming path didn't run or
+        the provider didn't include a usage chunk."""
+        usage = self._last_stream_usage
+        # One-shot — clear so the next /loop call doesn't reuse stale numbers
+        # if its stream fails before the UsageReport arrives.
+        self._last_stream_usage = None
+        if usage is not None:
+            prompt_tokens = usage.prompt_tokens
+            completion_tokens = usage.completion_tokens
+        else:
+            prompt_tokens = len(task) // 4 + 1000
+            completion_tokens = len(reply) // 4
         self.session.record(
             ChatResponse(
                 content=reply,
-                prompt_tokens=len(task) // 4 + 1000,
-                completion_tokens=len(reply) // 4,
+                prompt_tokens=prompt_tokens,
+                completion_tokens=completion_tokens,
                 cost=None,
             )
         )
@@ -1258,7 +1324,7 @@ class ScalpelApp(App[None]):
         summary = _format_turn_summary(
             tool_calls=attempts,
             rate=0.0,
-            completion_tokens=len(reply) // 4,
+            completion_tokens=completion_tokens,
             duration=duration,
         )
         self.query_one(OutputLog).print_turn_summary(summary)

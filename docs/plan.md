@@ -2210,6 +2210,33 @@ dual-model setup — ОТЛОЖЕНО ДО ПОСЛЕ v0.4 (см. ниже).
   показом кода" теперь держится enforce-read-before-show HOOK,
   поэтому объяснение в промте свернулось до одной строки. Все 9
   prompt-anchor тестов в `tests/test_agent.py` зелёные.
+✓ ask / stream_ask унификация (2026-05-12): убрали два независимых
+  tool-loop'а (probe гонял `ask()` с HOOK, TUI стримил через
+  `stream_ask()` без HOOK — расходились поведением). Теперь
+  `stream_ask` — canonical engine: HOOK enforce-read-before-show,
+  tool-result compression, plan-save и aggregate usage tracking
+  живут там. `ask()` — тонкая обёртка которая собирает stream в
+  StepResult. Новый StreamItem `RetryNotice(path)` — когда HOOK
+  откатывает турн, TUI рисует inline `↻ Re-reading <path>` чтобы
+  юзер видел почему начинается второй стрим. `_chat_loop` и
+  `_chat_loop_with_hook` удалены, 699 unit-тестов зелёные.
+  Глава 17 статьи.
+✓ read_file chunks (2026-05-12): функция теперь даёт три режима в
+  одной точке вызова — whole / window (`start_line`+`end_line`) /
+  find (substring + context lines, merged spans). TOOL_SCHEMAS
+  обновлён с описанием всех трёх режимов; `_tool_read_file`
+  пробрасывает аргументы. Output всегда с 1-based line numbers
+  чтобы цитата `path:N` и SEARCH-блок сходились со строками.
+  Глава 18 статьи.
+✓ token counting через `stream_options.include_usage` (2026-05-12):
+  адаптер запрашивает usage chunk у провайдера, агент копит
+  prompt/completion через все tool-round'ы и yield'ит
+  `UsageReport(prompt, completion)` в конце стрима. TUI пишет
+  реальные числа в `Session.record` вместо `len(full)//4` —
+  предыдущая heuristic возвращала `↓0k` когда модель завершала
+  турн на tool-call без финального текста. Fallback на heuristic
+  остался для провайдеров без include_usage, но в норме не
+  активен. Глава 19 статьи.
 self-clarify loop (HOOK, экспериментально): когда модель в ходе задачи
   задаёт уточняющий вопрос пользователю — попробовать перехватить и
   скормить тот же вопрос ей же с другим контекстом. Два варианта:
@@ -2233,6 +2260,19 @@ PostgreSQL / Kubernetes component skills
 LLM-based context compression (для strong профилей)
 configurable policies
 i18n: ru/en, автодетект по системной локали
+shell_exec tool (deferred 2026-05-12): дать модели доступ к shell для
+  массовых правок (sed/awk/find/grep/git mv) когда SEARCH/REPLACE для
+  каждого файла — пустая трата. Сейчас единственный shell-инструмент
+  это `run_tests`; всё остальное идёт через edit-block + diff dialog.
+  Дилемма: shell мощно, но байпасит ревью diff'а — слабая модель
+  легко дёрнет `sed -i` мимо подтверждения юзера. Решение откладываем
+  до v0.4 потому что нужен sandbox-уровень: whitelist команд
+  (sed/awk/grep/find/git mv/git rm + read-only ls/cat), запрет на
+  `rm -rf`, dry-run preview (модель показывает что выполнит,
+  пользователь подтверждает — как сейчас apply-card), таймаут.
+  Триггер записи: юзер увидел как я через Bash чистил русские строки
+  в TUI и спросил «а наша моделька умеет в sed?» — да, удобно,
+  но не раньше чем у нас есть продуманная гарантия безопасности.
 ```
 
 ---

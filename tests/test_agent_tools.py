@@ -103,6 +103,52 @@ async def test_read_file_missing_path_arg(tmp_path: Path) -> None:
     assert "missing" in result.output
 
 
+@pytest.mark.asyncio
+async def test_read_file_window_args_forwarded(tmp_path: Path) -> None:
+    """The dispatch wrapper threads start_line/end_line down to read_file."""
+    (tmp_path / "big.py").write_text("\n".join(f"row {i}" for i in range(50)))
+    call = ToolCall(
+        name="read_file",
+        body='{"path": "big.py", "start_line": 10, "end_line": 12}',
+    )
+    result = await execute(call, tmp_path)
+    assert result.ok
+    assert "row 9" in result.output  # 1-based line 10
+    assert "row 11" in result.output
+    assert "row 0" not in result.output
+    assert "row 20" not in result.output
+
+
+@pytest.mark.asyncio
+async def test_read_file_find_arg_forwarded(tmp_path: Path) -> None:
+    """find=<substr> + context lands the model on each hit."""
+    lines = [f"row {i}" for i in range(50)]
+    lines[20] = "def target():"
+    (tmp_path / "src.py").write_text("\n".join(lines))
+    call = ToolCall(
+        name="read_file",
+        body='{"path": "src.py", "find": "target", "context": 1}',
+    )
+    result = await execute(call, tmp_path)
+    assert result.ok
+    assert "def target()" in result.output
+    assert "1 occurrence(s)" in result.output
+
+
+@pytest.mark.asyncio
+async def test_read_file_accepts_string_ints(tmp_path: Path) -> None:
+    """Some clients stringify numeric args — must still work."""
+    (tmp_path / "f.py").write_text("\n".join(f"L{i}" for i in range(30)))
+    call = ToolCall(
+        name="read_file",
+        body='{"path": "f.py", "start_line": "5", "end_line": "7"}',
+    )
+    result = await execute(call, tmp_path)
+    assert result.ok
+    assert "L4" in result.output
+    assert "L6" in result.output
+
+
 # ── execution: map_file ──────────────────────────────────────────────────────
 
 

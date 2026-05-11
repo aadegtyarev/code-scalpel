@@ -3,7 +3,7 @@ from __future__ import annotations
 from collections.abc import AsyncIterator
 from typing import Any
 
-from code_scalpel.llm.adapter import ChatResponse, NativeToolCall, StreamChunk
+from code_scalpel.llm.adapter import ChatResponse, NativeToolCall, StreamChunk, StreamUsage
 from code_scalpel.tools.shell import ShellResult
 
 # A response slot can be either a plain text string or a structured pair of
@@ -59,6 +59,15 @@ class MockLLMAdapter:
             yield StreamChunk(text=char)
         for tc in tcs:
             yield StreamChunk(tool_call=tc)
+        # Mirror real providers: when stream_options.include_usage is set, the
+        # final chunk carries usage. Tests for `stream_ask` rely on this to
+        # see a non-zero UsageReport instead of falling back to len()//4.
+        yield StreamChunk(
+            usage=StreamUsage(
+                prompt_tokens=len(str(messages)),
+                completion_tokens=max(1, len(content)),
+            )
+        )
 
     def set_model(self, model: str) -> None:
         self.model = model
