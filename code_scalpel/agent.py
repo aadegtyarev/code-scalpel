@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import os
 import re
 from collections.abc import AsyncIterator, Callable
@@ -48,6 +49,28 @@ _FORCE_ANSWER_MSG: dict[str, Any] = {
         "tools and answer the original question now, using what you have."
     ),
 }
+
+# Re-prompt when the model emitted a code block targeting a file it never
+# read. Weak local models fabricate bodies from training-data shape and
+# we'd silently let through patches/snippets that don't match the actual
+# source. The HOOK rejects the reply once, asks the model to ground via
+# read_file, then accepts whatever it produces on the second pass.
+_READ_BEFORE_SHOW_PROMPT = (
+    "You produced a code block targeting `{path}` without first reading "
+    "the file. Your patch / shown code may not match the actual source. "
+    "Call `read_file({path})` now, then re-emit the corrected output. "
+    "Do NOT reproduce the original block from memory."
+)
+
+# A fenced python block in a reply that has NO surrounding SEARCH/REPLACE
+# markers. The HOOK only fires on such blocks when the user's task names a
+# specific project file — otherwise the block is conversational example
+# code (e.g. answering "how would I write a list comprehension?") and we
+# don't have a target to enforce against.
+_BARE_PY_FENCE_RE = re.compile(
+    r"^[ \t]*```python\n(?P<body>.*?)\n[ \t]*```",
+    re.DOTALL | re.MULTILINE,
+)
 
 _SYSTEM_PROMPT = """\
 You are code-scalpel, a local coding assistant powered by an open-source model.
@@ -359,6 +382,13 @@ class StepAgent:
         # entirely so tests / lightweight callers don't take the cost.
         self._memory = memory
         self._history: list[dict[str, str]] = []
+        # Cross-turn record of every relative path the model has called
+        # `read_file` on. Used by the enforce-read-before-show HOOK so a
+        # turn-2 patch on file X is grounded if X was read in turn-1.
+        # Cleared by `clear_history` and replaced when `compact` collapses
+        # history — both points where we lose the conversational context
+        # that made past reads load-bearing.
+        self._read_files_history: set[str] = set()
 
     @property
     def history(self) -> list[dict[str, str]]:
@@ -366,9 +396,10 @@ class StepAgent:
 
     def clear_history(self) -> None:
         self._history.clear()
+        self._read_files_history.clear()
 
     async def ask(self, task: str, *, mode: str = "ask") -> StepResult:
-        result = await self._chat_loop(task, mode=mode)
+        result = await self._chat_loop_with_hook(task, mode=mode)
         if mode == "plan":
             self._maybe_save_plan(result.reply)
         return result
@@ -421,7 +452,7 @@ class StepAgent:
         # Initial attempt + up to max_retries retries.
         last_result: StepResult | None = None
         for i in range(max_retries + 1):
-            result = await self._chat_loop(prompt, mode=mode)
+            result = await self._chat_loop_with_hook(prompt, mode=mode)
             last_result = result
             if not result.edits:
                 # Plain text — model decided no patch is needed (or asked a
@@ -606,6 +637,28 @@ class StepAgent:
         )
         return result.output, result.ok
 
+    async def _chat_loop_with_hook(self, task: str, *, mode: str = "ask") -> StepResult:
+        """Run `_chat_loop`, then apply the enforce-read-before-show HOOK.
+
+        If the model produced a SEARCH/REPLACE block (or fenced python
+        body for a project file the user named) without ever calling
+        `read_file` on that path — in this turn or any prior — we
+        re-prompt once asking it to read first. The second pass is
+        returned regardless of whether it satisfied the rule; the cap
+        keeps a confused model from looping indefinitely.
+        """
+        result = await self._chat_loop(task, mode=mode)
+        if not self._config.agent.enforce_read_before_show:
+            return result
+        reprompt = self._check_read_before_show(task, result.reply)
+        if reprompt is None:
+            return result
+        # One retry. We drop the unread reply from history first — the
+        # _chat_loop just appended it via _remember, and we don't want
+        # the model's hallucinated patch to look like a committed turn.
+        self._rollback_last_turn()
+        return await self._chat_loop(reprompt, mode=mode)
+
     async def _chat_loop(self, task: str, *, mode: str = "ask") -> StepResult:
         user_msg = self._user_message(task)
         messages = self._initial_messages(user_msg, mode=mode)
@@ -632,6 +685,7 @@ class StepAgent:
                 continue
             for tc in response.tool_calls:
                 result = await self._execute_native(tc)
+                self._note_read_file(tc, result)
                 messages.append(
                     {
                         "role": "tool",
@@ -682,6 +736,85 @@ class StepAgent:
         self._history.append({"role": "user", "content": user_msg})
         self._history.append({"role": "assistant", "content": assistant_msg})
 
+    def _rollback_last_turn(self) -> None:
+        """Drop the most recent user+assistant pair from history. Used by
+        the enforce-read-before-show HOOK so the unread reply we're about
+        to retry doesn't end up in the official conversation trail."""
+        if len(self._history) >= 2:
+            self._history.pop()
+            self._history.pop()
+
+    def _note_read_file(self, tc: NativeToolCall, result: ToolResult) -> None:
+        """Record a successful `read_file(path)` call so the HOOK knows the
+        model has grounded against that file. We log only ok=True calls —
+        an errored read_file (path missing, permission denied) didn't put
+        any content in context, so a subsequent patch is still fabricating.
+        """
+        if tc.name != "read_file" or not result.ok:
+            return
+        try:
+            args = json.loads(tc.arguments) if tc.arguments else {}
+        except json.JSONDecodeError:
+            return
+        path = args.get("path") if isinstance(args, dict) else None
+        if isinstance(path, str) and path:
+            self._read_files_history.add(path)
+
+    def _check_read_before_show(self, task: str, reply: str) -> str | None:
+        """Return a re-prompt string if the reply emits a code block for a
+        file the model never read, else None.
+
+        Logic:
+          - SEARCH/REPLACE blocks: target file comes from the existing
+            edit-block parser. If ANY target is unread, fire — we'd
+            rather over-trigger and force one extra read than let a
+            multi-file patch through where one of the files is
+            fabricated. The re-prompt mentions the first unread path;
+            in practice a model that re-reads one file usually re-reads
+            the rest of the block too.
+          - Bare ```python fences with no SEARCH/REPLACE: only fire when
+            the user's task explicitly names a project file. A fence
+            with no project anchor is conversational example code (e.g.
+            "show me a list comprehension") and HOOK enforcement there
+            would be pure noise.
+        """
+        # Edit blocks first — these are the high-confidence case.
+        edits = extract_edits(reply)
+        if edits:
+            for edit in edits:
+                if edit.path not in self._read_files_history:
+                    return _READ_BEFORE_SHOW_PROMPT.format(path=edit.path)
+            return None
+        # No edit blocks: look for a bare fenced python block AND a
+        # project-file mention in the task.
+        if not _BARE_PY_FENCE_RE.search(reply):
+            return None
+        target = self._task_target_file(task)
+        if target is None:
+            return None
+        if target in self._read_files_history:
+            return None
+        return _READ_BEFORE_SHOW_PROMPT.format(path=target)
+
+    def _task_target_file(self, task: str) -> str | None:
+        """Pick a project file mentioned by name in the user's task, or
+        None if the task is generic. We scan the lightweight overview
+        (paths only) — symbol-level matching would need the full map and
+        belongs in a separate pass."""
+        from code_scalpel.tools.files import list_files
+
+        try:
+            files = list_files(self._cwd, max_files=200)
+        except OSError:
+            return None
+        # Sort by length descending so "pkg/foo.py" wins over "foo.py"
+        # when both appear in the project — the longer match is more
+        # specific.
+        for rel in sorted((str(p) for p in files), key=len, reverse=True):
+            if rel in task:
+                return rel
+        return None
+
     async def compact(self) -> str | None:
         """Summarize history into a short note and replace it. Returns summary
         text, or None if history is empty."""
@@ -709,6 +842,11 @@ class StepAgent:
                 "content": f"Summary of the earlier session:\n{summary}",
             }
         ]
+        # Compacted history loses the tool-call provenance — the model
+        # can no longer point at "we read file X earlier". Drop the read
+        # record so the HOOK forces a fresh read on the first post-compact
+        # patch instead of trusting a memory that's been collapsed.
+        self._read_files_history.clear()
         return summary
 
     async def stream_ask(self, task: str, *, mode: str = "ask") -> AsyncIterator[StreamItem]:
@@ -757,6 +895,7 @@ class StepAgent:
 
             for tc in round_tool_calls:
                 result = await self._execute_native(tc)
+                self._note_read_file(tc, result)
                 call_view = ToolCall(name=tc.name, body=tc.arguments)
                 yield ToolExecuted(call_view, result)
                 messages.append(

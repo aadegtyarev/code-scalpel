@@ -30,6 +30,13 @@ class AgentConfig(BaseModel):
     # ask the model to fix on failure, up to max_debug_attempts retries.
     # Off by default — the TUI flips this once the iterative loop is wired in.
     iterative_patch_loop: bool = False
+    # Opt-out: when on, the agent rejects a reply that emits a SEARCH/REPLACE
+    # block (or fenced python body) for a file it never called read_file on —
+    # in this turn or any previous one. The model is sent a follow-up asking
+    # it to read first, then re-emit. Default ON: helps weak local models
+    # avoid fabricating from training-data shape; capable models don't lose
+    # anything because they'd have read the file anyway.
+    enforce_read_before_show: bool = True
     answer_reserve_tokens: int = 4000
     context_budget_warn: float = 0.70
     context_budget_critical: float = 0.90

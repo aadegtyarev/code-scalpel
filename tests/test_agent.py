@@ -32,7 +32,10 @@ _CONFIG = AppConfig(
             temperature=0.1,
         )
     },
-    agent=AgentConfig(max_files=2, max_file_lines=50),
+    # Legacy tests in this module pre-date the read-before-show HOOK and
+    # rely on SEARCH/REPLACE blocks going through without an upstream
+    # read_file call. Dedicated HOOK tests below opt back in.
+    agent=AgentConfig(max_files=2, max_file_lines=50, enforce_read_before_show=False),
 )
 
 
@@ -805,6 +808,9 @@ def _retry_config(*, max_debug_attempts: int = 2) -> AppConfig:
             max_file_lines=50,
             max_debug_attempts=max_debug_attempts,
             iterative_patch_loop=True,
+            # Retry-loop tests pre-date the HOOK and feed canned patches
+            # straight through. Dedicated HOOK tests opt back in.
+            enforce_read_before_show=False,
         ),
     )
 
@@ -978,6 +984,7 @@ async def test_code_with_retry_disabled_flag_falls_back_to_ask(project: Path) ->
             max_files=2,
             max_file_lines=50,
             iterative_patch_loop=False,  # off — opt-in
+            enforce_read_before_show=False,
         ),
     )
     llm = MockLLMAdapter([_BAD_PATCH])
@@ -1430,3 +1437,189 @@ hello()
 
     # T001's [✓] mark survived the cancel.
     assert "[✓] T001" in tasks_path.read_text()
+
+
+# ── enforce-read-before-show HOOK ──────────────────────────────────────────
+
+_HOOK_CONFIG = AppConfig(
+    profiles={
+        "local": ModelProfile(
+            provider="lmstudio",
+            model="local-model",
+            temperature=0.1,
+        )
+    },
+    agent=AgentConfig(max_files=2, max_file_lines=50, enforce_read_before_show=True),
+)
+
+
+@pytest.mark.asyncio
+async def test_hook_fires_when_patch_emitted_without_read(project: Path) -> None:
+    """Model dumps a SEARCH/REPLACE block targeting hello.py without ever
+    calling read_file. The HOOK rejects the first reply, sends a re-prompt
+    user-message, and the second reply is what we return."""
+    llm = MockLLMAdapter([_EDIT_BLOCK, "Now I read it: " + _EDIT_BLOCK])
+    agent = StepAgent(llm=llm, cwd=project, config=_HOOK_CONFIG)
+
+    result = await agent.ask("change hello to return hi")
+
+    # Two model calls — the second carries the re-prompt.
+    assert len(llm.calls) == 2
+    second_user = llm.calls[1][-1]["content"]
+    assert "read_file" in second_user and "hello.py" in second_user
+    # We returned the second reply, not the first.
+    assert "Now I read it" in result.reply
+    assert result.edits, "second reply still carried a SEARCH/REPLACE block"
+
+
+@pytest.mark.asyncio
+async def test_hook_does_not_fire_when_read_file_was_called_this_turn(
+    project: Path,
+) -> None:
+    """Model called read_file(hello.py) first, then emitted a patch. HOOK
+    has its grounding signal — no re-prompt."""
+    from code_scalpel.llm.adapter import NativeToolCall
+
+    tc = NativeToolCall(id="c1", name="read_file", arguments='{"path": "hello.py"}')
+    llm = MockLLMAdapter([("", [tc]), _EDIT_BLOCK])
+    agent = StepAgent(llm=llm, cwd=project, config=_HOOK_CONFIG)
+
+    result = await agent.ask("change hello")
+
+    # Two model calls — both inside the original chat loop (the tool round
+    # and the final reply). No HOOK retry.
+    assert len(llm.calls) == 2
+    assert result.edits
+    # The bare task is in history, not the re-prompt — proving HOOK didn't
+    # rewind and re-ask.
+    assert agent.history[0]["content"] == "change hello"
+
+
+@pytest.mark.asyncio
+async def test_hook_does_not_fire_when_read_file_was_called_previous_turn(
+    project: Path,
+) -> None:
+    """Turn 1 reads hello.py. Turn 2 emits a patch without re-reading —
+    HOOK must accept because the read is in the cross-turn record."""
+    from code_scalpel.llm.adapter import NativeToolCall
+
+    tc = NativeToolCall(id="c1", name="read_file", arguments='{"path": "hello.py"}')
+    # Turn 1: tool_call → plain text.
+    # Turn 2: patch directly.
+    llm = MockLLMAdapter([("", [tc]), "Read it, here you go.", _EDIT_BLOCK])
+    agent = StepAgent(llm=llm, cwd=project, config=_HOOK_CONFIG)
+
+    await agent.ask("read hello and tell me about it")
+    result = await agent.ask("now change it to return hi")
+
+    # Turn 1 = 2 calls (tool + reply), turn 2 = 1 call (no HOOK retry).
+    assert len(llm.calls) == 3
+    assert result.edits
+
+
+@pytest.mark.asyncio
+async def test_hook_does_not_fire_on_plain_prose_reply(project: Path) -> None:
+    """No code block in the reply → pass-through, regardless of reads."""
+    llm = MockLLMAdapter(["Sure, hello.py looks fine to me."])
+    agent = StepAgent(llm=llm, cwd=project, config=_HOOK_CONFIG)
+
+    result = await agent.ask("anything to worry about in hello.py?")
+
+    assert len(llm.calls) == 1
+    assert result.reply == "Sure, hello.py looks fine to me."
+
+
+@pytest.mark.asyncio
+async def test_hook_disabled_by_config(project: Path) -> None:
+    """enforce_read_before_show=False → HOOK never fires even on the worst
+    fabricated-patch case."""
+    cfg = AppConfig(
+        profiles={"local": ModelProfile(provider="lmstudio", model="m")},
+        agent=AgentConfig(max_files=2, max_file_lines=50, enforce_read_before_show=False),
+    )
+    llm = MockLLMAdapter([_EDIT_BLOCK])
+    agent = StepAgent(llm=llm, cwd=project, config=cfg)
+
+    result = await agent.ask("change hello")
+
+    assert len(llm.calls) == 1
+    assert result.edits
+
+
+@pytest.mark.asyncio
+async def test_hook_caps_at_one_retry(project: Path) -> None:
+    """Model re-emits an unread SEARCH/REPLACE block on the re-prompt
+    too. HOOK does NOT re-fire — we accept the second reply, even though
+    it's still ungrounded. No infinite loop."""
+    llm = MockLLMAdapter([_EDIT_BLOCK, _EDIT_BLOCK, _EDIT_BLOCK])
+    agent = StepAgent(llm=llm, cwd=project, config=_HOOK_CONFIG)
+
+    result = await agent.ask("change hello")
+
+    # Exactly two model calls — initial + one re-prompt. NOT three.
+    assert len(llm.calls) == 2
+    assert result.edits
+
+
+@pytest.mark.asyncio
+async def test_hook_re_prompt_mentions_target_path(project: Path) -> None:
+    """The re-prompt cites the specific path the model fabricated against,
+    so the model can read EXACTLY that file rather than guess which one
+    needed grounding."""
+    multi_file_block = """\
+pkg/deep.py
+```python
+<<<<<<< SEARCH
+def f():
+    pass
+=======
+def f():
+    return 1
+>>>>>>> REPLACE
+```
+"""
+    (project / "pkg").mkdir(exist_ok=True)
+    (project / "pkg" / "deep.py").write_text("def f():\n    pass\n")
+
+    llm = MockLLMAdapter([multi_file_block, "OK done."])
+    agent = StepAgent(llm=llm, cwd=project, config=_HOOK_CONFIG)
+
+    await agent.ask("fix f")
+
+    second_user = llm.calls[1][-1]["content"]
+    assert "pkg/deep.py" in second_user
+
+
+@pytest.mark.asyncio
+async def test_hook_fires_on_bare_python_fence_when_task_names_file(
+    project: Path,
+) -> None:
+    """Reply has plain ```python fenced body (no SEARCH/REPLACE) for a
+    file the user named — HOOK still fires. This catches `test_qwen_reads
+    _file_even_for_vague_show_code`-style failures where the model
+    fabricates a method body from training-data shape."""
+    fake_body = '```python\ndef hello():\n    return "fabricated"\n```\n'
+    llm = MockLLMAdapter([fake_body, "OK I'll read it first."])
+    agent = StepAgent(llm=llm, cwd=project, config=_HOOK_CONFIG)
+
+    await agent.ask("show me the code in hello.py")
+
+    assert len(llm.calls) == 2
+    second_user = llm.calls[1][-1]["content"]
+    assert "hello.py" in second_user
+
+
+@pytest.mark.asyncio
+async def test_hook_does_not_fire_on_bare_python_fence_when_task_is_generic(
+    project: Path,
+) -> None:
+    """Reply has a ```python fence but the user's task doesn't name a
+    project file — conversational example code, HOOK stays silent."""
+    example = "Sure, a list comp:\n```python\n[x for x in items if x]\n```\n"
+    llm = MockLLMAdapter([example])
+    agent = StepAgent(llm=llm, cwd=project, config=_HOOK_CONFIG)
+
+    result = await agent.ask("how would I write a list comprehension?")
+
+    assert len(llm.calls) == 1
+    assert "list comp" in result.reply
