@@ -215,6 +215,22 @@ async def test_escape_cancels_streaming_worker(sandbox: Path) -> None:
         assert worker.is_cancelled or worker.is_finished
 
 
+def test_format_step_status_no_tools_shows_warning() -> None:
+    from code_scalpel.tui.app import _format_step_status
+
+    assert _format_step_status(0, 0.0) == "● idle · [yellow]⚠ no tools used[/yellow]"
+    assert _format_step_status(0, 5.4) == "● idle · [yellow]⚠ no tools used[/yellow] · 5 tok/s"
+
+
+def test_format_step_status_pluralises_tool_noun() -> None:
+    from code_scalpel.tui.app import _format_step_status
+
+    # 1 → singular ("1 tool"); 2+ → plural ("2 tools")
+    assert _format_step_status(1, 0.0) == "● idle · 🔧 1 tool"
+    assert _format_step_status(2, 0.0) == "● idle · 🔧 2 tools"
+    assert _format_step_status(5, 8.7) == "● idle · 🔧 5 tools · 9 tok/s"
+
+
 @pytest.mark.asyncio
 async def test_footer_flags_when_model_used_no_tools(sandbox: Path) -> None:
     """The reply was generated without any read_file/grep — show a warning

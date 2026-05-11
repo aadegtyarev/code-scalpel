@@ -51,6 +51,19 @@ _SLASH_COMMANDS: list[tuple[str, str]] = [
 ]
 
 
+def _format_step_status(tool_calls: int, rate: float) -> str:
+    """Footer line shown after a turn ends. Surfaces tool-call usage so
+    the user can spot an ungrounded reply (the common shape of a
+    confabulated answer) at a glance."""
+    if tool_calls == 0:
+        tool_summary = "[yellow]⚠ no tools used[/yellow]"
+    else:
+        noun = "tool" if tool_calls == 1 else "tools"
+        tool_summary = f"🔧 {tool_calls} {noun}"
+    rate_str = f" · {rate:.0f} tok/s" if rate else ""
+    return f"● idle · {tool_summary}{rate_str}"
+
+
 class ScalpelApp(App[None]):
     CSS_PATH = ["styles.tcss"]
 
@@ -316,15 +329,7 @@ class ScalpelApp(App[None]):
                 self._pending_edits = edits
                 footer.status = "● reviewing"
             else:
-                rate = self._last_stream_rate
-                # Highlight ungrounded replies so the user can spot when the
-                # model answered without consulting the project — that's the
-                # common shape of a confabulated answer.
-                tool_summary = (
-                    f"🔧 {tool_calls} tools" if tool_calls else "[yellow]⚠ no tools used[/yellow]"
-                )
-                rate_str = f" · {rate:.0f} tok/s" if rate else ""
-                footer.status = f"● idle · {tool_summary}{rate_str}"
+                footer.status = _format_step_status(tool_calls, self._last_stream_rate)
         except asyncio.CancelledError:
             output.print_status("● Cancelled.")
             footer.status = "● idle"
