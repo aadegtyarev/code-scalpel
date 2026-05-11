@@ -150,13 +150,58 @@ def _apply_one(source: str, search: str, replace: str) -> str | None:
     if fixed is not None:
         return fixed
 
-    # 3. Strip spurious leading blank line from SEARCH (aider issue #25)
+    # 3. Blank-line-count mismatch — first as-is, then dedented. Model can
+    # collapse or expand separator blanks AND add a uniform indent at the
+    # same time (the common shape of "model copied an indented example").
+    fixed = _try_blank_line_tolerant(source, search, replace)
+    if fixed is not None:
+        return fixed
+    dedented_search, dedented_replace = _dedent_pair(search, replace)
+    if dedented_search != search:
+        fixed = _try_blank_line_tolerant(source, dedented_search, dedented_replace)
+        if fixed is not None:
+            return fixed
+
+    # 4. Strip spurious leading blank line from SEARCH (aider issue #25)
     if search.startswith("\n"):
         stripped = search[1:]
         if stripped and stripped in source:
             return source.replace(stripped, replace, 1)
 
     return None
+
+
+def _try_blank_line_tolerant(source: str, search: str, replace: str) -> str | None:
+    """Match SEARCH against source where runs of blank lines may differ.
+
+    Weak LLMs routinely emit 1 blank line where the file has 2 (or vice
+    versa) between top-level definitions. The structural intent is the
+    same; we treat any run of blank lines as equivalent to any other.
+    """
+    if "\n\n" not in search:
+        return None  # no blank-line runs in SEARCH — nothing to relax
+    chunks = re.split(r"\n(?:[ \t]*\n)+", search.rstrip("\n"))
+    if len(chunks) < 2:
+        return None
+    pattern = r"\n(?:[ \t]*\n)+".join(re.escape(c) for c in chunks)
+    m = re.search(pattern, source)
+    if m is None:
+        return None
+    return source[: m.start()] + replace + source[m.end() :]
+
+
+def _dedent_pair(search: str, replace: str) -> tuple[str, str]:
+    """Strip the common leading whitespace prefix from BOTH search and
+    replace. Helper for stacking dedent with other tolerance strategies."""
+    search_lines = search.splitlines(keepends=True)
+    common = _common_leading_ws(search_lines)
+    if not common:
+        return search, replace
+
+    def strip(lines: list[str]) -> str:
+        return "".join(ln[len(common) :] if ln.startswith(common) else ln for ln in lines)
+
+    return strip(search_lines), strip(replace.splitlines(keepends=True))
 
 
 def _try_whitespace_outdent(source: str, search: str, replace: str) -> str | None:

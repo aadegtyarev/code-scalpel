@@ -201,3 +201,72 @@ def test_apply_treats_whitespace_only_search_as_empty(tmp_path: Path) -> None:
     ok, err = apply_edits(edits, tmp_path)
     assert ok, err
     assert (tmp_path / "p.py").read_text() == "from x import y\ndef foo():\n    return 1\n"
+
+
+# ── blank-line tolerance ────────────────────────────────────────────────────
+
+
+def test_apply_tolerates_collapsed_blank_lines(tmp_path: Path) -> None:
+    """File has TWO blank lines between defs, model emits SEARCH with ONE.
+    The structural intent is identical; apply should still match.
+
+    Regression repro for 2026-05-11 rename_function failure."""
+    src = "def compute(x):\n    return x * 2\n\n\nprint(compute(5))\n"
+    (tmp_path / "calc.py").write_text(src)
+    edits = [
+        Edit(
+            path="calc.py",
+            # one blank line between content (model collapsed)
+            search="def compute(x):\n    return x * 2\n\nprint(compute(5))\n",
+            replace="def double(x):\n    return x * 2\n\nprint(double(5))\n",
+        ),
+    ]
+    ok, err = apply_edits(edits, tmp_path)
+    assert ok, err
+    text = (tmp_path / "calc.py").read_text()
+    assert "def double(x):" in text
+    assert "print(double(5))" in text
+    assert "def compute" not in text
+
+
+def test_apply_tolerates_expanded_blank_lines(tmp_path: Path) -> None:
+    """Inverse: file has ONE blank line, model emits SEARCH with TWO."""
+    src = "def a():\n    pass\n\ndef b():\n    pass\n"
+    (tmp_path / "x.py").write_text(src)
+    edits = [
+        Edit(
+            path="x.py",
+            # two blank lines (model added one)
+            search="def a():\n    pass\n\n\ndef b():\n    pass\n",
+            replace="def a():\n    return 1\n\ndef b():\n    return 2\n",
+        ),
+    ]
+    ok, err = apply_edits(edits, tmp_path)
+    assert ok, err
+
+
+def test_apply_tolerates_indent_AND_blank_mismatch(tmp_path: Path) -> None:
+    """The actual 2026-05-11 rename_function regression: model emits SEARCH
+    with BOTH a uniform 4-space leading prefix (copied from the prompt
+    example) AND a different blank-line count (1 instead of 2). Apply
+    must dedent + blank-tolerate at the same time."""
+    src = "def compute(x):\n    return x * 2\n\n\nprint(compute(5))\n"
+    (tmp_path / "calc.py").write_text(src)
+    edits = [
+        Edit(
+            path="calc.py",
+            search=(
+                "    def compute(x):\n"
+                "        return x * 2\n"
+                "\n"  # 1 blank vs file's 2
+                "    print(compute(5))\n"
+            ),
+            replace=("    def double(x):\n        return x * 2\n\n    print(double(5))\n"),
+        ),
+    ]
+    ok, err = apply_edits(edits, tmp_path)
+    assert ok, err
+    text = (tmp_path / "calc.py").read_text()
+    assert "def double(x):" in text
+    assert "print(double(5))" in text
+    assert "def compute" not in text
