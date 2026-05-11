@@ -150,9 +150,7 @@ class ToolResultModal(ModalScreen[None]):
         try:
             highlighted = await loop.run_in_executor(None, self._body_renderable)
         except Exception as e:
-            self.query_one("#trm-body", Static).update(
-                f"[#bf6060]Render error: {e}[/#bf6060]"
-            )
+            self.query_one("#trm-body", Static).update(f"[#bf6060]Render error: {e}[/#bf6060]")
             return
 
         body = self.query_one("#trm-body", Static)
@@ -169,25 +167,64 @@ class ToolResultModal(ModalScreen[None]):
 
     def action_copy(self) -> None:
         """Ctrl+C copies the raw tool output (not the rendered highlight).
-        Surfaces a passive toast so the user knows it landed — no action
-        required to dismiss."""
+        Tries real system clipboard tools first (wl-copy / xclip / xsel /
+        pbcopy / clip.exe) — OSC52 via Textual is the last-resort fallback
+        because many terminals or tmux configs swallow it silently."""
         text = self._result.output or ""
-        try:
-            self.app.copy_to_clipboard(text)
-        except Exception:
-            # Some terminals don't support OSC52 — let the user know.
-            self.app.notify(
-                "Clipboard not supported by this terminal.",
-                title="Copy",
-                severity="warning",
-                timeout=2,
-            )
-            return
+        method = _copy_to_system_clipboard(text)
+        if method is None:
+            # Final fallback: OSC52. Works in some terminals, not in others.
+            try:
+                self.app.copy_to_clipboard(text)
+            except Exception:
+                self.app.notify(
+                    "Couldn't copy — install xclip/wl-clipboard or paste from terminal selection.",
+                    title="Copy",
+                    severity="warning",
+                    timeout=3,
+                )
+                return
+            method = "OSC52"
         self.app.notify(
-            f"Copied {len(text)} chars to clipboard.",
+            f"Copied {len(text)} chars via {method}.",
             title="Copy",
             timeout=2,
         )
+
+
+def _copy_to_system_clipboard(text: str) -> str | None:
+    """Try cross-platform clipboard binaries in order. Returns the name of
+    the tool that worked, or None if nothing's available. Each candidate
+    is fed text via stdin so multi-line / large inputs are handled.
+
+    Order chosen by likelihood on a developer machine:
+    wl-copy (Wayland), xclip (X11), xsel (X11), pbcopy (macOS),
+    clip.exe (WSL → Windows host).
+    """
+    import shutil
+    import subprocess
+
+    candidates: list[tuple[str, list[str]]] = [
+        ("wl-copy", ["wl-copy"]),
+        ("xclip", ["xclip", "-selection", "clipboard"]),
+        ("xsel", ["xsel", "--clipboard", "--input"]),
+        ("pbcopy", ["pbcopy"]),
+        ("clip.exe", ["clip.exe"]),
+    ]
+    for name, cmd in candidates:
+        if shutil.which(cmd[0]) is None:
+            continue
+        try:
+            subprocess.run(
+                cmd,
+                input=text.encode("utf-8"),
+                check=True,
+                timeout=2,
+            )
+            return name
+        except (subprocess.SubprocessError, OSError):
+            continue
+    return None
 
 
 def _prepend_line_numbers(text: Text) -> Text:
