@@ -1,0 +1,96 @@
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+  pull_request:
+    paths:
+      # On PRs touching build infrastructure we do a smoke build (no
+      # release attach) so the spec gets validated before the tag.
+      - ".github/workflows/release.yml"
+      - "packaging/nfpm.yaml"
+      - "pyproject.toml"
+      - "code_scalpel/__main__.py"
+
+jobs:
+  build-linux:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write  # attach assets to the release
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: pyproject.toml
+
+      - name: Install build tooling
+        run: |
+          python -m pip install --upgrade pip
+          # `[diagrams]` so PyInstaller sees rich-pixels and bundles it —
+          # otherwise the mermaid fallback path imports a missing module
+          # at runtime in the binary.
+          pip install -e ".[dev,diagrams,build]"
+
+      - name: Resolve version
+        id: version
+        run: |
+          # On tag push, take the tag (strip leading v). On PR, fall
+          # back to pyproject's version — nfpm requires SOMETHING in
+          # ${VERSION}.
+          if [ "${GITHUB_REF_TYPE}" = "tag" ]; then
+            v="${GITHUB_REF_NAME#v}"
+          else
+            v=$(python -c "from code_scalpel import __version__; print(__version__)")
+          fi
+          echo "version=$v" >> "$GITHUB_OUTPUT"
+          echo "Resolved version: $v"
+
+      - name: Build standalone binary (PyInstaller)
+        run: |
+          pyinstaller \
+            --onefile \
+            --name code-scalpel \
+            --collect-all textual \
+            --collect-all textual_autocomplete \
+            --collect-all tree_sitter_python \
+            --collect-data code_scalpel \
+            code_scalpel/__main__.py
+          ./dist/code-scalpel --version
+
+      - name: Install nfpm
+        run: |
+          # nfpm is a Go binary — pull the tarball, drop the binary in PATH.
+          NFPM_VER=2.39.0
+          curl -sSL "https://github.com/goreleaser/nfpm/releases/download/v${NFPM_VER}/nfpm_${NFPM_VER}_Linux_x86_64.tar.gz" \
+            | tar -xz -C /usr/local/bin nfpm
+          nfpm --version
+
+      - name: Build .deb
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          nfpm pkg --config packaging/nfpm.yaml --packager deb --target "dist/code-scalpel_${VERSION}_amd64.deb"
+          ls -lh dist/
+
+      - name: Upload artifacts (PR smoke run)
+        if: github.event_name == 'pull_request'
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-binary-and-deb
+          path: |
+            dist/code-scalpel
+            dist/*.deb
+          retention-days: 7
+
+      - name: Attach to GitHub Release (tag push)
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            dist/code-scalpel
+            dist/*.deb
+          fail_on_unmatched_files: true
+          generate_release_notes: true
