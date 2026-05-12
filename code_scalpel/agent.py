@@ -1220,25 +1220,44 @@ class StepAgent:
         return msgs
 
     def _user_message(self, task: str) -> str:
-        """User message is the task — that's it.
+        """Build the user message: task + optional pre-blocks.
+
+        Two pre-blocks can prepend, both gated on having content:
+          1. **Eager recipes** from `.code-scalpel/recipes/*.md` with
+             `load: eager` — surfaces /learn-generated knowledge so
+             the agent sees what the user (or a past `/learn` call)
+             saved about technologies in this project.
+          2. **Memory recall** — top-k FTS5 hits from /remember notes.
 
         Earlier iteration prepended a `Project files` overview (paths
         + line counts) every turn. Юзер flagged 2026-05-11: 800-1000
         tokens of "auto-mixed" project listing burying the task at
         the end. Same family of failure as the "Project map: <500
-        lines>\\nTask: X" layout we already retired. Now: task is
-        the whole message, model uses `project_map` / `grep` /
-        `read_file` tools to explore when it needs to.
-
-        Memory recall stays inline because it's quiet by default
-        (skipped entirely when no hit) and recall is the contract of
-        having /remember at all.
+        lines>\\nTask: X" layout we already retired. We don't repeat
+        that mistake — recipes and recall both stay quiet by default
+        (zero output when no recipe / no recall hit).
         """
+        from code_scalpel.recipes import eager_recipes, format_recipes_block
+
+        try:
+            recipes_block = format_recipes_block(eager_recipes(self._cwd))
+        except Exception:
+            # Recipe loading is best-effort: a syntax error in one file
+            # must NOT break the turn. discover_recipes already swallows
+            # most failure modes; this is the last-resort guard.
+            recipes_block = ""
+
         recalled = self._recall_notes(task)
-        if not recalled:
+        if not recipes_block and not recalled:
             return task
-        parts = [task, "", "Recalled notes (from prior `/remember` calls):"]
-        parts.extend(f"- {n}" for n in recalled)
+
+        parts: list[str] = []
+        if recipes_block:
+            parts.extend([recipes_block, ""])
+        parts.append(task)
+        if recalled:
+            parts.extend(["", "Recalled notes (from prior `/remember` calls):"])
+            parts.extend(f"- {n}" for n in recalled)
         return "\n".join(parts)
 
     def _recall_notes(self, task: str, *, k: int = 3) -> list[str]:
