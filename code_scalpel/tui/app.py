@@ -23,9 +23,10 @@ from code_scalpel.agent import (
 from code_scalpel.config import AppConfig, autodetect_context_tokens, resolve_model_name
 from code_scalpel.diagrams import extract_mermaid_blocks
 from code_scalpel.jobs import JobRegistry
-from code_scalpel.llm.adapter import ChatResponse, OpenAICompatibleAdapter
+from code_scalpel.llm.adapter import ChatResponse
 from code_scalpel.memory import MemoryStore
 from code_scalpel.patch.edit_block import Edit, apply_edits, edits_to_diff, extract_edits
+from code_scalpel.runtime import Runtime
 from code_scalpel.session import Session
 from code_scalpel.state import AgentState
 from code_scalpel.tools.agent_tools import ToolCall, ToolResult
@@ -124,7 +125,6 @@ class ScalpelApp(App[None]):
         super().__init__()
         self.config = config
         self.cwd = cwd
-        self.session = Session()
         self.state = AgentState.load(cwd)
         self._mode_index = 0
         self._pending_edits: list[Edit] | None = None
@@ -134,12 +134,18 @@ class ScalpelApp(App[None]):
         # it through every branch of the patch-loop control flow.
         self._last_stream_usage: UsageReport | None = None
         self._runner = AsyncShellRunner()
+        # Headless runtime — built lazily in `_init_agent` so config /
+        # adapter errors land on the OutputLog rather than during compose.
+        # `self.session`, `self._agent`, and `self._memory` are surfaced
+        # as bridge fields for legacy call sites; they all point into the
+        # runtime once it's built.
+        self.runtime: Runtime | None = None
+        self.session = Session()  # replaced by runtime.session in _init_agent
         self._agent: StepAgent | None = None
         # Latest tool round-trip from the agent — Ctrl+O opens it in a modal.
         self._last_tool_result: ToolResult | None = None
-        # Project-scoped persistent memory. Built on first use rather than
-        # at construction so tests / lightweight callers that never touch
-        # /remember don't get a .code-scalpel/memory.db materialised.
+        # Project-scoped persistent memory. Materialised by the Runtime;
+        # legacy code reads through this bridge field.
         self._memory: MemoryStore | None = None
         # In-session registry of background jobs (map build, LLM step,
         # /compact, pytest retry, …). The JobsBar widget subscribes; any
@@ -198,22 +204,16 @@ class ScalpelApp(App[None]):
 
     def _init_agent(self) -> None:
         try:
-            profile = self.config.current_profile
-            llm = OpenAICompatibleAdapter(
-                base_url=f"{profile.provider_base_url()}/v1",
-                api_key=profile.api_key(),
-                model=profile.model,
-                timeout=float(self.config.agent.llm_timeout),
-                cost_per_1k=profile.cost_per_1k,
-            )
-            self._agent = StepAgent(
-                llm=llm,
-                cwd=self.cwd,
-                config=self.config,
-                memory=self._get_memory(),
-            )
+            self.runtime = Runtime(cwd=self.cwd, config=self.config)
+            # Bridge the runtime's quartet to legacy fields so the rest of
+            # the TUI keeps using `self._agent`, `self.session`,
+            # `self._memory` unchanged. New code should reach through
+            # `self.runtime` directly.
+            self._agent = self.runtime.agent
+            self.session = self.runtime.session
+            self._memory = self.runtime.memory
             # Footer shows configured name until resolve_model_name finishes.
-            self.query_one(StatusFooter).model = profile.model
+            self.query_one(StatusFooter).model = self.config.current_profile.model
         except (KeyError, ValueError) as e:
             self.query_one(OutputLog).print_error(f"Config error: {e}")
 
@@ -248,12 +248,15 @@ class ScalpelApp(App[None]):
             self._handle_slash(message.text.strip())
             return
 
-        if self._agent is None:
+        if self.runtime is None:
             output.print_error("No LLM configured — check config.")
             return
 
         self.query_one(StatusFooter).status = "◌ thinking…"
-        text = self.session.prepare_turn(message.text)
+        # Raw text flows through to _run_step / _run_code_with_retry; the
+        # Runtime adds the language directive at the agent boundary. One
+        # prepare_turn, one channel — see code_scalpel/runtime.py.
+        text = message.text
         # In code mode with the iterative loop opted in, swap the regular
         # streaming step for the auto apply→test→retry path. The streaming
         # path stays untouched for ask/plan/review so opt-out is a clean
@@ -839,7 +842,8 @@ class ScalpelApp(App[None]):
             usage: UsageReport | None = None
             start = time.monotonic()
             last_tick = start
-            async for item in self._agent.stream_ask(task, mode=mode):
+            assert self.runtime is not None
+            async for item in self.runtime.stream(task, mode=mode):
                 if isinstance(item, TextDelta):
                     full += item.text
                     chunks += 1
@@ -1038,7 +1042,8 @@ class ScalpelApp(App[None]):
             # touching agent.py) and then iterates; we surface the full
             # set of attempts it tries, so the visible history is honest.
             try:
-                result = await self._agent.code_with_retry(task)
+                assert self.runtime is not None
+                result = await self.runtime.code_with_retry(task)
             except asyncio.CancelledError:
                 output.print_status("● Cancelled.")
                 footer.status = "● idle"
@@ -1110,7 +1115,7 @@ class ScalpelApp(App[None]):
         from code_scalpel.patch.edit_block import apply_edits
 
         output = self.query_one(OutputLog)
-        assert self._agent is not None
+        assert self.runtime is not None
 
         progress = output.start_turn_progress()
         placeholder = output.start_streaming()
@@ -1122,7 +1127,7 @@ class ScalpelApp(App[None]):
         tool_calls = 0
         start = time.monotonic()
         last_tick = start
-        async for item in self._agent.stream_ask(task, mode="code"):
+        async for item in self.runtime.stream(task, mode="code"):
             if isinstance(item, TextDelta):
                 full += item.text
                 chunks += 1
@@ -1198,6 +1203,7 @@ class ScalpelApp(App[None]):
             )
         # Apply succeeded — run tests through the agent (mirrors how
         # `code_with_retry` measures pass/fail).
+        assert self._agent is not None
         test_output, tests_passed = await self._agent._run_tests()
         return (
             PatchAttempt(

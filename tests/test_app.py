@@ -9,7 +9,6 @@ from typing import Any
 
 import pytest
 
-from code_scalpel.agent import StepAgent
 from code_scalpel.config import AgentConfig, AppConfig, ModelProfile
 from code_scalpel.llm.adapter import ChatResponse, StreamChunk, StreamUsage
 from code_scalpel.tui.app import ScalpelApp
@@ -67,7 +66,15 @@ class _StreamingMock:
 
 
 def _attach_mock(app: ScalpelApp, mock: _StreamingMock) -> None:
-    app._agent = StepAgent(llm=mock, cwd=app.cwd, config=app.config)
+    """Swap the whole Runtime so the TUI's `runtime.stream` path picks up
+    the mock. Touching just `app._agent` worked before the Runtime refactor
+    but is a dead-end now — the TUI no longer reaches through that field."""
+    from code_scalpel.runtime import Runtime
+
+    app.runtime = Runtime(cwd=app.cwd, config=app.config, llm=mock, with_memory=False)
+    app._agent = app.runtime.agent
+    app.session = app.runtime.session
+    app._memory = app.runtime.memory
 
 
 @pytest.fixture

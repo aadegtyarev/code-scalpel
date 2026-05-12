@@ -17,7 +17,7 @@ from collections.abc import AsyncIterator
 from pathlib import Path
 from typing import Any
 
-from code_scalpel.agent import StepAgent, ToolExecuted
+from code_scalpel.agent import ToolExecuted
 from code_scalpel.config import AgentConfig, AppConfig, ModelProfile
 from code_scalpel.llm.adapter import (
     LLMAdapter,
@@ -25,7 +25,7 @@ from code_scalpel.llm.adapter import (
     OpenAICompatibleAdapter,
     StreamChunk,
 )
-from code_scalpel.session import Session
+from code_scalpel.runtime import Runtime
 
 QUESTION = (
     "Как идёт обработка от ввода пользователя до вызова LLM? Назови ключевые модули по порядку."
@@ -136,19 +136,15 @@ async def main() -> None:
         model="qwen/qwen2.5-coder-14b",
     )
     spy = SpyAdapter(real)
-    agent = StepAgent(llm=spy, cwd=Path("."), config=_CONFIG)
-    # Run through the same Session pipeline as the TUI / probe — language
-    # pin + "(Reply in X.)" suffix. Otherwise the spy looks at one agent
-    # while the user / probe hit a different one.
-    session = Session()
-    task = session.prepare_turn(QUESTION)
+    # Inject the SpyAdapter into Runtime — same construction the TUI /
+    # probe use, so what the spy sees is what the user sees.
+    runtime = Runtime(cwd=Path("."), config=_CONFIG, llm=spy, with_memory=False)
 
     print(f"\nRaw question: {QUESTION}")
-    print(f"After Session.prepare_turn:\n{task}\n")
-    print("Running stream_ask…")
+    print("Running runtime.stream…")
 
     tool_events: list[tuple[str, str, str]] = []
-    async for item in agent.stream_ask(task):
+    async for item in runtime.stream(QUESTION):
         if isinstance(item, ToolExecuted):
             tool_events.append((item.call.name, item.call.body, item.result.output[:200]))
 

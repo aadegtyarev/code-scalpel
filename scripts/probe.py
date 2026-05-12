@@ -22,10 +22,8 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
-from code_scalpel.agent import StepAgent
 from code_scalpel.config import AgentConfig, AppConfig, ModelProfile
-from code_scalpel.llm.adapter import OpenAICompatibleAdapter
-from code_scalpel.session import Session
+from code_scalpel.runtime import Runtime
 
 _CONFIG = AppConfig(
     profiles={
@@ -161,21 +159,14 @@ SCENARIOS = [
 
 
 async def run_scenario(sc: Scenario, *, mode: str = "ask") -> tuple[bool, str, list[str]]:
-    llm = OpenAICompatibleAdapter(
-        base_url="http://localhost:1234/v1",
-        api_key="lm-studio",
-        model="qwen/qwen2.5-coder-14b",
-    )
-    agent = StepAgent(llm=llm, cwd=Path("."), config=_CONFIG)
-    # Same Session pipeline the TUI uses — pins language, adds the
-    # "(Reply in X.)" directive. Without this, probe and TUI would
-    # show the model different inputs and we'd be debugging two
-    # different agents.
-    session = Session()
+    # Single channel via Runtime — same construction the TUI uses, so the
+    # model sees identical inputs whether it's a real user or a probe.
+    # Memory off: probe shouldn't materialise .code-scalpel/memory.db
+    # under the project root.
+    runtime = Runtime(cwd=Path("."), config=_CONFIG, with_memory=False)
     replies: list[str] = []
     for prompt in sc.turns:
-        task = session.prepare_turn(prompt)
-        result = await agent.ask(task, mode=mode)
+        result = await runtime.ask(prompt, mode=mode)
         replies.append(result.reply)
     ok, msg = sc.check(replies)
     return ok, msg, replies
