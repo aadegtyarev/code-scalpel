@@ -23,34 +23,39 @@ class Session:
     requests: int = 0
     started_at: datetime = field(default_factory=lambda: datetime.now(UTC))
     user_language: str | None = None  # auto-detected from first user message
-    # Token counts at the most recent /compact. The footer subtracts these
-    # from totals so the bar reflects "current context", not lifetime usage.
-    # totals themselves stay intact for the exit cost summary.
+    # Size of the most recent prompt the model actually saw. The next prompt
+    # weighs ~the same (system + history + map carry forward), so this is the
+    # honest "current context cost" for the footer. Replaces the prior
+    # `(total - baseline)` proxy, which conflated accumulated I/O with the
+    # live prompt budget and drifted with every memory recall / map change.
+    last_prompt_tokens: int = 0
+    # Lifetime totals at the most recent /compact. Kept for the /stats
+    # "compacted at" line — no longer feeds the context indicator.
     compact_baseline_prompt: int = 0
     compact_baseline_completion: int = 0
 
     def record(self, response: ChatResponse) -> None:
         self.total_prompt_tokens += response.prompt_tokens
         self.total_completion_tokens += response.completion_tokens
+        self.last_prompt_tokens = response.prompt_tokens
         if response.cost is not None:
             self.total_cost += response.cost
         self.requests += 1
 
     def mark_compacted(self) -> None:
-        """Anchor the footer budget to the post-compact state. Cumulative
-        totals are preserved — only the visible 'current context' drops."""
+        """Anchor /stats to the post-compact state and reset the live
+        prompt-size estimate. The next turn re-measures it from the real
+        ChatResponse, so the footer briefly shows 0 — accurate, not a hack."""
         self.compact_baseline_prompt = self.total_prompt_tokens
         self.compact_baseline_completion = self.total_completion_tokens
+        self.last_prompt_tokens = 0
 
     @property
     def context_used_tokens(self) -> int:
-        """Tokens spent on prompts+completions since the last /compact."""
-        return (
-            self.total_prompt_tokens
-            - self.compact_baseline_prompt
-            + self.total_completion_tokens
-            - self.compact_baseline_completion
-        )
+        """Token weight of the next prompt — measured from the most recent
+        actual prompt the model received. Zero until the first turn and
+        right after /compact."""
+        return self.last_prompt_tokens
 
     @property
     def elapsed_seconds(self) -> float:

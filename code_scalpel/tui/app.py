@@ -422,9 +422,10 @@ class ScalpelApp(App[None]):
         # Project listing is no longer auto-injected — it lives behind
         # the `list_files` tool now. Its cost lands in Conversation
         # if/when the model calls it, not in a permanent segment.
-        # Stringify history as the model sees it — role + content per
-        # row joined; this is the same approximation used everywhere
-        # else and matches what session.context_used_tokens estimates.
+        # Stringify history as the model sees it — role + content per row
+        # joined. `/context` runs its own len/4 estimate over this string;
+        # session.context_used_tokens uses the API-reported prompt size
+        # directly, so the two numbers can differ by a small overhead.
         history = ""
         if self._agent is not None:
             history = "\n".join(

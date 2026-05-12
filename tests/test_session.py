@@ -21,18 +21,21 @@ def test_record_accumulates_tokens_and_cost() -> None:
     assert s.requests == 2
 
 
-def test_context_used_equals_total_before_compact() -> None:
+def test_context_used_reflects_last_prompt_size() -> None:
+    """Footer shows the cost of the next prompt — i.e. what we just sent,
+    not the accumulated I/O. Completion tokens don't enter; the model
+    isn't going to re-send its own output."""
     s = Session()
     s.record(_response(prompt=1000, completion=500))
-    assert s.context_used_tokens == 1500
+    assert s.context_used_tokens == 1000
 
 
 def test_mark_compacted_drops_context_used_to_zero() -> None:
-    """After /compact the footer should report ~0 used tokens — the prior
-    history was just summarized away."""
+    """After /compact the footer should report 0 used tokens — the prior
+    history was just summarized away. The next turn will re-measure it."""
     s = Session()
     s.record(_response(prompt=2000, completion=1000))
-    assert s.context_used_tokens == 3000
+    assert s.context_used_tokens == 2000
 
     s.mark_compacted()
     assert s.context_used_tokens == 0
@@ -50,20 +53,21 @@ def test_mark_compacted_preserves_cumulative_totals() -> None:
     assert s.total_cost == 0.05
 
 
-def test_context_used_grows_again_after_compact() -> None:
+def test_context_used_tracks_latest_prompt_after_compact() -> None:
     s = Session()
     s.record(_response(prompt=1000, completion=500))
     s.mark_compacted()
     s.record(_response(prompt=300, completion=150))
 
-    assert s.context_used_tokens == 450
+    assert s.context_used_tokens == 300
     # Totals reflect both pre- and post-compact usage.
     assert s.total_prompt_tokens == 1300
     assert s.total_completion_tokens == 650
 
 
 def test_repeat_compact_rebaselines() -> None:
-    """Compacting twice should each time anchor to the latest totals."""
+    """Each /compact zeroes the live indicator; the next record() fills
+    it from the new prompt size, not from any accumulated delta."""
     s = Session()
     s.record(_response(prompt=1000, completion=500))
     s.mark_compacted()
@@ -71,7 +75,7 @@ def test_repeat_compact_rebaselines() -> None:
     s.mark_compacted()
     s.record(_response(prompt=100, completion=50))
 
-    assert s.context_used_tokens == 150
+    assert s.context_used_tokens == 100
 
 
 def test_detect_and_pin_language_caches_first_call() -> None:

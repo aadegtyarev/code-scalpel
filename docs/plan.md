@@ -2004,28 +2004,34 @@ diagram-shape guidance (HOOK, наблюдение 2026-05-11):
       перечисляет три поддерживаемых типа с syntax-cheatsheets,
       ASCII-art забанен в пользу Mermaid. Все три типа теперь
       рендерятся inline в TUI.
-    • Перед утверждением «X использует Y» вызови map_file(X) и
-      проверь `imports:` (current grounding rule, but модель его
-      игнорирует в свободном тексте — нужно подсилить или вынести
-      в post-hoc check как enforce-read-before-show).
+    ✓ Prompt-half (agent.py:183-186): «Before claiming X uses Y in a
+      diagram, call project_map(X) and check imports:». Probe от
+      2026-05-12 на конкретном примере (classifier.py orphan) не
+      воспроизвёлся как diagram-баг — модель уехала в identity-блок,
+      не дошла до диаграммы. Post-hoc check (по образцу
+      `enforce-read-before-show`) **deferred** до тех пор пока probe
+      не покажет что prompt-rule промахивается на живых диаграммах.
 
-follow-up search (HOOK, тот же сценарий):
-  На T3 «именно алгоритм сжатия» модель повторила материал из T1
-  (session.py), не grep'нула `compact` и не goto_definition'ом
-  для `compact` на StepAgent. Когда юзер уточняет тему, модель
-  относится к новому turn'у как к follow-up к прежнему answer'у,
-  не как к расширению поиска. Возможные пути:
-    • Prompt rule: «при уточнении/расширении темы — повтори
-      tools, не доверяй кэшу контекста; новый угол → новый поиск».
-    • Detection в агенте: если turn N-1 завершился ответом, а
-      turn N начинается с «именно/конкретно/точнее/имел ввиду»,
-      инжектить hint «expand search before answering».
+✓ follow-up search (HOOK, 2026-05-12): закрыт prompt-rule'ом.
+  agent.py:159-165 ловит литералы «именно/конкретно/I meant/specifically»
+  и предписывает new tool calls вместо recycling прошлого ответа.
+  Detection-вариант в агенте не делался — план явно говорил «prompt
+  rule **OR** detection», prompt-rule оказался достаточным. Probe
+  scenario `short-followup` проходит `_no_repeat`, но check слабый
+  (не проверяет что были новые tool calls) — оставляю как известное
+  ограничение, не блокер.
 
-context indicator semantics (HOOK): сейчас footer показывает
-  «накоплено с последнего /compact» через compact_baseline. Это лучше
-  кумулятива, но не идеал — настоящее «сколько весит следующий промт»
-  должно считаться как system + history + map. Когда появится
-  context/builder.py, переехать туда и убрать baseline-хак из Session.
+✓ context indicator semantics (HOOK, 2026-05-12): убрали baseline-хак
+  без отдельного `context/builder.py`. Session теперь хранит
+  `last_prompt_tokens` от последнего `ChatResponse` — это **точный**
+  размер промта который модель видела, т.е. ровно «сколько весит
+  следующий» (история + system + map переходят в следующий turn
+  как есть). `context_used_tokens` отдаёт его напрямую,
+  `mark_compacted` обнуляет — footer мгновенно показывает падение
+  до следующего turn'а. Старые `compact_baseline_*` остались только
+  для строки «compacted at» в `/stats`. Тесты в test_session.py
+  обновлены под новую семантику; всё остальное в `len/4` пути
+  (`/context`) живёт отдельно и не задето.
 gemma+спек retry (TODO с следующей сессии): сейчас заблокировано
   OOM на 16 GB VRAM (gemma-4 26B Q4 = 18 GB > 16 GB - desktop). Два
   пути: (1) дискретная display-карта чтобы освободить 5060 Ti
@@ -2237,6 +2243,25 @@ dual-model setup — ОТЛОЖЕНО ДО ПОСЛЕ v0.4 (см. ниже).
   турн на tool-call без финального текста. Fallback на heuristic
   остался для провайдеров без include_usage, но в норме не
   активен. Глава 19 статьи.
+prompt-bleed regressions (HOOK, probe 2026-05-12 на qwen-coder-14b,
+  7/10 passed): три сценария ушли в нерелевантные паттерны:
+    • `overview` — generic блёрб «Этот проект представляет собой
+      комплексный инструмент…», без анкеров code-scalpel/tui/агент.
+      System prompt не насаждает «опирайся на реальные имена из map».
+    • `flow` — refusal-stub «Извините, но я не могу предоставить
+      информацию о внутренней архитектуре или работе системы…».
+      Прямое нарушение identity-prompt'а (там запрет на «Извините»
+      как корпоративный fallback) — qwen-coder-14b игнорит запрет
+      когда вопрос «как идёт обработка от ввода до LLM».
+    • `classifier-usage` — identity-блок «Я — code-scalpel, ваш
+      локальный кодовый помощник» вместо ответа про usage. Тот же
+      паттерн что строкa 1958-1961 (identity тянет слишком сильно
+      на короткие/конкретные вопросы), но триггер другой —
+      конкретный код-вопрос, не «кто ты».
+  Лечение: сужать identity-блок (literal-triggers only), либо
+  post-hoc guard который ловит identity-template на не-identity-
+  тригеры и переспрашивает модель. Связано с диагнозом строки 1958.
+
 self-clarify loop (HOOK, экспериментально): когда модель в ходе задачи
   задаёт уточняющий вопрос пользователю — попробовать перехватить и
   скормить тот же вопрос ей же с другим контекстом. Два варианта:
