@@ -22,12 +22,18 @@ class StatusFooter(Widget):
     # Per-turn metrics (tools, tokens, speed) stay inline in the chat as
     # a turn-summary line. Ctx is in the footer because it's continuous
     # state — every keystroke moves you toward the limit, not just turns.
-    status: reactive[str] = reactive("● idle")
+    status: reactive[str] = reactive("")
     hints: reactive[str] = reactive("[tab] mode · [q] quit")
     model: reactive[str] = reactive("")
     # "4k/16k (26%)" — pre-formatted so the footer doesn't need to know
     # about Session/state internals. Empty string hides the segment.
     ctx: reactive[str] = reactive("")
+    # Trust level indicator — short form ("skp" / "opt" / "ylo").
+    # Always shown so the user knows the current safety level.
+    trust: reactive[str] = reactive("")
+    # Thinking effort indicator — shown only when model supports thinking
+    # and effort is not "off". E.g. "◐ low", "◐ med", "◐ high".
+    thinking: reactive[str] = reactive("")
 
     def compose(self) -> ComposeResult:
         yield Label("", id="footer-label")
@@ -47,8 +53,23 @@ class StatusFooter(Widget):
     def watch_ctx(self, _: str) -> None:
         self._refresh_label()
 
+    def watch_trust(self, _: str) -> None:
+        self._refresh_label()
+
+    def watch_thinking(self, _: str) -> None:
+        self._refresh_label()
+
     def _refresh_label(self) -> None:
-        parts = [self.hints, self.status]
+        parts = [self.hints]
+        if self.status:
+            parts.append(self.status)
+        indicators: list[str] = []
+        if self.trust:
+            indicators.append(self.trust)
+        if self.thinking:
+            indicators.append(self.thinking)
+        if indicators:
+            parts.append(" ".join(indicators))
         if self.ctx:
             parts.append(f"ctx {self.ctx}")
         if self.model:

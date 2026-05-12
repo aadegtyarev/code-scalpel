@@ -81,6 +81,10 @@ class AgentConfig(BaseModel):
     # Hard cap on each shell_exec call. Independent of trust level —
     # a hung command must not block the agent indefinitely.
     shell_exec_timeout: int = 30
+    # Inference thinking effort — passed to providers that support it
+    # (o1/o3, deepseek-r1, qwq). Ignored when ModelProfile.supports_thinking
+    # is False or None (auto-detected as unsupported). Toggled via Ctrl+K.
+    thinking_effort: Literal["off", "low", "medium", "high"] = "off"
 
 
 class ModeTemperatures(BaseModel):
@@ -120,6 +124,9 @@ class ModelProfile(BaseModel):
     top_p: float = 0.9
     frequency_penalty: float | None = None
     seed: int | None = None
+    # Whether the model supports thinking/reasoning params (reasoning_effort).
+    # None = auto-detect from model name; True/False = manual override in config.
+    supports_thinking: bool | None = None
 
     @field_validator("temperature", mode="before")
     @classmethod
@@ -129,9 +136,10 @@ class ModelProfile(BaseModel):
             return {"ask": value, "plan": value, "code": value, "review": value, "debug": value}
         return v
 
-    def inference_kwargs(self, mode: str = "ask") -> dict[str, Any]:
+    def inference_kwargs(self, mode: str = "ask", thinking_effort: str = "off") -> dict[str, Any]:
         """Return inference params for a given mode. Temperature is per-mode;
-        top_p / frequency_penalty / seed are shared."""
+        top_p / frequency_penalty / seed are shared. When thinking_effort is
+        not "off" and the profile supports thinking, reasoning_effort is added."""
         result: dict[str, Any] = {
             "temperature": self.temperature.for_mode(mode),
             "top_p": self.top_p,
@@ -140,6 +148,11 @@ class ModelProfile(BaseModel):
             result["frequency_penalty"] = self.frequency_penalty
         if self.seed is not None:
             result["seed"] = self.seed
+        effective_thinking = self.supports_thinking
+        if effective_thinking is None:
+            effective_thinking = detect_supports_thinking(self.model)
+        if thinking_effort != "off" and effective_thinking:
+            result["reasoning_effort"] = thinking_effort
         return result
 
     def provider_base_url(self) -> str:
@@ -155,6 +168,19 @@ class ModelProfile(BaseModel):
         }
         var = env_map.get(self.provider, "LLM_API_KEY")
         return os.environ.get(var, "lm-studio")
+
+
+# Model name substrings known to support reasoning_effort / thinking params.
+# Checked when ModelProfile.supports_thinking is None (auto-detect mode).
+_THINKING_MODEL_PATTERNS: frozenset[str] = frozenset(
+    {"o1", "o3", "qwq", "deepseek-r1", "claude-3-7"}
+)
+
+
+def detect_supports_thinking(model_name: str) -> bool:
+    """True if model_name matches a known thinking-capable pattern."""
+    lower = model_name.lower()
+    return any(p in lower for p in _THINKING_MODEL_PATTERNS)
 
 
 # Sentinels that trigger model auto-detect from the provider's /v1/models

@@ -1104,7 +1104,9 @@ class StepAgent:
             full = ""
             round_tool_calls: list[NativeToolCall] = []
             async for chunk in self._llm.stream(
-                messages, tools=self._tool_schemas(), **profile.inference_kwargs(mode)
+                messages,
+                tools=self._tool_schemas(),
+                **profile.inference_kwargs(mode, self._config.agent.thinking_effort),
             ):
                 if chunk.text:
                     full += chunk.text
