@@ -9,12 +9,16 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+
 from code_scalpel.recipes import (
     Recipe,
     discover_recipes,
     eager_recipes,
     format_recipes_block,
+    lazy_recipes_for,
     parse_recipe,
+    recipes_for_turn,
 )
 
 
@@ -140,3 +144,196 @@ def test_format_recipes_block_renders_bodies() -> None:
 def test_format_recipes_block_empty_for_no_recipes() -> None:
     """Empty list → empty string. Caller does `if block:` to skip."""
     assert format_recipes_block([]) == ""
+
+
+# ── lazy / multi-dir ─────────────────────────────────────────────────────────
+
+
+@pytest.fixture
+def isolated_dirs(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> tuple[Path, Path, Path]:
+    """Three real directories with no shared state — project, user, built-in.
+    User HOME and the bundled-recipes path are both redirected so a real
+    install can't leak in from the developer's actual home directory."""
+    project = tmp_path / "project"
+    user = tmp_path / "user_home"
+    builtin = tmp_path / "package_recipes"
+    for d in (project, user, builtin):
+        d.mkdir()
+    monkeypatch.setenv("HOME", str(user))
+    monkeypatch.setattr("code_scalpel.recipes._builtin_recipes_dir", lambda: builtin)
+    return project, user, builtin
+
+
+def _write_recipe(dir_path: Path, filename: str, body: str) -> None:
+    """Write `body` to `dir_path/<filename>`, creating subdirs as needed."""
+    target = dir_path / filename
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text(body)
+
+
+def test_lazy_recipe_surfaces_on_keyword_hit(tmp_path: Path) -> None:
+    """A `load: lazy` recipe with `keywords: [redis]` shows up only when
+    the task mentions redis."""
+    _write_recipe(
+        tmp_path / ".code-scalpel" / "recipes",
+        "redis.md",
+        "---\nname: redis\nload: lazy\nkeywords: [redis, cache]\n---\n\n# redis\n- SET\n",
+    )
+
+    hits = lazy_recipes_for(tmp_path, "how do I use redis here?")
+    assert [r.name for r in hits] == ["redis"]
+
+
+def test_lazy_recipe_case_insensitive(tmp_path: Path) -> None:
+    """Substring match is case-insensitive — `Redis`, `REDIS`, `redis-py`
+    all trigger a `keywords: [redis]` recipe."""
+    _write_recipe(
+        tmp_path / ".code-scalpel" / "recipes",
+        "redis.md",
+        "---\nname: redis\nload: lazy\nkeywords: [redis]\n---\n\n# r\n",
+    )
+
+    assert lazy_recipes_for(tmp_path, "using Redis here") == lazy_recipes_for(
+        tmp_path, "using REDIS here"
+    )
+    assert lazy_recipes_for(tmp_path, "redis-py setup") != []
+
+
+def test_lazy_recipe_skipped_on_no_keyword_hit(tmp_path: Path) -> None:
+    """No match → no surface. The whole point of lazy is to keep
+    irrelevant recipes out of the prompt."""
+    _write_recipe(
+        tmp_path / ".code-scalpel" / "recipes",
+        "redis.md",
+        "---\nname: redis\nload: lazy\nkeywords: [redis]\n---\n\n# r\n",
+    )
+    assert lazy_recipes_for(tmp_path, "what does pytest do?") == []
+
+
+def test_lazy_recipe_with_no_keywords_never_surfaces(tmp_path: Path) -> None:
+    """`load: lazy` with empty `keywords` is a no-op — nothing to match
+    against. Validates that we don't accidentally fall through to a
+    keyword-less catch-all."""
+    _write_recipe(
+        tmp_path / ".code-scalpel" / "recipes",
+        "x.md",
+        "---\nname: x\nload: lazy\n---\n\n# x\n",
+    )
+    assert lazy_recipes_for(tmp_path, "anything goes here redis") == []
+
+
+def test_eager_recipes_ignored_by_lazy_lookup(tmp_path: Path) -> None:
+    """`eager_recipes` and `lazy_recipes_for` are disjoint — an
+    eager recipe never shows up in the lazy lookup even if its
+    body contains keyword-like text."""
+    _write_recipe(
+        tmp_path / ".code-scalpel" / "recipes",
+        "redis.md",
+        "---\nname: redis\nload: eager\nkeywords: [redis]\n---\n\n# r\n",
+    )
+    assert lazy_recipes_for(tmp_path, "redis here") == []
+    assert [r.name for r in eager_recipes(tmp_path)] == ["redis"]
+
+
+def test_recipes_for_turn_combines_eager_and_lazy_match(tmp_path: Path) -> None:
+    """`recipes_for_turn` is what `_user_message` calls — must
+    return eager (always) + lazy hits, deduped by name, sorted."""
+    _write_recipe(
+        tmp_path / ".code-scalpel" / "recipes",
+        "python.md",
+        "---\nname: python\nload: eager\n---\n\n# python\n",
+    )
+    _write_recipe(
+        tmp_path / ".code-scalpel" / "recipes",
+        "redis.md",
+        "---\nname: redis\nload: lazy\nkeywords: [redis]\n---\n\n# r\n",
+    )
+    _write_recipe(
+        tmp_path / ".code-scalpel" / "recipes",
+        "k8s.md",
+        "---\nname: k8s\nload: lazy\nkeywords: [kubernetes, kubectl]\n---\n\n# k\n",
+    )
+
+    # Task mentions redis only → python (eager) + redis (lazy).
+    names = [r.name for r in recipes_for_turn(tmp_path, "set up redis caching")]
+    assert names == ["python", "redis"]
+
+    # Task mentions kubectl → python (eager) + k8s (lazy).
+    names = [r.name for r in recipes_for_turn(tmp_path, "kubectl apply")]
+    assert names == ["k8s", "python"]
+
+
+def test_discover_merges_all_three_dirs(
+    isolated_dirs: tuple[Path, Path, Path],
+) -> None:
+    """Recipes from project, user (~/.config/code-scalpel/recipes/), and
+    built-in (bundled in package) all surface in `discover_recipes`."""
+    project, user, builtin = isolated_dirs
+    _write_recipe(
+        project / ".code-scalpel" / "recipes",
+        "proj.md",
+        "---\nname: proj\n---\n\n# p\n",
+    )
+    _write_recipe(
+        user / ".config" / "code-scalpel" / "recipes",
+        "usr.md",
+        "---\nname: usr\n---\n\n# u\n",
+    )
+    _write_recipe(builtin, "builtin.md", "---\nname: builtin\n---\n\n# b\n")
+
+    names = [r.name for r in discover_recipes(project)]
+    assert names == ["builtin", "proj", "usr"]
+
+
+def test_project_wins_over_user_and_builtin_on_name_collision(
+    isolated_dirs: tuple[Path, Path, Path],
+) -> None:
+    """Same `name:` in two dirs → highest-priority wins (project >
+    user > built-in). User customises a built-in by writing
+    their own; project overrides both."""
+    project, user, builtin = isolated_dirs
+    _write_recipe(
+        project / ".code-scalpel" / "recipes",
+        "python.md",
+        "---\nname: python\n---\n\n# project version\n",
+    )
+    _write_recipe(
+        user / ".config" / "code-scalpel" / "recipes",
+        "python.md",
+        "---\nname: python\n---\n\n# user version\n",
+    )
+    _write_recipe(builtin, "python.md", "---\nname: python\n---\n\n# builtin version\n")
+
+    recipes = discover_recipes(project)
+    assert len(recipes) == 1
+    assert recipes[0].name == "python"
+    assert "project version" in recipes[0].body
+    assert "user version" not in recipes[0].body
+    assert "builtin version" not in recipes[0].body
+
+
+def test_user_wins_over_builtin_when_no_project_override(
+    isolated_dirs: tuple[Path, Path, Path],
+) -> None:
+    """No project override → user wins over built-in. Lets a user
+    silently customise a bundled recipe."""
+    project, user, builtin = isolated_dirs
+    _write_recipe(
+        user / ".config" / "code-scalpel" / "recipes",
+        "python.md",
+        "---\nname: python\n---\n\n# user version\n",
+    )
+    _write_recipe(builtin, "python.md", "---\nname: python\n---\n\n# builtin version\n")
+
+    recipes = discover_recipes(project)
+    assert "user version" in recipes[0].body
+
+
+def test_format_recipes_block_drops_dir_specific_header() -> None:
+    """Header no longer mentions `.code-scalpel/recipes/` because
+    recipes can come from any of three dirs now. Generic label
+    is the contract."""
+    recipes = [Recipe(name="x", load="eager", body="# x\n")]
+    block = format_recipes_block(recipes)
+    assert "Loaded recipes:" in block
+    assert ".code-scalpel" not in block

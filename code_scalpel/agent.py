@@ -1237,10 +1237,10 @@ class StepAgent:
         that mistake — recipes and recall both stay quiet by default
         (zero output when no recipe / no recall hit).
         """
-        from code_scalpel.recipes import eager_recipes, format_recipes_block
+        from code_scalpel.recipes import format_recipes_block, recipes_for_turn
 
         try:
-            recipes_block = format_recipes_block(eager_recipes(self._cwd))
+            recipes_block = format_recipes_block(recipes_for_turn(self._cwd, task))
         except Exception:
             # Recipe loading is best-effort: a syntax error in one file
             # must NOT break the turn. discover_recipes already swallows
