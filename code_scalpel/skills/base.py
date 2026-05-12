@@ -38,10 +38,19 @@ class Skill(ABC):
     Subclasses set `name` and `description` as class attributes and
     implement `detect`, `test_cmd`, `lint_cmd`. `format_cmd` defaults to
     `None` because not every stack ships an opinionated formatter.
+
+    `provides_test_runner` distinguishes **language skills** (Python,
+    JS/TS, Go — own primary test command) from **component skills**
+    (Postgres, SQLite — detect that the stack uses the component, but
+    have no standalone test runner). The registry's
+    `default_runnable_skill` skips non-runnable ones so a
+    Python-with-Postgres project still runs `pytest`, not an empty
+    Postgres test_cmd.
     """
 
     name: str = ""
     description: str = ""
+    provides_test_runner: bool = True
 
     @abstractmethod
     def detect(self, root: Path) -> bool:
