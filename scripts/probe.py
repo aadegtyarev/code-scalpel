@@ -25,6 +25,7 @@ from pathlib import Path
 from code_scalpel.agent import StepAgent
 from code_scalpel.config import AgentConfig, AppConfig, ModelProfile
 from code_scalpel.llm.adapter import OpenAICompatibleAdapter
+from code_scalpel.session import Session
 
 _CONFIG = AppConfig(
     profiles={
@@ -166,9 +167,15 @@ async def run_scenario(sc: Scenario, *, mode: str = "ask") -> tuple[bool, str, l
         model="qwen/qwen2.5-coder-14b",
     )
     agent = StepAgent(llm=llm, cwd=Path("."), config=_CONFIG)
+    # Same Session pipeline the TUI uses — pins language, adds the
+    # "(Reply in X.)" directive. Without this, probe and TUI would
+    # show the model different inputs and we'd be debugging two
+    # different agents.
+    session = Session()
     replies: list[str] = []
     for prompt in sc.turns:
-        result = await agent.ask(prompt, mode=mode)
+        task = session.prepare_turn(prompt)
+        result = await agent.ask(task, mode=mode)
         replies.append(result.reply)
     ok, msg = sc.check(replies)
     return ok, msg, replies

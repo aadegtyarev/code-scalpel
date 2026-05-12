@@ -77,6 +77,15 @@ class Session:
             self.user_language = _detect_language(text)
         return self.user_language
 
+    def prepare_turn(self, task: str) -> str:
+        """Canonical user-input pipeline: pin language from the first turn
+        and append a one-line directive so the model replies in the same
+        language. Every entry point (TUI, probe, bench) MUST go through
+        this — otherwise the model sees different inputs from different
+        channels and we end up debugging phantom behavioural drift."""
+        lang = self.detect_and_pin_language(task)
+        return f"{task}\n\n(Reply in {lang}.)"
+
     def summary_line(self) -> str:
         """One-line stats for footer: tokens · cost · elapsed."""
         mins, secs = divmod(int(self.elapsed_seconds), 60)

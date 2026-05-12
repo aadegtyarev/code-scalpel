@@ -244,9 +244,6 @@ class ScalpelApp(App[None]):
         mode = self._AGENT_MODES[self._mode_index]
         output = self.query_one(OutputLog)
         output.print_user(f"{mode} › {message.text}")
-        if not message.text.startswith("/"):
-            self.session.detect_and_pin_language(message.text)
-
         if message.text.startswith("/"):
             self._handle_slash(message.text.strip())
             return
@@ -256,8 +253,7 @@ class ScalpelApp(App[None]):
             return
 
         self.query_one(StatusFooter).status = "◌ thinking…"
-        lang = self.session.user_language or "English"
-        text = f"{message.text}\n\n(Reply in {lang}.)"
+        text = self.session.prepare_turn(message.text)
         # In code mode with the iterative loop opted in, swap the regular
         # streaming step for the auto apply→test→retry path. The streaming
         # path stays untouched for ask/plan/review so opt-out is a clean
