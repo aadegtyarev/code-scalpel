@@ -53,6 +53,18 @@ class SkillRegistry:
                 return s
         return None
 
+    def default_runnable(self, root: Path) -> Skill | None:
+        """First active skill that owns a test runner. Component-only
+        skills (Postgres, SQLite — `provides_test_runner = False`)
+        detect the stack but don't take over the test path; this lets a
+        Python+Postgres project keep running pytest while still
+        surfacing Postgres in `/skills`.
+        """
+        for s in self._skills:
+            if s.detect(root) and s.provides_test_runner:
+                return s
+        return None
+
     def get(self, name: str) -> Skill | None:
         """Lookup by class-attribute `name`. Returns None if not registered."""
         for s in self._skills:

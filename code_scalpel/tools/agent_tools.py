@@ -634,12 +634,16 @@ async def _tool_run_tests(call: ToolCall, cwd: Path, runner: ShellRunner) -> Too
     hardcoded `pytest -x --tb=short --no-header -q …` so the tool still
     works on bare scratch directories (most tests, demos, fresh clones).
     """
-    from code_scalpel.skills import default_skill
+    from code_scalpel.skills import default_runnable_skill
 
     decoded = _decode_args(call.body)
     raw = str(decoded.get("args", decoded.get("_raw", ""))).strip()
 
-    skill = default_skill(cwd)
+    # `default_runnable_skill` skips component-only skills (Postgres,
+    # SQLite — no own test runner). On a Python+Postgres repo this keeps
+    # `pytest` as the test command rather than letting Postgres steal
+    # the slot with an empty cmd.
+    skill = default_runnable_skill(cwd)
     if skill is not None:
         cmd = skill.test_cmd(raw)
         skill_label = skill.name
