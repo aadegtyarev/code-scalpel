@@ -516,3 +516,84 @@ async def test_map_file_rejects_symlink_escape(tmp_path: Path) -> None:
     result = await execute(call, project)
     assert not result.ok
     assert "inside the project" in result.output
+
+
+# ── shell_exec dispatch ──────────────────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_shell_exec_runs_command_in_yolo(tmp_path: Path) -> None:
+    """yolo level passes every command straight to runner.run_shell."""
+    from code_scalpel.tools.shell import ShellResult
+    from tests.mocks import MockShellRunner
+
+    runner = MockShellRunner([ShellResult("hello world\n", 0)])
+    call = ToolCall(name="shell_exec", body='{"command": "echo hello world"}')
+
+    result = await execute(call, tmp_path, runner=runner, trust="yolo")
+
+    assert result.ok is True
+    assert "exit code: 0" in result.output
+    assert "hello world" in result.output
+    assert runner.shell_calls == ["echo hello world"]
+
+
+@pytest.mark.asyncio
+async def test_shell_exec_refuses_in_skeptic(tmp_path: Path) -> None:
+    """skeptic mode refuses with a pointer at the future confirm UI."""
+    from tests.mocks import MockShellRunner
+
+    runner = MockShellRunner()
+    call = ToolCall(name="shell_exec", body='{"command": "ls -la"}')
+
+    result = await execute(call, tmp_path, runner=runner, trust="skeptic")
+
+    assert result.ok is False
+    assert "refused" in result.output
+    assert "skeptic" in result.output.lower() or "confirm" in result.output.lower()
+    # Runner was NEVER invoked — refusal short-circuits before subprocess.
+    assert runner.shell_calls == []
+
+
+@pytest.mark.asyncio
+async def test_shell_exec_refuses_hard_block_in_optimist(tmp_path: Path) -> None:
+    """optimist runs safe commands but hard-blocks rm -rf / etc."""
+    from tests.mocks import MockShellRunner
+
+    runner = MockShellRunner()
+    call = ToolCall(name="shell_exec", body='{"command": "sudo apt update"}')
+
+    result = await execute(call, tmp_path, runner=runner, trust="optimist")
+
+    assert result.ok is False
+    assert "refused" in result.output
+    assert runner.shell_calls == []
+
+
+@pytest.mark.asyncio
+async def test_shell_exec_empty_command_errors(tmp_path: Path) -> None:
+    from tests.mocks import MockShellRunner
+
+    runner = MockShellRunner()
+    call = ToolCall(name="shell_exec", body='{"command": "   "}')
+
+    result = await execute(call, tmp_path, runner=runner, trust="yolo")
+
+    assert result.ok is False
+    assert "empty" in result.output.lower()
+
+
+@pytest.mark.asyncio
+async def test_shell_exec_truncates_huge_output(tmp_path: Path) -> None:
+    from code_scalpel.tools.shell import ShellResult
+    from tests.mocks import MockShellRunner
+
+    huge = "x" * 10_000
+    runner = MockShellRunner([ShellResult(huge, 0)])
+    call = ToolCall(name="shell_exec", body='{"command": "cat huge.txt"}')
+
+    result = await execute(call, tmp_path, runner=runner, trust="yolo")
+
+    assert "truncated" in result.output
+    # 4000-char cap + framing
+    assert len(result.output) < 4500

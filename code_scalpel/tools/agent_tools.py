@@ -269,6 +269,38 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
     },
 ]
 
+
+# Optional — gated on `agent.trust`. Agent includes this in the tool list
+# only when trust is `optimist` or `yolo` (skeptic awaits the confirmation
+# UI). See `code_scalpel/policy.py` for the level semantics.
+SHELL_EXEC_SCHEMA: dict[str, Any] = {
+    "type": "function",
+    "function": {
+        "name": "shell_exec",
+        "description": (
+            "Run an arbitrary shell command in the project root. Useful for "
+            "mass edits (sed/awk/find) or git plumbing that SEARCH/REPLACE "
+            "would be a waste for. Hard-blocked from rm -rf /, dd of=/dev/*, "
+            "mkfs, sudo, pipe-to-shell, and fork bombs even in optimist mode. "
+            "Returns combined stdout+stderr and the exit code."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "command": {
+                    "type": "string",
+                    "description": (
+                        "Full shell command to run, as it would be typed in "
+                        "a terminal. Quote strings as needed; do NOT prepend "
+                        "`bash -c`."
+                    ),
+                }
+            },
+            "required": ["command"],
+        },
+    },
+}
+
 _TOOL_RE = re.compile(
     r"<TOOL:\s*(?P<name>\w+)\s*>\n"
     r"(?P<body>.*?)\n?"
@@ -309,8 +341,14 @@ async def execute(
     *,
     max_lines: int = 400,
     runner: ShellRunner | None = None,
+    trust: str = "skeptic",
+    shell_exec_timeout: int = 30,
 ) -> ToolResult:
-    """Dispatch a tool call by name. Returns a ToolResult — never raises."""
+    """Dispatch a tool call by name. Returns a ToolResult — never raises.
+
+    `trust` and `shell_exec_timeout` are only consulted for the
+    `shell_exec` path; pass them at the call site to keep dispatch
+    a single boundary."""
     if call.name == "read_file":
         return _tool_read_file(call, cwd, max_lines=max_lines)
     # `project_map` is the unified entry — empty path → tree, path → file
@@ -333,6 +371,14 @@ async def execute(
         return _tool_retrieve(call, cwd)
     if call.name == "run_tests":
         return await _tool_run_tests(call, cwd, runner or AsyncShellRunner())
+    if call.name == "shell_exec":
+        return await _tool_shell_exec(
+            call,
+            cwd,
+            runner or AsyncShellRunner(),
+            trust=trust,
+            timeout=shell_exec_timeout,
+        )
     return ToolResult(
         call=call,
         output=f"error: unknown tool {call.name!r}",
@@ -663,3 +709,71 @@ async def _tool_run_tests(call: ToolCall, cwd: Path, runner: ShellRunner) -> Too
         )
     summary = f"using skill: {skill_label}\nexit code: {result.returncode}\n---\n{text}"
     return ToolResult(call, output=summary, ok=result.returncode == 0)
+
+
+_MAX_SHELL_OUTPUT = 4000
+
+
+async def _tool_shell_exec(
+    call: ToolCall,
+    cwd: Path,
+    runner: ShellRunner,
+    *,
+    trust: str,
+    timeout: int,
+) -> ToolResult:
+    """args: `{command: str}` — arbitrary shell command (pipes, redirects,
+    quoting all work, no `bash -c` wrapping needed).
+
+    Policy: `code_scalpel.policy.decide(command, trust)` is the only
+    gate. `skeptic` refuses with a "manual confirm UI pending" message;
+    `optimist` refuses commands matching the hard-block list (rm -rf /,
+    sudo, dd of=/dev/*, mkfs, pipe-to-shell, fork bomb); `yolo` allows
+    everything.
+
+    Output is truncated to `_MAX_SHELL_OUTPUT` chars with an explicit
+    marker so the model sees the cut. Combined stdout+stderr — same
+    shape as `run_tests`.
+    """
+    from code_scalpel.policy import decide
+
+    decoded = _decode_args(call.body)
+    command = str(decoded.get("command", decoded.get("_raw", ""))).strip()
+    if not command:
+        return ToolResult(call, output="error: empty command", ok=False)
+
+    # `trust` is typed as `str` at the public boundary; the policy module
+    # is typed strictly. cast at the boundary; unknown values get
+    # coerced to "skeptic" inside `decide` for safety.
+    decision = decide(command, trust)  # type: ignore[arg-type]
+    if not decision.allowed:
+        return ToolResult(call, output=f"refused: {decision.reason}", ok=False)
+
+    try:
+        result = await runner.run_shell(command, cwd=str(cwd), timeout=timeout)
+    except TimeoutError:
+        return ToolResult(call, output=f"timeout after {timeout}s", ok=False)
+    except Exception as e:
+        return ToolResult(call, output=f"error: {e}", ok=False)
+
+    text = result.stdout
+    if len(text) > _MAX_SHELL_OUTPUT:
+        text = (
+            text[:_MAX_SHELL_OUTPUT]
+            + f"\n... ({len(text) - _MAX_SHELL_OUTPUT} more bytes truncated)"
+        )
+    summary = f"exit code: {result.returncode}\n---\n{text}"
+    return ToolResult(call, output=summary, ok=result.returncode == 0)
+
+
+# Re-export so the module-level `from code_scalpel.policy import TrustLevel`
+# in tests doesn't have to dig into the policy module separately.
+__all__ = (
+    "SHELL_EXEC_SCHEMA",
+    "TOOL_SCHEMAS",
+    "ToolCall",
+    "ToolResult",
+    "execute",
+    "format_result",
+    "parse_tool_calls",
+)

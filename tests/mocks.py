@@ -74,15 +74,30 @@ class MockLLMAdapter:
 
 
 class MockShellRunner:
-    """Deterministic shell runner for tests."""
+    """Deterministic shell runner for tests.
+
+    Both `run` (argv form) and `run_shell` (string form) draw from the
+    same response queue; tests inspecting which path was called can
+    look at `calls` (argv list) and `shell_calls` (command strings)
+    independently."""
 
     def __init__(self, responses: list[ShellResult] | None = None) -> None:
         self._responses = list(responses or [ShellResult("", 0)])
         self._index = 0
         self.calls: list[list[str]] = []
+        self.shell_calls: list[str] = []
 
     async def run(self, cmd: list[str], cwd: str | None = None, timeout: int = 30) -> ShellResult:
         self.calls.append(cmd)
+        return self._next()
+
+    async def run_shell(
+        self, command: str, cwd: str | None = None, timeout: int = 30
+    ) -> ShellResult:
+        self.shell_calls.append(command)
+        return self._next()
+
+    def _next(self) -> ShellResult:
         resp = self._responses[min(self._index, len(self._responses) - 1)]
         self._index += 1
         return resp

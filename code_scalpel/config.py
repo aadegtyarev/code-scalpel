@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 import httpx
 import yaml
@@ -69,6 +69,18 @@ class AgentConfig(BaseModel):
     # Only the TUI surface is affected — prompts the model sees stay
     # English regardless (weak local models perform better on English).
     ui_locale: str | None = None
+    # How much the user trusts the model to act without per-step
+    # confirmation. One knob covers shell_exec policy AND patch-apply
+    # auto-acceptance, because both questions are "trust the model to
+    # do X autonomously?". See code_scalpel/policy.py for the levels.
+    #   skeptic  — manual confirm on shell_exec and patches (default).
+    #   optimist — auto-run within a hard-block list (no rm -rf /,
+    #              no sudo, no pipe-to-shell, …); patches auto-apply.
+    #   yolo     — autopilot, no filters. Sandbox VMs only.
+    trust: Literal["skeptic", "optimist", "yolo"] = "skeptic"
+    # Hard cap on each shell_exec call. Independent of trust level —
+    # a hung command must not block the agent indefinitely.
+    shell_exec_timeout: int = 30
 
 
 class ModeTemperatures(BaseModel):
