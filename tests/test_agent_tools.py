@@ -539,8 +539,9 @@ async def test_shell_exec_runs_command_in_yolo(tmp_path: Path) -> None:
 
 
 @pytest.mark.asyncio
-async def test_shell_exec_refuses_in_skeptic(tmp_path: Path) -> None:
-    """skeptic mode refuses with a pointer at the future confirm UI."""
+async def test_shell_exec_refuses_in_skeptic_without_callback(tmp_path: Path) -> None:
+    """skeptic + no confirm callback → refused. Probes / bench can't
+    pop a UI; refusal points the user at how to wire one."""
     from tests.mocks import MockShellRunner
 
     runner = MockShellRunner()
@@ -550,8 +551,72 @@ async def test_shell_exec_refuses_in_skeptic(tmp_path: Path) -> None:
 
     assert result.ok is False
     assert "refused" in result.output
-    assert "skeptic" in result.output.lower() or "confirm" in result.output.lower()
-    # Runner was NEVER invoked — refusal short-circuits before subprocess.
+    assert "confirm" in result.output.lower() or "skeptic" in result.output.lower()
+    assert runner.shell_calls == []
+
+
+@pytest.mark.asyncio
+async def test_shell_exec_runs_in_skeptic_when_user_approves(tmp_path: Path) -> None:
+    """skeptic + callback returning True → command runs after confirm."""
+    from code_scalpel.tools.shell import ShellResult
+    from tests.mocks import MockShellRunner
+
+    runner = MockShellRunner([ShellResult("file1\nfile2\n", 0)])
+    call = ToolCall(name="shell_exec", body='{"command": "ls"}')
+    seen: list[str] = []
+
+    async def approve(command: str) -> bool:
+        seen.append(command)
+        return True
+
+    result = await execute(
+        call, tmp_path, runner=runner, trust="skeptic", confirm_shell_exec=approve
+    )
+
+    assert result.ok is True
+    assert seen == ["ls"]
+    assert runner.shell_calls == ["ls"]
+
+
+@pytest.mark.asyncio
+async def test_shell_exec_refuses_in_skeptic_when_user_rejects(tmp_path: Path) -> None:
+    """skeptic + callback returning False → refused with "user rejected"."""
+    from tests.mocks import MockShellRunner
+
+    runner = MockShellRunner()
+    call = ToolCall(name="shell_exec", body='{"command": "ls"}')
+
+    async def reject(command: str) -> bool:
+        return False
+
+    result = await execute(
+        call, tmp_path, runner=runner, trust="skeptic", confirm_shell_exec=reject
+    )
+
+    assert result.ok is False
+    assert "rejected" in result.output.lower()
+    assert runner.shell_calls == []
+
+
+@pytest.mark.asyncio
+async def test_shell_exec_hard_block_short_circuits_confirm(tmp_path: Path) -> None:
+    """`sudo` in skeptic mode is hard-blocked — the callback is NEVER
+    asked because hard blocks fire before requires_confirm."""
+    from tests.mocks import MockShellRunner
+
+    runner = MockShellRunner()
+    call = ToolCall(name="shell_exec", body='{"command": "sudo apt update"}')
+    asked: list[str] = []
+
+    async def track(command: str) -> bool:
+        asked.append(command)
+        return True
+
+    result = await execute(call, tmp_path, runner=runner, trust="skeptic", confirm_shell_exec=track)
+
+    assert result.ok is False
+    assert "privilege" in result.output.lower() or "sudo" in result.output.lower()
+    assert asked == []
     assert runner.shell_calls == []
 
 

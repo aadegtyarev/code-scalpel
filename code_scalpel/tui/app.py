@@ -32,6 +32,7 @@ from code_scalpel.session import Session
 from code_scalpel.state import AgentState
 from code_scalpel.tools.agent_tools import ToolCall, ToolResult
 from code_scalpel.tools.shell import AsyncShellRunner
+from code_scalpel.tui.widgets.cards.shell_exec import ShellExecCard, ShellExecDecision
 from code_scalpel.tui.widgets.cards.tool_call import PatchDecision, ToolCallCard
 from code_scalpel.tui.widgets.footer import StatusFooter
 from code_scalpel.tui.widgets.input import ModeInput, UserMessage
@@ -157,6 +158,13 @@ class ScalpelApp(App[None]):
         # worker that wants to be visible wraps itself in
         # `self.jobs.track(kind, description)`.
         self.jobs = JobRegistry()
+        # Pending shell_exec confirmations — `_confirm_shell_exec`
+        # registers a future per call, `on_shell_exec_decision` resolves
+        # it. Multi-call queueing isn't a real scenario today (one
+        # confirm at a time), but indexing by `card_id` keeps the
+        # resolution unambiguous.
+        self._pending_shell_confirms: dict[int, asyncio.Future[bool]] = {}
+        self._next_shell_card_id: int = 0
 
     # ── compose ───────────────────────────────────────────────────────────────
 
@@ -229,7 +237,11 @@ class ScalpelApp(App[None]):
 
     def _init_agent(self) -> None:
         try:
-            self.runtime = Runtime(cwd=self.cwd, config=self.config)
+            self.runtime = Runtime(
+                cwd=self.cwd,
+                config=self.config,
+                confirm_shell_exec=self._confirm_shell_exec,
+            )
             # Bridge the runtime's quartet to legacy fields so the rest of
             # the TUI keeps using `self._agent`, `self.session`,
             # `self._memory` unchanged. New code should reach through
@@ -1471,6 +1483,55 @@ class ScalpelApp(App[None]):
                 await progress.remove()
         except Exception:
             pass
+
+    # ── shell_exec confirmation ──────────────────────────────────────────────
+
+    async def _confirm_shell_exec(self, command: str) -> bool:
+        """Callback passed to the Runtime — mounts a `ShellExecCard`,
+        awaits the user's [a]/[r] decision, returns True/False.
+
+        Each pending confirm carries a `card_id`; `on_shell_exec_decision`
+        resolves the matching future. Cancellation (Esc on the worker)
+        propagates and rejects the command — equivalent to pressing [r]."""
+        loop = asyncio.get_running_loop()
+        cid = self._next_shell_card_id
+        self._next_shell_card_id += 1
+        fut: asyncio.Future[bool] = loop.create_future()
+        self._pending_shell_confirms[cid] = fut
+
+        card = ShellExecCard(command=command, card_id=cid)
+        try:
+            await self.mount(card, before=self.query_one(ModeInput))
+        except Exception:
+            # Mount failed (TUI shutting down?) — refuse the command
+            # rather than hang waiting for input that'll never come.
+            self._pending_shell_confirms.pop(cid, None)
+            return False
+
+        try:
+            return await fut
+        except asyncio.CancelledError:
+            self._pending_shell_confirms.pop(cid, None)
+            return False
+
+    def on_shell_exec_decision(self, msg: ShellExecDecision) -> None:
+        """Resolve the awaiting future and remove the card."""
+        fut = self._pending_shell_confirms.pop(msg.card_id, None)
+        if fut is not None and not fut.done():
+            fut.set_result(msg.action == "approve")
+        # Remove the card after the brief approved/rejected state has
+        # rendered. We do this in a worker so the click handler returns
+        # promptly.
+        self.run_worker(self._remove_shell_card(msg.card_id), exclusive=False)
+
+    async def _remove_shell_card(self, card_id: int) -> None:
+        from contextlib import suppress
+
+        for card in list(self.query(ShellExecCard)):
+            if card.card_id == card_id:
+                with suppress(Exception):
+                    await card.remove()
+                return
 
     # ── patch decision ────────────────────────────────────────────────────────
 

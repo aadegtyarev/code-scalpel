@@ -7,9 +7,10 @@ review on each step.
 
   • **skeptic** (default) — every shell_exec call AND every patch
     require manual user confirmation in the TUI before running.
-    The shell-exec confirmation UI ships in a follow-up PR; until
-    then `decide()` refuses shell_exec in skeptic with a clear
-    message pointing at the follow-up.
+    `decide()` returns `requires_confirm=True` for non-hard-blocked
+    commands; the dispatch layer awaits a UI callback (the TUI
+    provides one via `ShellExecCard`, headless callers don't and
+    skeptic mode refuses there).
   • **optimist** — shell_exec and patches auto-apply without
     confirmation, EXCEPT for a small hard-block list that refuses
     commands that would genuinely break the host (`rm -rf /`,
@@ -39,12 +40,19 @@ TRUST_LEVELS: tuple[TrustLevel, ...] = ("skeptic", "optimist", "yolo")
 
 @dataclass(frozen=True)
 class Decision:
-    """Result of `decide()` — either allow with no reason, or refuse
-    with a short human-readable reason that surfaces to the model as
-    the tool error and to the user in the OutputLog."""
+    """Result of `decide()` — three shapes:
+
+    • `allowed=True, requires_confirm=False` — run immediately.
+    • `allowed=True, requires_confirm=True` — needs interactive
+      user confirmation before running (skeptic mode for non-
+      hard-blocked commands). The dispatch layer asks the UI;
+      if no UI handler is registered, the command is refused.
+    • `allowed=False` — hard-blocked; reason explains why.
+    """
 
     allowed: bool
     reason: str = ""
+    requires_confirm: bool = False
 
 
 # (regex, reason) pairs. Anchored with `\b` where the keyword should
@@ -93,8 +101,9 @@ _HARD_BLOCKS: tuple[tuple[re.Pattern[str], str], ...] = (
 def decide(command: str, level: TrustLevel) -> Decision:
     """Decide whether a shell command may run at the given trust level.
 
-    - `skeptic` — needs manual UI confirmation; until that UI ships,
-      refuse with a clear "UI pending" message.
+    - `skeptic` — apply hard blocks; otherwise allow contingent on
+      UI confirmation. Caller dispatches `await confirm(command)`;
+      if no handler is registered, the command is refused.
     - `optimist` — refuse only patterns in `_HARD_BLOCKS`.
     - `yolo` — allow unconditionally.
 
@@ -103,22 +112,18 @@ def decide(command: str, level: TrustLevel) -> Decision:
     """
     if level == "yolo":
         return Decision(allowed=True)
+    # skeptic AND optimist both run the hard-block check. The hard
+    # blocks are about commands that would genuinely break the host
+    # (rm -rf /, sudo, mkfs, …); user explicitly approving them in
+    # skeptic mode is destruction-by-typo, not "informed consent".
+    for pattern, reason in _HARD_BLOCKS:
+        if pattern.search(command):
+            return Decision(allowed=False, reason=reason)
     if level == "optimist":
-        for pattern, reason in _HARD_BLOCKS:
-            if pattern.search(command):
-                return Decision(allowed=False, reason=reason)
         return Decision(allowed=True)
-    # skeptic, or anything unknown — needs manual confirm. The
-    # confirmation UI is in the follow-up PR; for now we refuse so the
-    # user gets a visible "next step" rather than a silent autopilot.
-    return Decision(
-        allowed=False,
-        reason=(
-            "shell_exec at trust=skeptic requires manual confirmation. "
-            "The confirmation UI is in the next PR; until then set "
-            "agent.trust to 'optimist' or 'yolo' to use shell_exec."
-        ),
-    )
+    # skeptic, or anything unknown — non-hard-blocked command needs
+    # user confirm. The dispatch layer enforces this via callback.
+    return Decision(allowed=True, requires_confirm=True)
 
 
 def auto_confirm(level: TrustLevel) -> bool:
