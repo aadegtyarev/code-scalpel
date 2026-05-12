@@ -2372,19 +2372,27 @@ configurable policies
   лучше работают на en (это model fact, не UX-выбор). Мигрировано
   пока 1 строка (footer hint) как proof-of-life; полную миграцию
   выкатим отдельными PR'ами под видимые user-facing surface'ы.
-shell_exec tool (deferred 2026-05-12): дать модели доступ к shell для
-  массовых правок (sed/awk/find/grep/git mv) когда SEARCH/REPLACE для
-  каждого файла — пустая трата. Сейчас единственный shell-инструмент
-  это `run_tests`; всё остальное идёт через edit-block + diff dialog.
-  Дилемма: shell мощно, но байпасит ревью diff'а — слабая модель
-  легко дёрнет `sed -i` мимо подтверждения юзера. Решение откладываем
-  до v0.4 потому что нужен sandbox-уровень: whitelist команд
-  (sed/awk/grep/find/git mv/git rm + read-only ls/cat), запрет на
-  `rm -rf`, dry-run preview (модель показывает что выполнит,
-  пользователь подтверждает — как сейчас apply-card), таймаут.
-  Триггер записи: юзер увидел как я через Bash чистил русские строки
-  в TUI и спросил «а наша моделька умеет в sed?» — да, удобно,
-  но не раньше чем у нас есть продуманная гарантия безопасности.
+✓ shell_exec tool + trust levels (2026-05-12, MVP):
+  Однопараметрическая модель доверия `agent.trust: Literal["skeptic",
+  "optimist", "yolo"] = "skeptic"`. Одна ручка покрывает И shell_exec
+  policy И bypass apply-card подтверждения для патчей — оба вопроса
+  про «сколько мы доверяем модели действовать без ревью каждого шага».
+  • `skeptic` (дефолт) — shell_exec в схеме нет (ждёт confirm-UI
+    из следующего PR), apply-card обязательна.
+  • `optimist` — shell_exec доступен, hard-block patterns ловят
+    `rm -rf <abs|home|..>`, `sudo`/`su`/`doas`, `dd of=/dev/*`,
+    `mkfs`/`mkswap`, pipe-to-shell (`... | sh`), fork bomb; патчи
+    auto-apply.
+  • `yolo` — никаких фильтров, всё через `/bin/sh -c`. Sandbox VM only.
+  Модуль `code_scalpel/policy.py` (~120 LOC) с двумя публичными
+  функциями `decide(command, level)` и `auto_confirm(level)`.
+  Tool `shell_exec` ходит через новый `ShellRunner.run_shell(command_str)`
+  (vs `run(cmd: list[str])` для whitelist-команд типа run_tests).
+  TUI bypass'ит apply-card когда `auto_confirm(trust) is True`.
+  Тесты: 32 — policy decisions для каждого уровня, hard-block
+  паттерны (6 регекспов × несколько кейсов), TUI bypass на optimist/
+  yolo, refused-в-skeptic short-circuit без вызова runner'а.
+  Confirm-UI для shell_exec в skeptic — следующий PR.
 ```
 
 ---

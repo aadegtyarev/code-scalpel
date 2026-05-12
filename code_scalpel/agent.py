@@ -23,6 +23,7 @@ from code_scalpel.llm.adapter import ChatResponse, LLMAdapter, NativeToolCall
 from code_scalpel.patch.edit_block import Edit, apply_edits, extract_edits
 from code_scalpel.plan import Task, parse_tasks_md, serialize_tasks
 from code_scalpel.tools.agent_tools import (
+    SHELL_EXEC_SCHEMA,
     TOOL_SCHEMAS,
     ToolCall,
     ToolResult,
@@ -865,7 +866,19 @@ class StepAgent:
             self._cwd,
             max_lines=self._config.agent.max_file_lines,
             runner=self._shell_runner,
+            trust=self._config.agent.trust,
+            shell_exec_timeout=self._config.agent.shell_exec_timeout,
         )
+
+    def _tool_schemas(self) -> list[dict[str, Any]]:
+        """Build the tool list per request — `shell_exec` only ships
+        when trust is `optimist` / `yolo`. `skeptic` doesn't yet have
+        the confirmation UI, so the safest behaviour is to hide the
+        tool entirely from the model (saves it from emitting calls
+        we'd reject every time)."""
+        if self._config.agent.trust in ("optimist", "yolo"):
+            return [*TOOL_SCHEMAS, SHELL_EXEC_SCHEMA]
+        return list(TOOL_SCHEMAS)
 
     def _remember(self, user_msg: str, assistant_msg: str) -> None:
         self._history.append({"role": "user", "content": user_msg})
@@ -1085,7 +1098,7 @@ class StepAgent:
             full = ""
             round_tool_calls: list[NativeToolCall] = []
             async for chunk in self._llm.stream(
-                messages, tools=TOOL_SCHEMAS, **profile.inference_kwargs(mode)
+                messages, tools=self._tool_schemas(), **profile.inference_kwargs(mode)
             ):
                 if chunk.text:
                     full += chunk.text

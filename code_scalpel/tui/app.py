@@ -1035,12 +1035,26 @@ class ScalpelApp(App[None]):
 
             edits = extract_edits(full)
             if edits:
-                await md.remove()
-                card = ToolCallCard("Apply", "")
-                await self.mount(card, before=self.query_one(ModeInput))
-                card.set_reviewing(edits_to_diff(edits, self.cwd))
-                self._pending_edits = edits
-                footer.status = "● reviewing"
+                from code_scalpel.policy import auto_confirm
+
+                if auto_confirm(self.config.agent.trust):
+                    # optimist / yolo — skip the apply-card gate.
+                    await md.remove()
+                    ok, err = apply_edits(edits, self.cwd)
+                    if ok:
+                        output.print_status(
+                            f"● Applied {len(edits)} edit(s) (trust={self.config.agent.trust})."
+                        )
+                    else:
+                        output.print_error(f"Apply failed: {err}")
+                    footer.status = "● idle"
+                else:
+                    await md.remove()
+                    card = ToolCallCard("Apply", "")
+                    await self.mount(card, before=self.query_one(ModeInput))
+                    card.set_reviewing(edits_to_diff(edits, self.cwd))
+                    self._pending_edits = edits
+                    footer.status = "● reviewing"
             elif mode == "plan" and "## T" in full:
                 # Plan mode delivered a structured plan. The natural-language
                 # reply stays as Markdown; we add an inline PlanCard right
