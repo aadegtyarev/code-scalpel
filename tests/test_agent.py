@@ -1679,7 +1679,7 @@ hello()
     original = agent.code_with_retry
     call_count = {"n": 0}
 
-    async def _cancelling_wrapper(task: str, *, mode: str = "code"):  # type: ignore[no-untyped-def]
+    async def _cancelling_wrapper(task: str, *, mode: str = "code", **kw: object):  # type: ignore[no-untyped-def]
         call_count["n"] += 1
         if call_count["n"] == 2:
             raise _asyncio.CancelledError()

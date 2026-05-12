@@ -586,9 +586,9 @@ async def test_slash_tasks_with_no_file_prints_hint(sandbox: Path) -> None:
 
 @pytest.mark.asyncio
 async def test_slash_tasks_mounts_card_when_file_exists(sandbox: Path) -> None:
-    """With TASKS.md present, /tasks mounts a ToolUseCard so the plan is
-    visible without dumping the whole file body into the chat."""
-    from code_scalpel.tui.widgets.tool_use import ToolUseCard
+    """With TASKS.md present, /tasks mounts a PlanCard so the plan is
+    visible inline."""
+    from code_scalpel.tui.widgets.plan_card import PlanCard
 
     tasks_dir = sandbox / ".code-scalpel"
     tasks_dir.mkdir()
@@ -602,15 +602,12 @@ async def test_slash_tasks_mounts_card_when_file_exists(sandbox: Path) -> None:
         output = app.query_one(OutputLog)
 
         app._handle_slash("/tasks")
-        await pilot.pause(0.1)
+        await pilot.pause(0.2)
 
-        cards = list(output.query(ToolUseCard))
-        assert cards, "expected /tasks to mount a ToolUseCard"
-        card = cards[-1]
-        assert card._call.name == "tasks_md"
-        assert "T001" in card._result.output
-        # Ctrl+O target updated so the full file is one keystroke away.
-        assert app._last_tool_result is card._result
+        cards = list(output.query(PlanCard))
+        assert cards, "expected /tasks to mount a PlanCard"
+        task_ids = [t.task_id for t in cards[-1].tasks]
+        assert "T001" in task_ids
 
 
 @pytest.mark.asyncio
@@ -1329,14 +1326,13 @@ async def test_iterative_loop_failure_surfaces_final_diff_for_manual_review(
 
 
 @pytest.mark.asyncio
-async def test_slash_run_with_no_tasks_file_prints_hint(sandbox: Path) -> None:
-    """/run with no TASKS.md must coach the user toward plan mode, not
-    crash and not invoke the agent."""
+async def test_slash_go_without_plan_toggles_retry_loop(sandbox: Path) -> None:
+    """/go with no TASKS.md must toggle the retry loop, not invoke run_plan."""
     from unittest.mock import AsyncMock
 
     config = AppConfig(
         profiles={"local": ModelProfile(provider="lmstudio", model="local-model")},
-        agent=AgentConfig(max_files=0, max_file_lines=10, iterative_patch_loop=True),
+        agent=AgentConfig(max_files=0, max_file_lines=10, iterative_patch_loop=False),
     )
     app = ScalpelApp(config=config, cwd=sandbox)
     async with app.run_test(headless=True, size=(80, 24)) as pilot:
@@ -1349,9 +1345,10 @@ async def test_slash_run_with_no_tasks_file_prints_hint(sandbox: Path) -> None:
         await pilot.pause(0.2)
 
         app._agent.run_plan.assert_not_called()  # type: ignore[attr-defined]
+        assert app.config.agent.iterative_patch_loop is True
         output = app.query_one(OutputLog)
         chat = "\n".join(str(c.render()) for c in output.children if c.id != "_spacer")
-        assert "No plan yet" in chat
+        assert "retry loop" in chat
 
 
 @pytest.mark.asyncio
@@ -1386,8 +1383,10 @@ async def test_slash_run_invokes_run_plan_and_renders_status_lines(
         async def _fake_run_plan(
             *,
             stop_after_failures: int = 2,
+            max_tasks: Any = None,
             on_task_start: Any = None,
             on_task_end: Any = None,
+            on_tool_executed: Any = None,
         ) -> RunPlanResult:
             t1 = Task(id="T001", title="First", body="Goal: a", done=False)
             t2 = Task(id="T002", title="Second", body="Goal: b", done=False)
@@ -1410,6 +1409,11 @@ async def test_slash_run_invokes_run_plan_and_renders_status_lines(
         app._agent.run_plan = AsyncMock(side_effect=_fake_run_plan)  # type: ignore[method-assign]
 
         app._handle_slash("/go")
+        await pilot.pause(0.2)
+        # Simulate user choosing "full plan" from the GoModeCard.
+        from code_scalpel.tui.widgets.cards.choice import ChoiceDecision
+
+        app.post_message(ChoiceDecision(card_id=0, chosen_key="p"))
         await pilot.pause(0.5)
 
         app._agent.run_plan.assert_called_once()  # type: ignore[attr-defined]
@@ -1455,6 +1459,10 @@ async def test_slash_run_renders_final_summary(sandbox: Path) -> None:
         app._agent.run_plan = AsyncMock(return_value=result)  # type: ignore[method-assign]
 
         app._handle_slash("/go")
+        await pilot.pause(0.2)
+        from code_scalpel.tui.widgets.cards.choice import ChoiceDecision
+
+        app.post_message(ChoiceDecision(card_id=0, chosen_key="p"))
         await pilot.pause(0.5)
 
         output = app.query_one(OutputLog)
@@ -1495,10 +1503,18 @@ async def test_slash_run_cancellation_routes_through_step_worker(
         app._agent.run_plan = AsyncMock(side_effect=_slow_run_plan)  # type: ignore[method-assign]
 
         app._handle_slash("/go")
-        await pilot.pause(0.1)
+        await pilot.pause(0.2)
+        # Simulate user choosing "full plan" from the GoModeCard.
+        from code_scalpel.tui.widgets.cards.choice import ChoiceDecision
+
+        app.post_message(ChoiceDecision(card_id=0, chosen_key="p"))
+        await pilot.pause(0.2)
         # `_step_worker` must be set — same handle Esc targets.
         worker = getattr(app, "_step_worker", None)
         assert worker is not None
+        # First Esc arms the double-Esc guard; second Esc cancels.
+        await pilot.press("escape")
+        await pilot.pause(0.05)
         await pilot.press("escape")
         await pilot.pause(0.2)
         assert worker.is_cancelled or worker.is_finished
@@ -1566,9 +1582,9 @@ async def test_iterative_loop_streams_first_attempt(sandbox: Path) -> None:
 
 
 @pytest.mark.asyncio
-async def test_loop_slash_toggles_config_flag(sandbox: Path) -> None:
-    """/loop flips iterative_patch_loop on/off and prints the new state —
-    the user's opt-in without editing config.yaml."""
+async def test_go_without_plan_toggles_retry_loop_flag(sandbox: Path) -> None:
+    """/go without a plan flips iterative_patch_loop on/off and prints the
+    new state — the user's opt-in without editing config.yaml."""
     config = AppConfig(
         profiles={"local": ModelProfile(provider="lmstudio", model="local-model")},
         agent=AgentConfig(max_files=0, max_file_lines=10, iterative_patch_loop=False),
@@ -1576,16 +1592,17 @@ async def test_loop_slash_toggles_config_flag(sandbox: Path) -> None:
     app = ScalpelApp(config=config, cwd=sandbox)
     async with app.run_test(headless=True, size=(80, 24)) as pilot:
         await pilot.pause(0.1)
+        _attach_mock(app, _StreamingMock([""]))
         output = app.query_one(OutputLog)
 
         assert app.config.agent.iterative_patch_loop is False
-        app._handle_slash("/loop")
+        app._handle_slash("/go")
         await pilot.pause(0.1)
         assert app.config.agent.iterative_patch_loop is True
         chat = "\n".join(str(c.render()) for c in output.children if c.id != "_spacer")
         assert "on" in chat.lower()
 
-        app._handle_slash("/loop")
+        app._handle_slash("/go")
         await pilot.pause(0.1)
         assert app.config.agent.iterative_patch_loop is False
         chat = "\n".join(str(c.render()) for c in output.children if c.id != "_spacer")
@@ -1752,7 +1769,7 @@ async def test_slash_skills_lists_tools_and_slashes(sandbox: Path) -> None:
         assert "Skills (detected)" in body
         # Slashes section
         assert "Slash commands" in body
-        for slash in ("/new", "/map", "/stats", "/context", "/remember", "/loop", "/go"):
+        for slash in ("/new", "/map", "/stats", "/context", "/remember", "/go"):
             assert slash in body
         # Trailing note about pluggable skills
         assert "register_skill" in body

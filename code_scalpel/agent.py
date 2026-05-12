@@ -315,6 +315,10 @@ class StepResult:
     # Empty for non-retry paths (regular ask / first-shot success). Populated
     # by code_with_retry so the TUI can show patch+test history.
     attempts: tuple[PatchAttempt, ...] = ()
+    # All tool calls fired during this turn (read-only + mutating alike).
+    # Used by _classify_outcome to detect shell_exec-based work that left
+    # no SEARCH/REPLACE trace in the text reply.
+    tool_results: tuple[ToolExecuted, ...] = ()
 
     @property
     def patch(self) -> list[Edit] | None:
@@ -346,6 +350,7 @@ class RunPlanResult:
     `stopped_reason` reflects WHY the loop stopped:
       - "all_done"      — every non-done task completed (or was skipped)
       - "max_failures"  — N consecutive task failures hit the cap
+      - "max_tasks"     — max_tasks limit reached (e.g. "next task" mode)
       - "cancelled"     — user pressed Esc; partial progress on disk
       - "plan_modified" — TASKS.md hash changed mid-run (user editor race)
       - "no_tasks"      — file missing or empty; nothing to do
@@ -465,21 +470,33 @@ def _build_task_prompt(task: Task) -> str:
     return "\n\n".join(parts)
 
 
+# Tools that indicate real work was done (files created/modified or
+# commands executed). Read-only tools (read_file, grep, project_map …)
+# are intentionally absent — they don't change the workspace.
+_MUTATING_TOOLS = frozenset({"shell_exec"})
+
+
 def _classify_outcome(task: Task, step_result: StepResult) -> TaskOutcome:
     """Decide done / failed / skipped from a `code_with_retry` return.
 
-    - No attempts AND no edits  → model answered in plain text. The
-      planner asked for a patch; if no patch came out, this task was
-      a no-op (model decided nothing needs changing, or asked a
-      clarifying question). Mark "skipped" — neither a win nor a
-      retry-worthy failure.
+    - No attempts AND no edits AND no mutating tool calls → model
+      answered in plain text without touching the workspace. Mark
+      "skipped".
+    - No attempts AND no edits BUT successful shell_exec calls → model
+      used shell commands to create/modify files instead of
+      SEARCH/REPLACE blocks. Trust that and mark "done".
     - Attempts present, last one passed tests → "done".
     - Attempts present, last one did not pass → "failed". The workspace
       was rolled back by code_with_retry itself; we keep going.
     """
     attempts = step_result.attempts
     if not attempts:
-        return TaskOutcome(task=task, step_result=step_result, status="skipped")
+        has_exec = any(
+            r.call.name in _MUTATING_TOOLS and r.result.ok
+            for r in step_result.tool_results
+        )
+        status = "done" if has_exec else "skipped"
+        return TaskOutcome(task=task, step_result=step_result, status=status)
     if attempts[-1].tests_passed:
         return TaskOutcome(task=task, step_result=step_result, status="done")
     return TaskOutcome(task=task, step_result=step_result, status="failed")
@@ -553,7 +570,13 @@ class StepAgent:
         public hook for handing it over. Pass None to detach."""
         self._memory = store
 
-    async def ask(self, task: str, *, mode: str = "ask") -> StepResult:
+    async def ask(
+        self,
+        task: str,
+        *,
+        mode: str = "ask",
+        on_tool_executed: Callable[[ToolCall, ToolResult], None] | None = None,
+    ) -> StepResult:
         """Non-streaming entrypoint — collects `stream_ask` into a StepResult.
 
         Both the streaming TUI and the non-streaming callers (probe, bench,
@@ -561,12 +584,23 @@ class StepAgent:
         tool-result compression and usage tracking live in `stream_ask` and
         apply uniformly regardless of who's listening for chunks. The plan-
         saving side-effect is handled inside `stream_ask`; we don't repeat
-        it here."""
+        it here.
+
+        `on_tool_executed` fires synchronously for every tool call that
+        resolves during this turn — lets callers (e.g. `_run_plan` in the
+        TUI) surface tool cards in real-time rather than waiting for the
+        whole turn to finish."""
         reply_parts: list[str] = []
+        tool_results: list[ToolExecuted] = []
         usage: UsageReport | None = None
         async for item in self.stream_ask(task, mode=mode):
             if isinstance(item, TextDelta):
                 reply_parts.append(item.text)
+            elif isinstance(item, ToolExecuted):
+                tool_results.append(item)
+                if on_tool_executed is not None:
+                    with suppress(Exception):
+                        on_tool_executed(item.call, item.result)
             elif isinstance(item, RetryNotice):
                 # HOOK fired — discard the first attempt's text and keep
                 # only what the retry produces. This matches how the
@@ -583,9 +617,20 @@ class StepAgent:
             completion_tokens=usage.completion_tokens if usage is not None else 0,
             cost=None,
         )
-        return StepResult(reply=reply, edits=edits, response=response)
+        return StepResult(
+            reply=reply,
+            edits=edits,
+            response=response,
+            tool_results=tuple(tool_results),
+        )
 
-    async def code_with_retry(self, task: str, *, mode: str = "code") -> StepResult:
+    async def code_with_retry(
+        self,
+        task: str,
+        *,
+        mode: str = "code",
+        on_tool_executed: Callable[[ToolCall, ToolResult], None] | None = None,
+    ) -> StepResult:
         """Iterative patch loop: ask the model, apply, run tests, retry on failure.
 
         Up to ``agent.max_debug_attempts`` retries (in addition to the initial
@@ -605,7 +650,7 @@ class StepAgent:
         on the method unconditionally without surprising existing users.
         """
         if not self._config.agent.iterative_patch_loop:
-            return await self.ask(task, mode=mode)
+            return await self.ask(task, mode=mode, on_tool_executed=on_tool_executed)
 
         max_retries = max(0, self._config.agent.max_debug_attempts)
         attempts: list[PatchAttempt] = []
@@ -633,7 +678,7 @@ class StepAgent:
         # Initial attempt + up to max_retries retries.
         last_result: StepResult | None = None
         for i in range(max_retries + 1):
-            result = await self.ask(prompt, mode=mode)
+            result = await self.ask(prompt, mode=mode, on_tool_executed=on_tool_executed)
             last_result = result
             if not result.edits:
                 # Plain text — model decided no patch is needed (or asked a
@@ -716,8 +761,10 @@ class StepAgent:
         self,
         *,
         stop_after_failures: int = 2,
+        max_tasks: int | None = None,
         on_task_start: Callable[[Task], None] | None = None,
         on_task_end: Callable[[TaskOutcome], None] | None = None,
+        on_tool_executed: Callable[[ToolCall, ToolResult], None] | None = None,
     ) -> RunPlanResult:
         """Walk `.code-scalpel/TASKS.md` and execute each non-done task
         through `code_with_retry`. Marks completed tasks `[✓]` in the
@@ -780,7 +827,9 @@ class StepAgent:
 
             prompt = _build_task_prompt(task)
             try:
-                step_result = await self.code_with_retry(prompt, mode="code")
+                step_result = await self.code_with_retry(
+                    prompt, mode="code", on_tool_executed=on_tool_executed
+                )
             except Exception:
                 # Surface to the caller — cancellation propagates,
                 # arbitrary failures stop the loop with a record.
@@ -810,6 +859,10 @@ class StepAgent:
                 # "skipped" — model decided no patch needed. Doesn't
                 # count toward failure budget; we move on.
                 consecutive_failures = 0
+
+            if max_tasks is not None and len(outcomes) >= max_tasks:
+                stopped_reason = "max_tasks"
+                break
 
         completed = sum(1 for o in outcomes if o.status == "done")
         return RunPlanResult(

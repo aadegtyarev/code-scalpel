@@ -37,6 +37,7 @@ from code_scalpel.session import Session
 from code_scalpel.state import AgentState
 from code_scalpel.tools.agent_tools import ToolCall, ToolResult
 from code_scalpel.tools.shell import AsyncShellRunner
+from code_scalpel.tui.widgets.cards.choice import ChoiceCard, ChoiceDecision, ChoiceOption
 from code_scalpel.tui.widgets.cards.shell_exec import ShellExecCard, ShellExecDecision
 from code_scalpel.tui.widgets.cards.tool_call import PatchDecision, ToolCallCard
 from code_scalpel.tui.widgets.footer import StatusFooter
@@ -75,8 +76,7 @@ _SLASH_COMMANDS: list[tuple[str, str]] = [
     ("/skills", "list available tools and slash commands"),
     ("/remember", "save a project note (e.g. /remember always run linter)"),
     ("/recall", "browse stored notes; with text — search them"),
-    ("/loop", "toggle code-mode iterative patch loop (apply → test → retry)"),
-    ("/go", "walk TASKS.md unattended — one task at a time, stop on N failures"),
+    ("/go", "run plan: next task / full plan / manual retry loop — picks mode via card"),
     (
         "/learn",
         "generate a recipe markdown (.code-scalpel/recipes/<name>.md); /learn skill <name> for a skill",
@@ -174,6 +174,9 @@ class ScalpelApp(App[None]):
         # resolution unambiguous.
         self._pending_shell_confirms: dict[int, asyncio.Future[bool]] = {}
         self._next_shell_card_id: int = 0
+        self._next_go_card_id: int = 0
+        # Double-Esc guard: first Esc arms, second cancels. Timer resets arm.
+        self._esc_armed: bool = False
 
     # ── compose ───────────────────────────────────────────────────────────────
 
@@ -202,6 +205,7 @@ class ScalpelApp(App[None]):
         self.query_one(ModeInput).focus_input()
         self._update_footer()
         self._init_agent()
+        self._show_startup_context()
         self._show_resume_notice()
         self.run_worker(self._detect_context(), exclusive=False)
 
@@ -229,6 +233,30 @@ class ScalpelApp(App[None]):
         self._exit_summary = "Session summary:\n" + report
 
     _exit_summary: str | None = None
+
+    def _show_startup_context(self) -> None:
+        """Print working directory and plan status to chat on startup."""
+        from code_scalpel.i18n import t
+        from code_scalpel.plan import parse_tasks_md
+
+        output = self.query_one(OutputLog)
+        output.print_status(t("startup.working_dir", path=self.cwd))
+
+        tasks_path = self.cwd / ".code-scalpel" / "TASKS.md"
+        if tasks_path.is_file():
+            try:
+                tasks = parse_tasks_md(tasks_path.read_text())
+                pending = sum(1 for task in tasks if not task.done)
+                if pending:
+                    output.print_status(t("startup.plan_found", pending=pending))
+                    from code_scalpel.tui.widgets.plan_card import PlanCard
+
+                    plan_card = PlanCard.from_tasks_md(tasks_path.read_text(), collapsed=True)
+                    output.run_worker(output._append(plan_card), exclusive=False)
+                elif tasks:
+                    output.print_status(t("startup.plan_done"))
+            except Exception:
+                pass
 
     def _show_resume_notice(self) -> None:
         """If STATE.json reports an interrupted session, surface that inline so
@@ -437,10 +465,10 @@ class ScalpelApp(App[None]):
         except OSError as e:
             output.print_error(f"TASKS.md read failed: {e}")
             return
-        call = ToolCall(name="tasks_md", body="")
-        result = ToolResult(call=call, output=text, ok=True)
-        output.add_tool_use(call, result)
-        self._last_tool_result = result
+        from code_scalpel.tui.widgets.plan_card import PlanCard
+
+        plan_card = PlanCard.from_tasks_md(text)
+        output.run_worker(output._append(plan_card), exclusive=False)
 
     def _do_context(self) -> None:
         """Render a context-budget breakdown by category. Reads the
@@ -722,8 +750,24 @@ class ScalpelApp(App[None]):
             self.query_one(ModeInput).focus_input()
             return
         w = getattr(self, "_step_worker", None)
-        if w is not None and not w.is_finished:
-            w.cancel()
+        if w is None or w.is_finished:
+            self._esc_armed = False
+            return
+        footer = self.query_one(StatusFooter)
+        if not self._esc_armed:
+            self._esc_armed = True
+            footer.status = "⚠ ESC ещё раз — отменить задачу"
+            self.set_timer(2.0, self._disarm_esc)
+            return
+        self._esc_armed = False
+        footer.status = ""
+        w.cancel()
+
+    def _disarm_esc(self) -> None:
+        self._esc_armed = False
+        footer = self.query_one(StatusFooter)
+        if "ESC ещё раз" in (footer.status or ""):
+            footer.status = ""
 
     def action_show_last_tool_result(self) -> None:
         """Ctrl+O: open the most recent tool result in a modal with full
@@ -749,8 +793,8 @@ class ScalpelApp(App[None]):
         collide with the input's standard "abort" semantics."""
         from code_scalpel.clipboard import copy_to_system_clipboard
 
-        card = self._focused_card()
-        if card is None:
+        focused = self._focused_card()
+        if not isinstance(focused, ToolUseCard):
             self.notify(
                 "Focus a tool card first (Ctrl+↑/↓) before pressing Ctrl+Y.",
                 title="Copy",
@@ -758,7 +802,7 @@ class ScalpelApp(App[None]):
                 timeout=2,
             )
             return
-        text = card._result.output or ""
+        text = focused._result.output or ""
         if not text:
             self.notify("Card output is empty.", title="Copy", timeout=2)
             return
@@ -793,18 +837,25 @@ class ScalpelApp(App[None]):
         input, mirroring how HistoryInput's ↓-past-newest restores draft."""
         self._step_card(+1)
 
-    def _list_tool_cards(self) -> list[ToolUseCard]:
-        return list(self.query_one(OutputLog).query(ToolUseCard))
+    def _list_tool_cards(self) -> list[ToolUseCard | ChoiceCard]:
+        # ToolUseCards (older, higher up) come first; pending ChoiceCards
+        # (visually closest to the input) come last so Ctrl+↑ hits them first.
+        tool_cards: list[ToolUseCard | ChoiceCard] = list(
+            self.query_one(OutputLog).query(ToolUseCard)
+        )
+        choice_cards: list[ToolUseCard | ChoiceCard] = [
+            c for c in self.query(ChoiceCard) if c._state == "awaiting"
+        ]
+        return tool_cards + choice_cards
 
-    def _focused_card(self) -> ToolUseCard | None:
-        """Return the ToolUseCard containing the currently-focused widget,
-        or None if focus is elsewhere (input, footer, modal)."""
+    def _focused_card(self) -> ToolUseCard | ChoiceCard | None:
+        """Return the focused card (ToolUseCard or ChoiceCard), or None."""
         focused = self.focused
         if focused is None:
             return None
         node: Any = focused
         while node is not None:
-            if isinstance(node, ToolUseCard):
+            if isinstance(node, (ToolUseCard, ChoiceCard)):
                 return node
             node = getattr(node, "parent", None)
         return None
@@ -818,7 +869,11 @@ class ScalpelApp(App[None]):
             # Coming from input. ↑ enters at the newest card; ↓ does
             # nothing — no "next" exists below the input.
             if direction < 0:
-                cards[-1].focus_card()
+                last = cards[-1]
+                if isinstance(last, ChoiceCard):
+                    last.focus()
+                else:
+                    last.focus_card()
             return
         idx = cards.index(current)
         new_idx = idx + direction
@@ -828,7 +883,11 @@ class ScalpelApp(App[None]):
             # Stepped past the newest card → drop focus back into the input.
             self.query_one(ModeInput).focus_input()
             return
-        cards[new_idx].focus_card()
+        target = cards[new_idx]
+        if isinstance(target, ChoiceCard):
+            target.focus()
+        else:
+            target.focus_card()
 
     def on_key(self, event: events.Key) -> None:
         """textual-autocomplete sometimes swallows Escape even when its
@@ -901,26 +960,11 @@ class ScalpelApp(App[None]):
                 return
             tasks_path = self.cwd / ".code-scalpel" / "TASKS.md"
             if not tasks_path.is_file():
-                output.print_status(
-                    "● No plan yet. Switch to plan mode and ask for a breakdown first."
-                )
+                # No plan — toggle retry loop and return to input.
+                self._toggle_retry_loop()
                 return
-            # Same worker plumbing as a regular turn so Esc cancels via
-            # `_step_worker` and JobsBar tracks the run in real time.
-            self.call_after_refresh(
-                lambda: setattr(
-                    self,
-                    "_step_worker",
-                    self.run_worker(self._run_plan(), exclusive=True, group="step"),
-                )
-            )
-            return
-        if cmd == "/loop":
-            # Flip the iterative patch loop on/off without editing config —
-            # this is the user's opt-in for code-mode auto apply→test→retry.
-            self.config.agent.iterative_patch_loop = not self.config.agent.iterative_patch_loop
-            state = "on" if self.config.agent.iterative_patch_loop else "off"
-            output.print_status(f"● Iterative patch loop: {state}")
+            # Plan exists — show mode-selection card.
+            self.call_after_refresh(lambda: self.run_worker(self._mount_go_card(), exclusive=False))
             return
         if cmd == "/learn" or cmd.startswith("/learn "):
             # /learn <name>          — recipe (default)
@@ -1348,7 +1392,7 @@ class ScalpelApp(App[None]):
             full,
         )
 
-    async def _run_plan(self) -> None:
+    async def _run_plan(self, *, max_tasks: int | None = None) -> None:
         """Walk `.code-scalpel/TASKS.md` unattended through code_with_retry.
 
         Per-task inline rendering: a "● Running T00N: <title>" status
@@ -1373,6 +1417,10 @@ class ScalpelApp(App[None]):
             def _start(task: Any) -> None:
                 output.print_status(f"● Running {task.id}: {task.title}")
 
+            def _on_tool(call: ToolCall, result: ToolResult) -> None:
+                output.add_tool_use(call, result)
+                self._last_tool_result = result
+
             def _end(outcome: Any) -> None:
                 step_result = outcome.step_result
                 attempts = step_result.attempts if step_result is not None else ()
@@ -1390,7 +1438,12 @@ class ScalpelApp(App[None]):
                 output.print_status(f"  {outcome.task.id} {verdict}")
 
             try:
-                result = await self._agent.run_plan(on_task_start=_start, on_task_end=_end)
+                result = await self._agent.run_plan(
+                    max_tasks=max_tasks,
+                    on_task_start=_start,
+                    on_task_end=_end,
+                    on_tool_executed=_on_tool,
+                )
             except asyncio.CancelledError:
                 output.print_status("● Cancelled.")
                 footer.status = ""
@@ -1520,6 +1573,7 @@ class ScalpelApp(App[None]):
         card = ShellExecCard(command=command, card_id=cid)
         try:
             await self.mount(card, before=self.query_one(ModeInput))
+            self.call_after_refresh(card.focus)
         except Exception:
             # Mount failed (TUI shutting down?) — refuse the command
             # rather than hang waiting for input that'll never come.
@@ -1530,7 +1584,8 @@ class ScalpelApp(App[None]):
             return await fut
         except asyncio.CancelledError:
             self._pending_shell_confirms.pop(cid, None)
-            return False
+            self.run_worker(self._remove_shell_card(cid), exclusive=False)
+            raise
 
     def on_shell_exec_decision(self, msg: ShellExecDecision) -> None:
         """Resolve the awaiting future and remove the card."""
@@ -1550,6 +1605,75 @@ class ScalpelApp(App[None]):
                 with suppress(Exception):
                     await card.remove()
                 return
+
+    # ── /go mode card ─────────────────────────────────────────────────────────
+
+    _GO_OPTIONS = [
+        ChoiceOption("t", "next task", "run next TASKS.md step with retries"),
+        ChoiceOption("p", "full plan", "walk all remaining tasks, stop on N failures"),
+        ChoiceOption("m", "manual", "type your own task, plan is unaffected"),
+    ]
+
+    async def _mount_go_card(self) -> None:
+        cid = self._next_go_card_id
+        self._next_go_card_id += 1
+        card = ChoiceCard(title="go", options=self._GO_OPTIONS, card_id=cid)
+        await self.mount(card, before=self.query_one(ModeInput))
+        self.call_after_refresh(card.focus)
+
+    def on_choice_decision(self, msg: ChoiceDecision) -> None:
+        # ShellExecCard handles its own ChoiceDecision and stops it.
+        # Only go-card decisions reach here.
+        output = self.query_one(OutputLog)
+        key = msg.chosen_key
+        self.run_worker(self._remove_choice_card(msg.card_id), exclusive=False)
+        if key == "esc":
+            output.print_status("● go: cancelled")
+            self.query_one(ModeInput).focus_input()
+            return
+        if key in ("p", "t"):
+            self._switch_mode("code")
+        if key == "p":
+            output.print_status("● go: running full plan")
+            self.call_after_refresh(
+                lambda: setattr(
+                    self,
+                    "_step_worker",
+                    self.run_worker(self._run_plan(), exclusive=True, group="step"),
+                )
+            )
+        elif key == "t":
+            output.print_status("● go: running next task with retries")
+            self.call_after_refresh(
+                lambda: setattr(
+                    self,
+                    "_step_worker",
+                    self.run_worker(self._run_plan(max_tasks=1), exclusive=True, group="step"),
+                )
+            )
+        elif key == "m":
+            self._toggle_retry_loop(from_go_card=True)
+
+    async def _remove_choice_card(self, card_id: int) -> None:
+        from contextlib import suppress
+
+        for card in list(self.query(ChoiceCard)):
+            if card.card_id == card_id and not isinstance(card, ShellExecCard):
+                with suppress(Exception):
+                    await card.remove()
+                return
+
+    def _toggle_retry_loop(self, *, from_go_card: bool = False) -> None:
+        self.config.agent.iterative_patch_loop = not self.config.agent.iterative_patch_loop
+        on = self.config.agent.iterative_patch_loop
+        self._update_footer()
+        output = self.query_one(OutputLog)
+        if on:
+            output.print_status("● retry loop: on — type your task")
+        else:
+            output.print_status("● retry loop: off")
+        if on or from_go_card:
+            self.query_one(ModeInput).focus_input()
 
     # ── patch decision ────────────────────────────────────────────────────────
 
@@ -1601,6 +1725,13 @@ class ScalpelApp(App[None]):
 
     # ── mode cycling ──────────────────────────────────────────────────────────
 
+    def _switch_mode(self, mode: str) -> None:
+        if mode not in self._AGENT_MODES:
+            return
+        self._mode_index = self._AGENT_MODES.index(mode)
+        self.query_one(ModeInput).set_mode(mode)
+        self._update_footer()
+
     def action_cycle_mode(self) -> None:
         self._mode_index = (self._mode_index + 1) % len(self._AGENT_MODES)
         mode = self._AGENT_MODES[self._mode_index]
@@ -1612,6 +1743,7 @@ class ScalpelApp(App[None]):
         level = self._TRUST_LEVELS[self._trust_index]
         self.config.agent.trust = level  # type: ignore[assignment]
         self._update_footer()
+        self.query_one(OutputLog).print_status(f"● trust: {level} (session-only, resets on exit)")
 
     def action_cycle_thinking(self) -> None:
         if not self._supports_thinking:
@@ -1636,7 +1768,11 @@ class ScalpelApp(App[None]):
         raw = t("footer.hints_default")
         footer.hints = raw.replace("[", r"\[")
 
-        _trust_short = {"skeptic": "[skp]", "optimist": "[opt]", "yolo": "[ylo]"}
+        _trust_short = {
+            "skeptic": t("footer.trust_skeptic"),
+            "optimist": t("footer.trust_optimist"),
+            "yolo": t("footer.trust_yolo"),
+        }
         footer.trust = _trust_short.get(self.config.agent.trust, self.config.agent.trust)
 
         if self._supports_thinking and self.config.agent.thinking_effort != "off":
@@ -1646,6 +1782,7 @@ class ScalpelApp(App[None]):
             )
         else:
             footer.thinking = ""
+        footer.loop = "⟳" if self.config.agent.iterative_patch_loop else ""
 
     def _update_ctx(self) -> None:
         """Refresh the footer's ctx segment from the current Session +
