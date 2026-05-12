@@ -1883,12 +1883,15 @@ project memory + retrieval (BIG, ставит фундамент для всег
   для ручного [a]/[r]/[g] (escape hatch сохранён). Слэш-команда
   `/loop` переключает флаг без правки конфига.
 
-mandatory tests: для каждой задачи в plan'е модель должна заявлять
-  testы которые покрывают изменение. Если testов нет — задача не
-  считается выполненной. Это policy уровня executor: после apply
-  проверяем что а) тесты что были — зелёные, б) новые тесты есть
-  если задача implement/refactor. Конфликтует с simple `code` mode
-  где юзер просит просто patch — нужен toggle.
+✓ mandatory tests (2026-05-12): opt-in `agent.require_tests` в
+  `code_with_retry`. Когда флаг включён и патч изменил production-код
+  (`.py` вне `tests/`) без правки test-файла — даже если тесты
+  зелёные — модель получает `_NEEDS_TESTS_PROMPT` с просьбой
+  добавить тест поверх. Retry считается в `max_debug_attempts`.
+  Детекция через два helper'а: `_changes_include_tests` (path под
+  `tests/`, имя `test_*.py` или `*_test.py`) + `_changes_include_prod_code`
+  (non-test `.py`). Конфликт с simple-patch-режимом снят дефолтным
+  `False` — юзер опт-инится на сессию.
 
 ✓ file-scoped retrieval: вместо «дай k chunks из всего проекта»
   иногда лучше «из этого файла». Полезно когда юзер уже выбрал
