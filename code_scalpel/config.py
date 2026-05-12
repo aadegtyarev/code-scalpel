@@ -183,6 +183,69 @@ def detect_supports_thinking(model_name: str) -> bool:
     return any(p in lower for p in _THINKING_MODEL_PATTERNS)
 
 
+def _extract_thinking_from_api_model(model: dict[str, Any]) -> bool | None:
+    """Extract thinking support from a single provider model dict.
+
+    Returns True/False when the API gives a definitive answer, None when the
+    data isn't conclusive (fall back to name-pattern in that case).
+
+    Provider formats handled:
+    - OpenRouter: ``supported_parameters`` is a comprehensive list — absence
+      of "reasoning"/"reasoning_effort" means definitively not supported.
+    - LM Studio v0: ``capabilities`` is a partial list ("chat", "tools" …) —
+      presence of "reasoning" is conclusive, but absence is not (LM Studio
+      doesn't advertise all caps). Return None so name-pattern can fill in.
+    - Generic dict ``capabilities``: check "reasoning"/"thinking" keys.
+    """
+    # OpenRouter-style: authoritative list of supported inference parameters.
+    supported = model.get("supported_parameters")
+    if isinstance(supported, list):
+        params = {str(p).lower() for p in supported}
+        # Present but no reasoning param → provider says it's not supported.
+        return bool(params & {"reasoning_effort", "reasoning"})
+
+    # LM Studio / generic capability lists.
+    caps = model.get("capabilities")
+    if isinstance(caps, list):
+        lower_caps = {str(c).lower() for c in caps}
+        if lower_caps & {"reasoning", "thinking"}:
+            return True
+        # LM Studio omits caps it doesn't advertise — absence is not definitive.
+        return None
+    if isinstance(caps, dict):
+        val = caps.get("reasoning") or caps.get("thinking")
+        if val is not None:
+            return bool(val)
+
+    return None
+
+
+async def autodetect_supports_thinking(profile: ModelProfile, model_name: str) -> bool:
+    """True if the model supports thinking/reasoning inference params.
+
+    Detection order:
+    1. Provider API metadata for the matched model (see _extract_thinking_from_api_model).
+    2. Name-pattern fallback when the API gives no conclusive signal.
+
+    model_name should be the *resolved* name (not the "auto" sentinel) so the
+    API lookup can match the actual model id."""
+    models = await _fetch_models(profile)
+    # Prefer exact id match; fall back to first model (local servers serve one).
+    target: dict[str, Any] | None = None
+    for m in models:
+        if m.get("id") == model_name:
+            target = m
+            break
+    if target is None and models:
+        target = models[0]
+    if target is not None:
+        api_result = _extract_thinking_from_api_model(target)
+        if api_result is not None:
+            return api_result
+    # No conclusive API signal — fall back to name-pattern.
+    return detect_supports_thinking(model_name)
+
+
 # Sentinels that trigger model auto-detect from the provider's /v1/models
 # endpoint. "auto" is the new explicit form; "local-model" is kept for
 # backwards compat with the previous default profile.

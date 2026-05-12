@@ -24,7 +24,7 @@ from code_scalpel.agent import (
 from code_scalpel.config import (
     AppConfig,
     autodetect_context_tokens,
-    detect_supports_thinking,
+    autodetect_supports_thinking,
     resolve_model_name,
 )
 from code_scalpel.diagrams import extract_mermaid_blocks
@@ -280,11 +280,11 @@ class ScalpelApp(App[None]):
             if tokens:
                 self.state.context_limit = tokens
             # supports_thinking: explicit profile override wins; otherwise
-            # detect from the resolved model name (not the sentinel "auto").
+            # try the provider's API metadata, then fall back to name-pattern.
             if profile.supports_thinking is not None:
                 self._supports_thinking = profile.supports_thinking
             else:
-                self._supports_thinking = detect_supports_thinking(model_name)
+                self._supports_thinking = await autodetect_supports_thinking(profile, model_name)
             self._update_footer()
         except Exception:
             pass
