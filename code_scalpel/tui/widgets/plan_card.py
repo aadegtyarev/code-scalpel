@@ -190,14 +190,15 @@ class PlanCard(Widget):
     }
     """
 
-    def __init__(self, tasks: list[PlanTask]) -> None:
+    def __init__(self, tasks: list[PlanTask], *, collapsed: bool = False) -> None:
         super().__init__()
         self._tasks = list(tasks)
+        self._collapsed = collapsed
 
     @classmethod
-    def from_tasks_md(cls, text: str) -> PlanCard:
+    def from_tasks_md(cls, text: str, *, collapsed: bool = False) -> PlanCard:
         """Parse TASKS.md text and return a ready-to-mount card."""
-        return cls(parse_tasks_md(text))
+        return cls(parse_tasks_md(text), collapsed=collapsed)
 
     @property
     def tasks(self) -> list[PlanTask]:
@@ -214,7 +215,7 @@ class PlanCard(Widget):
         # collapsed=False: plan is the headline artefact of a plan-mode
         # turn, not background noise. User can fold it manually via the
         # Collapsible chevron if they want.
-        with Collapsible(title=self._title(), collapsed=False):
+        with Collapsible(title=self._title(), collapsed=self._collapsed):
             if not self._tasks:
                 yield Static("(empty plan)", classes="plan-empty", markup=False)
                 return

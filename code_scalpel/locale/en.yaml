@@ -37,3 +37,11 @@ slash:
 
 footer:
   hints_default: "[ctrl+t] cycle mode · [ctrl+q] quit"
+  trust_skeptic: "skeptic"
+  trust_optimist: "optimist"
+  trust_yolo: "yolo"  # ru: банзай
+
+startup:
+  working_dir: "● Working directory: {path}"
+  plan_found: "● Plan: {pending} task(s) pending — /go to run"
+  plan_done: "● Plan: all tasks done"

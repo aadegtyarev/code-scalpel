@@ -36,3 +36,11 @@ slash:
 
 footer:
   hints_default: "[ctrl+t] сменить режим · [ctrl+q] выход"
+  trust_skeptic: "скептик"
+  trust_optimist: "оптимист"
+  trust_yolo: "банзай"
+
+startup:
+  working_dir: "● Рабочая папка: {path}"
+  plan_found: "● План: {pending} задач(а) — /go чтобы запустить"
+  plan_done: "● План: все задачи выполнены"

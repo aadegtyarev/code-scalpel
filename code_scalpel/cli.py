@@ -20,15 +20,29 @@ def _version_callback(value: bool) -> None:
 @app.command()
 def main(
     path: Annotated[
-        Path,
+        Path | None,
         typer.Argument(
             exists=True,
             file_okay=False,
             dir_okay=True,
             resolve_path=True,
             help="Working directory (default: current dir)",
+            show_default=False,
+            hidden=True,
         ),
-    ] = Path("."),
+    ] = None,
+    path_opt: Annotated[
+        Path | None,
+        typer.Option(
+            "--path",
+            exists=True,
+            file_okay=False,
+            dir_okay=True,
+            resolve_path=True,
+            help="Working directory (default: current dir)",
+            show_default=False,
+        ),
+    ] = None,
     version: Annotated[
         bool,
         typer.Option(
@@ -42,8 +56,9 @@ def main(
     """Launch the TUI in the given directory (defaults to current)."""
     from code_scalpel.tui.app import ScalpelApp
 
+    cwd = (path_opt or path or Path(".")).resolve()
     config = load_config()
-    scalpel = ScalpelApp(config=config, cwd=path)
+    scalpel = ScalpelApp(config=config, cwd=cwd)
     scalpel.run()
     summary = getattr(scalpel, "_exit_summary", None)
     if summary:

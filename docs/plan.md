@@ -2538,6 +2538,149 @@ Built-in рецепты.
   autodetect_context_tokens, autodetect_supports_thinking.
 ```
 
+### v0.8
+
+```text
+Web search + чтение статей — инструменты для агента.
+
+Мотивация: агент работает с реальными проектами где нужно
+сверяться с документацией, проверять API, искать решение
+незнакомой ошибки. Сейчас единственный канал — память модели,
+которая устаревает и галлюцинирует. Web-инструменты дают
+агенту возможность опираться на актуальный источник, а не
+на параметры из pretraining.
+
+Принцип: инструменты read-only, anti-ban встроен в клиент,
+тяжёлые HTTP-операции идут через воркер (TUI не блокируется).
+
+--- Новые файлы ---
+
+- [ ] code_scalpel/tools/web.py
+  Точка входа: две публичные async-функции — `web_search` и
+  `fetch_page`. Именно они регистрируются в TOOL_SCHEMAS и
+  вызываются из agent_tools.py. Внутри делегируют в
+  WebClient + парсеры.
+
+- [ ] code_scalpel/tools/web_client.py
+  Класс WebClient (aiohttp-based). Отвечает за:
+  • rotation User-Agent из встроенного пула (10+ строк,
+    типичные Chrome/Firefox на Linux/Mac/Win);
+  • задержку между запросами (min_delay / max_delay в конфиге,
+    равномерный jitter);
+  • exponential backoff с jitter на retry (base=1s, factor=2,
+    cap=30s, max_attempts=3);
+  • timeout per-request (configurable, default 10s);
+  • единый async сессион-пул (один aiohttp.ClientSession
+    на lifetime WebClient).
+  Не знает ни о поисковике, ни об article-парсере — чистый
+  HTTP-транспорт.
+
+- [ ] code_scalpel/tools/search/__init__.py
+  Пакет поисковых парсеров. Публичный API:
+  • ABC `SearchParser` — метод `parse(html: str) -> list[SearchResult]`
+    где `SearchResult` = dataclass(title, url, snippet);
+  • registry `get_parser(engine: str) -> SearchParser` —
+    возвращает нужный парсер или `UnknownEngineError`;
+  • добавить новый движок = написать один класс +
+    декоратор `@register_parser("name")`.
+
+- [ ] code_scalpel/tools/search/ddg.py
+  Парсер DuckDuckGo (HTML endpoint, без API-ключа).
+  Тактика: GET https://html.duckduckgo.com/html/?q=<query>,
+  BeautifulSoup разбирает `.result__title` / `.result__url` /
+  `.result__snippet`. Возвращает первые N результатов.
+  Если структура изменилась — падает с `ParserError` (не
+  молчит, чтобы owner знал что пора обновить).
+
+--- Изменения в существующих файлах ---
+
+- [ ] code_scalpel/config.py — новые поля в AgentConfig:
+  • web_search_enabled: bool = False  # opt-in
+  • web_search_engine: str = "ddg"
+  • web_search_max_results: int = 5
+  • web_search_min_delay: float = 1.0   # сек между запросами
+  • web_search_max_delay: float = 3.0
+  • web_cache_dir: str = ".code-scalpel/web_cache"  # для navigate-режима
+  • fetch_page_timeout: int = 10  # сек
+
+- [ ] code_scalpel/tools/agent_tools.py — регистрация двух новых
+  инструментов в TOOL_SCHEMAS и dispatch в execute():
+  • `web_search(query: str, n: int = 5) -> str`
+    Возвращает нумерованный список: title / url / snippet.
+  • `fetch_page(url: str, mode: str = "navigate") -> str`
+    mode="navigate": возвращает список заголовков H2/H3 если
+    вызвано без section, иначе текст раздела.
+    mode="summarize": передаёт чистый текст в LLMAdapter с
+    кратким summarization-промтом, возвращает дайджест.
+    Инструменты появляются в схеме только когда
+    web_search_enabled=True — не засоряем контекст если не нужны.
+
+- [ ] code_scalpel/agent.py — упоминание двух новых инструментов в
+  системном промте (одна-две строки, только когда enabled):
+  "web_search — search the web for current information;
+   fetch_page — read a URL and navigate or summarize it."
+
+--- Детали fetch_page ---
+
+Режим navigate (mode="navigate"):
+  1. WebClient.get(url) → HTML
+  2. html2text (уже в зависимостях через fetch.py) → чистый Markdown
+  3. Сохранить в {web_cache_dir}/{url_hash}.md (перезапись по mtime >1h)
+  4. Первый вызов без section= → вернуть список заголовков H2/H3
+     (модель выбирает раздел который ей нужен)
+  5. Вызов с section="<heading>" → вернуть текст от этого заголовка
+     до следующего того же уровня (cap 4k токенов)
+  Преимущество: техническая документация с чёткими разделами
+  читается по частям без слива всего в контекст.
+
+Режим summarize (mode="summarize"):
+  1. WebClient.get(url) → HTML → html2text → raw_text
+  2. Если raw_text > 8k токенов — обрезать по 8k с предупреждением
+  3. LLMAdapter.ask с промтом:
+     "Summarize the key technical points from the following article
+      in 3–5 bullet points. Focus on decisions, trade-offs, and
+      conclusions. Article: ..."
+  4. Вернуть дайджест (обычно 200–400 токенов)
+  Преимущество: быстрый ответ на «стоит ли использовать X».
+
+Выбор режима — по задаче. Обе реализации живут в одной функции.
+Модель передаёт mode= явно или использует дефолт navigate.
+
+--- Зависимости ---
+
+- [ ] Добавить в pyproject.toml:
+  • aiohttp>=3.9  — async HTTP (Web клиент)
+  • beautifulsoup4>=4.12  — парсинг HTML поисковика
+  html2text уже есть (fetch.py использует его через learn --url).
+  Добавить в секцию [project] dependencies, не в [dev].
+  Опциональная группа [web] нецелесообразна — если фича включена
+  в конфиге, зависимость должна быть установлена.
+
+--- Тесты ---
+
+- [ ] tests/test_web_client.py — юнит на WebClient:
+  rotate UA (каждый вызов другой из пула), backoff delays (mocked
+  asyncio.sleep), retry на 429/503 с ограничением попыток.
+
+- [ ] tests/test_search_ddg.py — парсер DuckDuckGo на фиксированном
+  HTML-фикстуре (файл в tests/fixtures/ddg_result.html). Не
+  ходит в сеть.
+
+- [ ] tests/test_web_tools.py — интеграция через MockLLMAdapter:
+  web_search диспатч, fetch_page navigate (заголовки, секция),
+  fetch_page summarize (вызов LLM). Все запросы через
+  MockTransport (как в test_learn.py).
+
+--- Ограничения в scope ---
+
+Out of scope этой версии:
+  • JavaScript-рендеринг страниц (Playwright / Selenium)
+  • сохранение истории поисковых запросов между сессиями
+  • rate-limit отслеживание по domain (один WebClient для всех)
+  • поддержка других поисковиков кроме DDG (архитектура готова,
+    парсеры — позже)
+```
+
 ---
 
 ## 32. Главный пользовательский сценарий
