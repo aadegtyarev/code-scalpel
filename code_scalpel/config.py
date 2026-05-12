@@ -213,9 +213,10 @@ def _extract_thinking_from_api_model(model: dict[str, Any]) -> bool | None:
         # LM Studio omits caps it doesn't advertise — absence is not definitive.
         return None
     if isinstance(caps, dict):
-        val = caps.get("reasoning") or caps.get("thinking")
-        if val is not None:
-            return bool(val)
+        for key in ("reasoning", "thinking"):
+            val = caps.get(key)
+            if val is not None:
+                return bool(val)
 
     return None
 

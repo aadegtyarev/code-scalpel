@@ -65,7 +65,8 @@ class StatusFooter(Widget):
             parts.append(self.status)
         indicators: list[str] = []
         if self.trust:
-            indicators.append(self.trust)
+            # Escape [ so Rich doesn't swallow [skp]/[opt]/[ylo] as markup tags.
+            indicators.append(self.trust.replace("[", r"\["))
         if self.thinking:
             indicators.append(self.thinking)
         if indicators:

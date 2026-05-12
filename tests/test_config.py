@@ -11,8 +11,11 @@ from code_scalpel.config import (
     ModelProfile,
     ModeTemperatures,
     _deep_merge,
+    _extract_thinking_from_api_model,
     autodetect_context_tokens,
     autodetect_model_name,
+    autodetect_supports_thinking,
+    detect_supports_thinking,
     load_config,
     resolve_context_tokens,
     resolve_model_name,
@@ -399,3 +402,156 @@ def test_default_profile_uses_auto_sentinel() -> None:
     """Out-of-the-box default profile should self-discover its model."""
     config = AppConfig.model_validate({})
     assert config.current_profile.model == "auto"
+
+
+# ── detect_supports_thinking (name-pattern) ──────────────────────────────────
+
+
+@pytest.mark.parametrize(
+    "model_name",
+    ["o1-mini", "o1-preview", "o3", "o3-mini", "qwq-32b", "deepseek-r1-7b", "claude-3-7-sonnet"],
+)
+def test_detect_supports_thinking_known_patterns(model_name: str) -> None:
+    assert detect_supports_thinking(model_name) is True
+
+
+@pytest.mark.parametrize(
+    "model_name",
+    ["qwen2.5-coder-14b", "llama-3-8b", "mistral-7b", "gpt-4o", "claude-3-5-sonnet"],
+)
+def test_detect_supports_thinking_unknown_patterns(model_name: str) -> None:
+    assert detect_supports_thinking(model_name) is False
+
+
+def test_detect_supports_thinking_case_insensitive() -> None:
+    assert detect_supports_thinking("OpenAI/O3-Mini") is True
+    assert detect_supports_thinking("QWQ-32B-Preview") is True
+
+
+# ── _extract_thinking_from_api_model ─────────────────────────────────────────
+
+
+def test_extract_openrouter_supported_parameters_reasoning_effort() -> None:
+    model = {"id": "openai/o3-mini", "supported_parameters": ["max_tokens", "reasoning_effort"]}
+    assert _extract_thinking_from_api_model(model) is True
+
+
+def test_extract_openrouter_supported_parameters_reasoning() -> None:
+    model = {"id": "anthropic/claude-3-7", "supported_parameters": ["temperature", "reasoning"]}
+    assert _extract_thinking_from_api_model(model) is True
+
+
+def test_extract_openrouter_no_reasoning_in_supported_parameters() -> None:
+    """OpenRouter lists all params → absence means not supported."""
+    model = {"id": "mistral-7b", "supported_parameters": ["temperature", "top_p", "max_tokens"]}
+    assert _extract_thinking_from_api_model(model) is False
+
+
+def test_extract_lmstudio_capabilities_list_with_reasoning() -> None:
+    model = {"id": "qwq-32b", "capabilities": ["chat", "tools", "reasoning"]}
+    assert _extract_thinking_from_api_model(model) is True
+
+
+def test_extract_lmstudio_capabilities_list_without_reasoning_returns_none() -> None:
+    """LM Studio omits caps it doesn't advertise — no reasoning doesn't mean False."""
+    model = {"id": "qwen-14b", "capabilities": ["chat", "tools"]}
+    assert _extract_thinking_from_api_model(model) is None
+
+
+def test_extract_capabilities_dict_reasoning_true() -> None:
+    model = {"id": "some-model", "capabilities": {"reasoning": True, "vision": False}}
+    assert _extract_thinking_from_api_model(model) is True
+
+
+def test_extract_capabilities_dict_reasoning_false() -> None:
+    model = {"id": "some-model", "capabilities": {"reasoning": False}}
+    assert _extract_thinking_from_api_model(model) is False
+
+
+def test_extract_no_known_fields_returns_none() -> None:
+    model = {"id": "mystery-model", "description": "..."}
+    assert _extract_thinking_from_api_model(model) is None
+
+
+# ── autodetect_supports_thinking ─────────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_autodetect_thinking_from_api_wins_over_name_pattern() -> None:
+    """API says False for a model whose name matches a thinking pattern —
+    API must win (explicit beats heuristic)."""
+    profile = ModelProfile(provider="openrouter", model="o3-mini")
+    api_models = [{"id": "o3-mini", "supported_parameters": ["temperature"]}]
+    with patch("code_scalpel.config._fetch_models", new=AsyncMock(return_value=api_models)):
+        result = await autodetect_supports_thinking(profile, "o3-mini")
+    assert result is False
+
+
+@pytest.mark.asyncio
+async def test_autodetect_thinking_api_true() -> None:
+    profile = ModelProfile(provider="openrouter", model="o3-mini")
+    api_models = [{"id": "o3-mini", "supported_parameters": ["reasoning_effort"]}]
+    with patch("code_scalpel.config._fetch_models", new=AsyncMock(return_value=api_models)):
+        result = await autodetect_supports_thinking(profile, "o3-mini")
+    assert result is True
+
+
+@pytest.mark.asyncio
+async def test_autodetect_thinking_falls_back_to_name_pattern_when_api_inconclusive() -> None:
+    """LM Studio returns capabilities list without 'reasoning' → None → name-pattern."""
+    profile = ModelProfile(provider="lmstudio", model="qwq-32b")
+    api_models = [{"id": "qwq-32b", "capabilities": ["chat", "tools"]}]
+    with patch("code_scalpel.config._fetch_models", new=AsyncMock(return_value=api_models)):
+        result = await autodetect_supports_thinking(profile, "qwq-32b")
+    # Name pattern "qwq" matches → True
+    assert result is True
+
+
+@pytest.mark.asyncio
+async def test_autodetect_thinking_falls_back_when_no_api_data() -> None:
+    """Empty model list → name-pattern only."""
+    profile = ModelProfile(provider="lmstudio", model="qwq-32b")
+    with patch("code_scalpel.config._fetch_models", new=AsyncMock(return_value=[])):
+        result = await autodetect_supports_thinking(profile, "qwq-32b")
+    assert result is True
+
+
+@pytest.mark.asyncio
+async def test_autodetect_thinking_uses_first_model_when_no_id_match() -> None:
+    """Server serves one model under a different id — fall back to first entry."""
+    profile = ModelProfile(provider="lmstudio", model="auto")
+    api_models = [{"id": "loaded-model", "supported_parameters": ["reasoning_effort"]}]
+    with patch("code_scalpel.config._fetch_models", new=AsyncMock(return_value=api_models)):
+        result = await autodetect_supports_thinking(profile, "resolved-name")
+    assert result is True
+
+
+# ── inference_kwargs with thinking_effort ─────────────────────────────────────
+
+
+def test_inference_kwargs_thinking_effort_off_no_reasoning_param() -> None:
+    profile = ModelProfile(provider="lmstudio", model="qwq-32b", supports_thinking=True)
+    kwargs = profile.inference_kwargs("ask", thinking_effort="off")
+    assert "reasoning_effort" not in kwargs
+
+
+def test_inference_kwargs_thinking_effort_adds_reasoning_effort() -> None:
+    profile = ModelProfile(provider="openrouter", model="o3-mini", supports_thinking=True)
+    for effort in ("low", "medium", "high"):
+        kwargs = profile.inference_kwargs("ask", thinking_effort=effort)
+        assert kwargs["reasoning_effort"] == effort
+
+
+def test_inference_kwargs_thinking_effort_ignored_when_not_supported() -> None:
+    profile = ModelProfile(provider="lmstudio", model="qwen-14b", supports_thinking=False)
+    kwargs = profile.inference_kwargs("ask", thinking_effort="high")
+    assert "reasoning_effort" not in kwargs
+
+
+def test_inference_kwargs_thinking_auto_detect_via_name_pattern() -> None:
+    """supports_thinking=None → auto-detect from model name in inference_kwargs."""
+    thinking_profile = ModelProfile(provider="lmstudio", model="qwq-32b")
+    assert "reasoning_effort" in thinking_profile.inference_kwargs("ask", thinking_effort="low")
+
+    plain_profile = ModelProfile(provider="lmstudio", model="qwen2.5-coder-14b")
+    assert "reasoning_effort" not in plain_profile.inference_kwargs("ask", thinking_effort="low")
