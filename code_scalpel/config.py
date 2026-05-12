@@ -30,6 +30,13 @@ class AgentConfig(BaseModel):
     # ask the model to fix on failure, up to max_debug_attempts retries.
     # Off by default — the TUI flips this once the iterative loop is wired in.
     iterative_patch_loop: bool = False
+    # Opt-in: when on, code_with_retry rejects a successful patch that touched
+    # production code (any .py file outside tests/) but didn't add or modify
+    # a test. The model is asked to produce a follow-up adding a test for the
+    # change, counted against `max_debug_attempts`. Plain patch-only requests
+    # (where the user explicitly doesn't want tests) opt out by leaving the
+    # flag off — default off so a casual `/code` task isn't gated on tests.
+    require_tests: bool = False
     # Opt-out: when on, the agent rejects a reply that emits a SEARCH/REPLACE
     # block (or fenced python body) for a file it never called read_file on —
     # in this turn or any previous one. The model is sent a follow-up asking
