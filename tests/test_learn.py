@@ -131,6 +131,60 @@ async def test_learn_rejects_reply_without_frontmatter(tmp_path: Path) -> None:
 
 
 @pytest.mark.asyncio
+async def test_learn_with_url_feeds_fetched_markdown_to_model(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """When `url=...` is set, learn() must inject the fetched markdown into
+    the prompt under a clearly-labelled BEGIN/END fence. The model sees
+    "use this as source of truth" — without this contract the URL form
+    is no better than the no-URL form."""
+    fetched_md = "# Redis\n\n- SET key value\n- GET key\n"
+
+    async def fake_fetch(url: str) -> str:
+        assert url == "https://example.invalid/redis"
+        return fetched_md
+
+    monkeypatch.setattr("code_scalpel.learn.fetch_markdown", fake_fetch)
+
+    llm = MockLLMAdapter([_VALID_RECIPE_BODY])
+    runtime = Runtime(cwd=tmp_path, config=_CONFIG, llm=llm, with_memory=False)
+
+    saved = await learn(runtime, "redis", kind="recipe", url="https://example.invalid/redis")
+
+    assert saved.is_file()
+    user_msg = next(m for m in llm.calls[0] if m["role"] == "user")["content"]
+    # The fetched body landed in the prompt verbatim, fenced by the
+    # BEGIN/END markers so the model can tell it apart from instructions.
+    assert "BEGIN FETCHED CONTENT" in user_msg
+    assert "END FETCHED CONTENT" in user_msg
+    assert fetched_md.strip() in user_msg
+    # And the recipe-shaped template is still there too.
+    assert "recipe" in user_msg.lower()
+
+
+@pytest.mark.asyncio
+async def test_learn_with_url_propagates_fetch_errors(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """If fetch_markdown raises (404 / non-HTML / oversize), learn() must
+    surface it — the TUI's error path already handles RuntimeError."""
+
+    async def boom(url: str) -> str:
+        raise RuntimeError("HTTP 404")
+
+    monkeypatch.setattr("code_scalpel.learn.fetch_markdown", boom)
+
+    llm = MockLLMAdapter([_VALID_RECIPE_BODY])
+    runtime = Runtime(cwd=tmp_path, config=_CONFIG, llm=llm, with_memory=False)
+
+    with pytest.raises(RuntimeError, match="HTTP 404"):
+        await learn(runtime, "redis", kind="recipe", url="https://example.invalid/missing")
+    # Nothing landed on disk — the model never even ran.
+    assert not (tmp_path / ".code-scalpel" / "recipes" / "redis.md").exists()
+    assert len(llm.calls) == 0
+
+
+@pytest.mark.asyncio
 async def test_learn_sanitises_unsafe_names(tmp_path: Path) -> None:
     """A name with traversal characters must NOT escape `.code-scalpel/recipes/`.
     Stem gets sanitised; saved file ends up under the recipes dir regardless."""
