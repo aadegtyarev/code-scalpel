@@ -2498,6 +2498,46 @@ Rust language skill / Kubernetes component skill — по запросу.
   (режимы переключаются Ctrl+T). /help обновлён.
 ```
 
+### v0.7
+
+```text
+Авто-compact по порогу.
+  compact_threshold (уже в AgentConfig, сейчас не читается) — фоновый
+  триггер при достижении fill%. Критично для /go на длинных планах:
+  8 задач за одну сессию сейчас реально упирается в контекст.
+  Авто-compact не прерывает поток — сжимает историю между задачами,
+  пользователь видит однострочный статус, сессия продолжается.
+
+Resume сессии.
+  STATE.json + dirty_patch скелет уже есть. Полный resume: при старте
+  TUI показывает инлайн-notice «прерванная сессия: T003, testing» с
+  предложением продолжить или начать заново. Восстанавливает фазу
+  (generating/reviewing/applying/testing/idle) и контекст из истории.
+  Особенно важно для /go — план на N задач должен переживать аварийный
+  выход без потери прогресса.
+
+Built-in рецепты.
+  recipes_builtin/ пустая — инфраструктура есть, контента нет.
+  Наполнить конкретными инструментами: pytest (флаги, фикстуры, моки),
+  ruff (конфиг, автофикс), mypy (strict, ignore-паттерны), git flow
+  (коммит, PR, merge). Загружаются lazily по ключевым словам.
+  Пользователь получает базовое знание стека с первого запуска без
+  /learn вручную.
+
+`code-scalpel init`.
+  Интерактивный онбординг: создаёт .code-scalpel/, задаёт вопросы про
+  провайдер (lmstudio/openrouter/openai), пишет .code-scalpel/config.yaml.
+  Без init скальпель работает, но пользователь вынужден угадывать
+  формат конфига. Init снижает барьер первого запуска.
+
+Рефакторинг test_config.py.
+  557 строк, несвязанные области в одном файле. Разбить на:
+  test_model_profile.py — ModelProfile: temperature, inference_kwargs,
+  thinking detection; test_config_load.py — load_config, _deep_merge,
+  yaml merging; test_config_autodetect.py — resolve_model_name,
+  autodetect_context_tokens, autodetect_supports_thinking.
+```
+
 ---
 
 ## 32. Главный пользовательский сценарий
