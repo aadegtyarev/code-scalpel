@@ -1298,6 +1298,65 @@ async def test_user_message_survives_broken_memory_query(project: Path) -> None:
     assert llm.calls
 
 
+# ── recipe loading into user message ────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_user_message_carries_eager_recipes(project: Path) -> None:
+    """An eager recipe in `.code-scalpel/recipes/` lands inline at the
+    head of every user message — the agent sees /learn-generated
+    knowledge on every turn without the model having to read the
+    file itself."""
+    rdir = project / ".code-scalpel" / "recipes"
+    rdir.mkdir(parents=True)
+    (rdir / "python.md").write_text(
+        "---\nname: python\nload: eager\n---\n\n# python\n- typed everywhere\n"
+    )
+
+    llm = MockLLMAdapter(["OK"])
+    agent = StepAgent(llm=llm, cwd=project, config=_CONFIG)
+    await agent.ask("describe the project")
+
+    user_msg = llm.calls[0][-1]["content"]
+    assert "Loaded recipes" in user_msg
+    assert "### python" in user_msg
+    assert "typed everywhere" in user_msg
+
+
+@pytest.mark.asyncio
+async def test_user_message_no_recipes_block_when_lazy_only(project: Path) -> None:
+    """`load: lazy` recipes are filtered out of the eager set — they
+    don't surface every turn (they'll get a keyword-matched path in
+    a future iteration)."""
+    rdir = project / ".code-scalpel" / "recipes"
+    rdir.mkdir(parents=True)
+    (rdir / "redis.md").write_text("---\nname: redis\nload: lazy\n---\n\n# redis\n")
+
+    llm = MockLLMAdapter(["OK"])
+    agent = StepAgent(llm=llm, cwd=project, config=_CONFIG)
+    await agent.ask("any task")
+
+    user_msg = llm.calls[0][-1]["content"]
+    assert "Loaded recipes" not in user_msg
+
+
+@pytest.mark.asyncio
+async def test_user_message_broken_recipe_does_not_break_turn(project: Path) -> None:
+    """A bad recipe file (malformed YAML, missing name) must NOT
+    block the turn — the loader silently skips it. Without this guard,
+    one typo in `.code-scalpel/recipes/` would freeze every turn."""
+    rdir = project / ".code-scalpel" / "recipes"
+    rdir.mkdir(parents=True)
+    (rdir / "broken.md").write_text("# no frontmatter, just markdown\n")
+
+    llm = MockLLMAdapter(["OK"])
+    agent = StepAgent(llm=llm, cwd=project, config=_CONFIG)
+    await agent.ask("any task")
+    # Call went through, no Loaded-recipes header (broken was skipped).
+    user_msg = llm.calls[0][-1]["content"]
+    assert "Loaded recipes" not in user_msg
+
+
 # ── supervised autonomous mode (run_plan) ───────────────────────────────────
 
 _TASKS_THREE = (
