@@ -12,20 +12,38 @@ responsible for walking history and deciding which messages to feed in.
 
 Marker shape:
 
-    [compressed: <tool>(<args>) → N lines / M chars, see turn K | <first-line hint>]
+    [compressed: <tool>(<args>) → N lines / M chars, see turn K | <hint>]
 
-The first-line hint preserves the most-load-bearing piece of typical tool
-output (a path, a pytest verdict, a grep header) so the model still has a
-breadcrumb pointing at what was there.
+The hint preserves the most-load-bearing piece of typical tool output so
+the model still has a breadcrumb pointing at what was there. Two ways
+to produce it:
+  • deterministic (default) — first non-empty line of the original output;
+  • LLM-driven (`agent.compress_with_llm`) — one-line summary from the
+    same model that runs the turn, generated via `summarize_with_llm`.
+    Useful when the first line is something generic like `OK` or a
+    table header; an LLM summary distills the actual result.
 """
 
 from __future__ import annotations
 
-# Cap on the first-line hint inside a marker. Long pytest banners or
-# multi-screen grep headers would otherwise re-bloat the very message we
-# just compressed. ~100 chars keeps the marker single-line in most
-# terminals while still carrying enough signal to recognise.
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from code_scalpel.llm.adapter import LLMAdapter
+
+# Cap on the hint inside a marker. Long pytest banners or multi-screen
+# grep headers would otherwise re-bloat the very message we just
+# compressed. ~100 chars keeps the marker single-line in most terminals
+# while still carrying enough signal to recognise.
 _HINT_MAX_CHARS = 100
+
+_SUMMARIZE_PROMPT = (
+    "Summarize the following tool output in ONE LINE (max 100 chars). "
+    "Focus on the RESULT — a path, a verdict, a count, the key fact. "
+    "No preamble, no quoting, no closing punctuation. If the output "
+    "has no useful signal, reply with an empty string.\n\n"
+    "Tool output:\n{content}"
+)
 
 
 def should_compress(
@@ -62,23 +80,56 @@ def compress_tool_message(
     tool_name: str,
     args_summary: str,
     turn: int,
+    *,
+    hint: str | None = None,
 ) -> str:
     """Build the compression marker for one tool message.
 
     Stats (`N lines / M chars`) come from the ORIGINAL content — the
-    marker is metadata about what got dropped, not about itself. The
-    first non-empty line is preserved as a hint (truncated to
-    `_HINT_MAX_CHARS` with an ellipsis suffix); if no non-empty line
-    exists, the hint segment is omitted entirely so we don't emit
-    a dangling `| ` separator.
+    marker is metadata about what got dropped, not about itself.
+
+    Hint resolution:
+      • `hint=None` (default) — use the first non-empty line of `content`,
+        truncated to `_HINT_MAX_CHARS` with an ellipsis suffix;
+      • `hint=""` — caller decided there's no useful signal; omit the
+        hint segment entirely so we don't emit a dangling `| ` separator;
+      • `hint="..."` — caller supplied a custom hint (e.g. an LLM summary
+        via `summarize_with_llm`); use it verbatim, truncated to fit.
     """
     line_count = content.count("\n") + (1 if content and not content.endswith("\n") else 0)
     char_count = len(content)
-    hint = _first_nonempty_line(content)
+    resolved_hint = hint if hint is not None else _first_nonempty_line(content)
+    if resolved_hint and len(resolved_hint) > _HINT_MAX_CHARS:
+        resolved_hint = resolved_hint[: _HINT_MAX_CHARS - 1] + "…"
     base = f"[compressed: {tool_name}({args_summary}) → {line_count} lines / {char_count} chars, see turn {turn}"
-    if hint:
-        return f"{base} | {hint}]"
+    if resolved_hint:
+        return f"{base} | {resolved_hint}]"
     return f"{base}]"
+
+
+async def summarize_with_llm(content: str, llm: LLMAdapter) -> str:
+    """One-line summary of `content` from `llm`. Returns "" on any
+    failure (network, malformed reply, empty) — callers treat "" as
+    "no LLM hint, fall back to first-non-empty-line".
+
+    The wrapping prompt is intentionally tight: weak local models drift
+    into prose if given any slack. Even so, we strip the reply to its
+    first non-empty line so a multi-line answer collapses cleanly into
+    a single-line marker."""
+    try:
+        response = await llm.chat(
+            [{"role": "user", "content": _SUMMARIZE_PROMPT.format(content=content)}],
+            temperature=0.1,
+            max_tokens=80,
+        )
+    except Exception:
+        return ""
+    text = (response.content or "").strip()
+    if not text:
+        return ""
+    # Collapse to first non-empty line — a chatty model that returned
+    # "Here's the summary:\nfoo\n" still gives us a usable single line.
+    return _first_nonempty_line(text)
 
 
 def _first_nonempty_line(content: str) -> str:

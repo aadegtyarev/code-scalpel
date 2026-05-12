@@ -11,7 +11,11 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from code_scalpel.config import AppConfig
-from code_scalpel.context_compress import compress_tool_message, should_compress
+from code_scalpel.context_compress import (
+    compress_tool_message,
+    should_compress,
+    summarize_with_llm,
+)
 
 if TYPE_CHECKING:
     from code_scalpel.memory import MemoryStore
@@ -781,7 +785,7 @@ class StepAgent:
         )
         return result.output, result.ok
 
-    def _compress_old_tool_results(self) -> int:
+    async def _compress_old_tool_results(self) -> int:
         """Walk `self._history` and replace stale tool-role messages
         with a compact marker. Returns the number of messages rewritten
         — useful for tests and for future telemetry.
@@ -793,6 +797,12 @@ class StepAgent:
         one; `age = current_turn - message_turn`. Compression fires
         when age strictly exceeds the configured threshold AND the
         payload meets the size minimum.
+
+        When `agent.compress_with_llm` is on, each compressed message
+        gets an LLM-generated one-line summary as the marker hint
+        instead of the deterministic first-line. On any failure
+        (network, empty reply) the deterministic path is reused — a
+        broken summariser never blocks the compress pass.
         """
         cfg = self._config.agent
         # Assign each entry its owning turn index.
@@ -823,11 +833,17 @@ class StepAgent:
             tool_name = entry.get("_tool_name", "tool")
             tool_args = entry.get("_tool_args", "")
             args_summary = _summarize_tool_args(tool_args)
+            hint: str | None = None
+            if cfg.compress_with_llm:
+                summary = await summarize_with_llm(content, self._llm)
+                # Empty summary → fall back to deterministic (hint=None).
+                hint = summary if summary else None
             entry["content"] = compress_tool_message(
                 content,
                 tool_name=str(tool_name),
                 args_summary=args_summary,
                 turn=entry_turns[i],
+                hint=hint,
             )
             compressed += 1
         return compressed
@@ -1024,7 +1040,7 @@ class StepAgent:
         # an old tool output for a kilo-tokens of headroom.
         if self._config.agent.compress_tool_results:
             with suppress(Exception):
-                self._compress_old_tool_results()
+                await self._compress_old_tool_results()
 
         if mode == "plan":
             self._maybe_save_plan(final_assistant)
