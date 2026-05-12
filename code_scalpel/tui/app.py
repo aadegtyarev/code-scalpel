@@ -176,6 +176,12 @@ class ScalpelApp(App[None]):
         )
 
     def on_mount(self) -> None:
+        from code_scalpel.i18n import set_locale
+
+        # Apply config locale (or fall through to env autodetect)
+        # before anything renders, so the very first footer paint is
+        # already localised.
+        set_locale(self.config.agent.ui_locale)
         self.query_one(ModeInput).focus_input()
         self._update_footer()
         self._init_agent()
@@ -1513,8 +1519,14 @@ class ScalpelApp(App[None]):
     def _update_footer(self) -> None:
         """Footer is minimal — hints + status + model. Per-turn metrics live
         inline in the chat now (see _format_turn_summary)."""
+        from code_scalpel.i18n import t
+
         footer = self.query_one(StatusFooter)
-        footer.hints = r"\[ctrl+t] cycle mode · \[ctrl+q] quit"
+        # The square brackets in the hotkey hints need escaping for Rich
+        # markup; the locale catalog stores them unescaped so the same
+        # text can be reused outside the footer if ever needed.
+        raw = t("footer.hints_default")
+        footer.hints = raw.replace("[", r"\[")
 
     def _update_ctx(self) -> None:
         """Refresh the footer's ctx segment from the current Session +

@@ -1,0 +1,39 @@
+# English UI strings — the default catalog.
+#
+# Convention: keys are dot-separated, grouped by surface. Status
+# strings live under `status.*`, errors under `error.*`, slash
+# command help under `slash.*`. Keep messages short — the TUI
+# is column-constrained.
+#
+# Format args allowed: `{name}`, `{path}`, etc. — `t()` runs
+# `str.format(**kw)`. If a key has no args, just plain text.
+
+status:
+  thinking: "◌ thinking…"
+  idle: "● idle"
+  error: "● error"
+  cancelled: "● Cancelled."
+  building_map: "● Building project map…"
+  remembered: "● Remembered: {text}"
+  saved_recipe: "● Saved {kind}: {path}"
+  learning: "◌ learning {label}: {name}…"
+  loop_on: "● Iterative patch loop: on"
+  loop_off: "● Iterative patch loop: off"
+  no_compact_target: "Nothing to compact yet."
+  no_tasks_yet: "● No plan yet. Switch to plan mode and ask for a breakdown first."
+
+error:
+  no_llm: "No LLM configured — check config."
+  config: "Config error: {message}"
+  path_not_found: "path not found: {path}"
+  memory: "Memory error: {message}"
+  learn_failed: "/learn failed: {message}"
+  generic: "Error: {message}"
+  compact_failed: "Compact failed: {message}"
+
+slash:
+  remember_usage: "Usage: /remember <fact to save>"
+  learn_usage: "Usage: /learn <name> [--url URL]  or  /learn skill <name> [--url URL]"
+
+footer:
+  hints_default: "[ctrl+t] cycle mode · [ctrl+q] quit"

@@ -2332,7 +2332,17 @@ JS / Go / Rust language skills
 PostgreSQL / Kubernetes component skills
 LLM-based context compression (для strong профилей)
 configurable policies
-i18n: ru/en, автодетект по системной локали
+✓ i18n: ru/en + автодетект по системной локали (2026-05-12, MVP):
+  модуль `code_scalpel/i18n.py` + каталоги `code_scalpel/locale/en.yaml`
+  и `ru.yaml`. `t(key, **fmt)` lookup'ит по dotted keys (`status.idle`,
+  `error.no_llm`), сжирает kwargs через `str.format`. Резолв:
+  `set_locale()` override → `LC_ALL`/`LC_MESSAGES`/`LANG` → дефолт `en`.
+  Конфиг: `agent.ui_locale: str | None = None`. Caтfback на en для
+  missing keys чтобы недопереводы не показывали dotted-key на экране.
+  Промты модели остаются на английском — слабые локальные модели
+  лучше работают на en (это model fact, не UX-выбор). Мигрировано
+  пока 1 строка (footer hint) как proof-of-life; полную миграцию
+  выкатим отдельными PR'ами под видимые user-facing surface'ы.
 shell_exec tool (deferred 2026-05-12): дать модели доступ к shell для
   массовых правок (sed/awk/find/grep/git mv) когда SEARCH/REPLACE для
   каждого файла — пустая трата. Сейчас единственный shell-инструмент
