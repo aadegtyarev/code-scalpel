@@ -1590,8 +1590,19 @@ class ScalpelApp(App[None]):
     def on_shell_exec_decision(self, msg: ShellExecDecision) -> None:
         """Resolve the awaiting future and remove the card."""
         fut = self._pending_shell_confirms.pop(msg.card_id, None)
+        approved = msg.action in ("approve", "session")
         if fut is not None and not fut.done():
-            fut.set_result(msg.action == "approve")
+            fut.set_result(approved)
+        if msg.action == "session":
+            # Elevate trust to optimist for the rest of this session so
+            # subsequent shell_exec calls auto-approve without more cards.
+            optimist_idx = self._TRUST_LEVELS.index("optimist")
+            self._trust_index = optimist_idx
+            self.config.agent.trust = "optimist"
+            self._update_footer()
+            self.query_one(OutputLog).print_status(
+                "● trust: оптимист (на сессию — все shell команды авто-разрешены)"
+            )
         # Remove the card after the brief approved/rejected state has
         # rendered. We do this in a worker so the click handler returns
         # promptly.
