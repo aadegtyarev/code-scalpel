@@ -42,6 +42,37 @@ _TESTS_FAILED_PROMPT = (
     "test(s). Don't revert the original change unless that's truly the only "
     "way forward."
 )
+_NEEDS_TESTS_PROMPT = (
+    "Your previous patch applied cleanly and the existing tests pass, but it "
+    "changed production code without touching any test file. Produce a "
+    "follow-up patch that adds a test exercising the new behaviour. Put it "
+    "under `tests/`, name it `test_<feature>.py`, and keep the existing "
+    "patch on disk — only add."
+)
+
+
+def _changes_include_tests(edits: list[Edit]) -> bool:
+    """True if any edit targets a path that looks like a test file."""
+    for edit in edits:
+        parts = Path(edit.path).parts
+        name = Path(edit.path).name
+        if "tests" in parts or name.startswith("test_") or name.endswith("_test.py"):
+            return True
+    return False
+
+
+def _changes_include_prod_code(edits: list[Edit]) -> bool:
+    """True if any edit touches a non-test `.py` file."""
+    for edit in edits:
+        if not edit.path.endswith(".py"):
+            continue
+        parts = Path(edit.path).parts
+        name = Path(edit.path).name
+        if "tests" in parts or name.startswith("test_") or name.endswith("_test.py"):
+            continue
+        return True
+    return False
+
 
 _FORCE_ANSWER_MSG: dict[str, Any] = {
     "role": "user",
@@ -589,6 +620,17 @@ class StepAgent:
                 )
             )
             if tests_passed:
+                if (
+                    self._config.agent.require_tests
+                    and i < max_retries
+                    and _changes_include_prod_code(result.edits)
+                    and not _changes_include_tests(result.edits)
+                ):
+                    # Code changed, no test changed — retry asking for one.
+                    # The applied production patch stays on disk; the next
+                    # iteration produces an additive test patch on top.
+                    prompt = _NEEDS_TESTS_PROMPT
+                    continue
                 # Patch is on disk; clear edits so the caller doesn't re-apply.
                 return StepResult(
                     reply=result.reply,

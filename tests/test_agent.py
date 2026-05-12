@@ -825,7 +825,7 @@ def hello():
 """
 
 
-def _retry_config(*, max_debug_attempts: int = 2) -> AppConfig:
+def _retry_config(*, max_debug_attempts: int = 2, require_tests: bool = False) -> AppConfig:
     return AppConfig(
         profiles={
             "local": ModelProfile(
@@ -839,6 +839,7 @@ def _retry_config(*, max_debug_attempts: int = 2) -> AppConfig:
             max_file_lines=50,
             max_debug_attempts=max_debug_attempts,
             iterative_patch_loop=True,
+            require_tests=require_tests,
             # Retry-loop tests pre-date the HOOK and feed canned patches
             # straight through. Dedicated HOOK tests opt back in.
             enforce_read_before_show=False,
@@ -1087,6 +1088,139 @@ def replaced():
     # The retry prompt mentions the apply error
     second_task = llm.calls[1][-1]["content"]
     assert "did not apply" in second_task or "apply" in second_task.lower()
+
+
+# ── mandatory-tests policy ──────────────────────────────────────────────────
+
+
+def test_changes_include_tests_helper() -> None:
+    """Positive matches: anything under tests/, anything named test_*.py
+    or *_test.py. Everything else is production code."""
+    from code_scalpel.agent import _changes_include_prod_code, _changes_include_tests
+    from code_scalpel.patch.edit_block import Edit
+
+    def _edit(path: str) -> Edit:
+        return Edit(path=path, search="x", replace="y")
+
+    # Test files: directory match, prefix, suffix.
+    assert _changes_include_tests([_edit("tests/test_foo.py")])
+    assert _changes_include_tests([_edit("tests/sub/test_bar.py")])
+    assert _changes_include_tests([_edit("test_root.py")])
+    assert _changes_include_tests([_edit("module_test.py")])
+    # Production files don't trigger the test classifier.
+    assert not _changes_include_tests([_edit("code_scalpel/agent.py")])
+    assert not _changes_include_tests([_edit("README.md")])
+    # Prod-code detection inverts: .py outside tests/ counts.
+    assert _changes_include_prod_code([_edit("code_scalpel/agent.py")])
+    assert not _changes_include_prod_code([_edit("tests/test_foo.py")])
+    # Non-.py is neither prod nor test (no test framework to feed it).
+    assert not _changes_include_prod_code([_edit("README.md")])
+
+
+_GOOD_PATCH_PLUS_TEST = """\
+hello.py
+```python
+<<<<<<< SEARCH
+def hello():
+    pass
+=======
+def hello():
+    return "hi"
+>>>>>>> REPLACE
+```
+
+tests/test_hello.py
+```python
+<<<<<<< SEARCH
+=======
+def test_hello():
+    from hello import hello
+    assert hello() == "hi"
+>>>>>>> REPLACE
+```
+"""
+
+_TEST_ONLY_PATCH = """\
+tests/test_hello.py
+```python
+<<<<<<< SEARCH
+=======
+def test_hello():
+    from hello import hello
+    assert hello() == "hi"
+>>>>>>> REPLACE
+```
+"""
+
+
+@pytest.mark.asyncio
+async def test_require_tests_off_lets_test_free_patch_through(project: Path) -> None:
+    """Default behaviour: require_tests=False, a successful patch that
+    touched only production code is returned as-is. No extra round-trip
+    asking for a test."""
+    from code_scalpel.tools.shell import ShellResult
+    from tests.mocks import MockShellRunner
+
+    llm = MockLLMAdapter([_GOOD_PATCH_FROM_ORIGINAL])
+    shell = MockShellRunner([ShellResult("1 passed", 0)])
+    agent = StepAgent(
+        llm=llm, cwd=project, config=_retry_config(require_tests=False), shell_runner=shell
+    )
+
+    result = await agent.code_with_retry("make hello return 'hi'")
+
+    assert len(result.attempts) == 1
+    assert result.attempts[0].tests_passed is True
+    assert len(llm.calls) == 1  # no follow-up
+
+
+@pytest.mark.asyncio
+async def test_require_tests_on_with_test_included_passes_through(project: Path) -> None:
+    """require_tests=True is satisfied when the patch itself touches a
+    test file — no second round needed."""
+    from code_scalpel.tools.shell import ShellResult
+    from tests.mocks import MockShellRunner
+
+    llm = MockLLMAdapter([_GOOD_PATCH_PLUS_TEST])
+    shell = MockShellRunner([ShellResult("1 passed", 0)])
+    agent = StepAgent(
+        llm=llm, cwd=project, config=_retry_config(require_tests=True), shell_runner=shell
+    )
+
+    result = await agent.code_with_retry("make hello return 'hi'")
+
+    assert len(result.attempts) == 1
+    assert result.attempts[0].tests_passed is True
+    assert len(llm.calls) == 1
+
+
+@pytest.mark.asyncio
+async def test_require_tests_on_missing_test_triggers_retry(project: Path) -> None:
+    """require_tests=True + production-only patch + green tests → the
+    agent re-prompts the model asking for an additive test patch. Round
+    two adds the test file; that succeeds; loop returns."""
+    from code_scalpel.tools.shell import ShellResult
+    from tests.mocks import MockShellRunner
+
+    llm = MockLLMAdapter([_GOOD_PATCH_FROM_ORIGINAL, _TEST_ONLY_PATCH])
+    shell = MockShellRunner([ShellResult("1 passed", 0), ShellResult("2 passed", 0)])
+    agent = StepAgent(
+        llm=llm, cwd=project, config=_retry_config(require_tests=True), shell_runner=shell
+    )
+
+    result = await agent.code_with_retry("make hello return 'hi'")
+
+    assert len(result.attempts) == 2
+    assert result.attempts[0].tests_passed is True  # patch alone was green
+    assert result.attempts[1].tests_passed is True  # test addition stays green
+    # Final patch on disk; caller doesn't re-apply
+    assert result.edits == []
+    # Two LLM calls — second received the "needs tests" prompt
+    assert len(llm.calls) == 2
+    follow_up = llm.calls[1][-1]["content"]
+    assert "test" in follow_up.lower()
+    # The added test file lives where the model was told to put it
+    assert (project / "tests" / "test_hello.py").is_file()
 
 
 # ── memory recall integration ────────────────────────────────────────────────
