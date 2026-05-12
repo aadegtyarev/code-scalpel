@@ -1741,7 +1741,14 @@ class Session:
 
 v0.3 hooks captured in v0.2 (см. ниже):
 
-### v0.3
+### ~~v0.3~~ ✓ закрыта 2026-05-12
+
+Закрытие: тэг `v0.3.0`, GitHub release с привязанным Linux-бинарём
+и .deb-пакетом. Четыре пункта остались deferred — все из них либо
+environmental (нужны три LLM в LM Studio для бенча, нужно >16 ГБ VRAM
+для gemma-4 26B), либо experimental (self-clarify loop), либо ждут
+повторного воспроизведения в probe (post-hoc check для диаграмм). Ни
+один не блокер для релиза.
 
 ```text
 external SDK survey 2026-05-11 (research-agent report):
