@@ -634,12 +634,43 @@ async def test_plan_mode_addendum_in_system_prompt() -> None:
 
 @pytest.mark.asyncio
 async def test_ask_mode_does_not_inject_plan_addendum(project: Path) -> None:
-    """The plan-mode addendum must NOT leak into ask/code/review prompts."""
+    """The plan-mode addendum must NOT leak into ask/code prompts."""
     llm = MockLLMAdapter(["ok"])
     agent = StepAgent(llm=llm, cwd=project, config=_CONFIG)
     await agent.ask("question", mode="ask")
     system = llm.calls[0][0]["content"]
     assert "PLAN mode" not in system
+    assert "REVIEW mode" not in system
+
+
+@pytest.mark.asyncio
+async def test_review_mode_addendum_in_system_prompt(project: Path) -> None:
+    """Review mode injects its own addendum — structured output, no patches."""
+    llm = MockLLMAdapter(["## Summary\nLooks solid.\n\n## Issues\nNo issues found."])
+    agent = StepAgent(llm=llm, cwd=project, config=_CONFIG)
+    await agent.ask("review this code", mode="review")
+    system = llm.calls[0][0]["content"]
+    assert "REVIEW mode" in system
+    assert "NO SEARCH/REPLACE" in system or "Never propose SEARCH/REPLACE" in system
+    assert "[bug]" in system
+    assert "[risk]" in system
+    assert "PLAN mode" not in system
+
+
+@pytest.mark.asyncio
+async def test_review_mode_does_not_apply_patches(project: Path) -> None:
+    """Even if the model returns a SEARCH/REPLACE block in review mode,
+    the caller gets the raw text — no files are touched. (Enforcement is
+    on the TUI side: review mode doesn't show an apply-card.)"""
+    patch_reply = (
+        "## Issues\n- [bug] `x.py:1` — wrong logic.\n\n"
+        "<<<<<<< SEARCH\nold\n=======\nnew\n>>>>>>> REPLACE"
+    )
+    llm = MockLLMAdapter([patch_reply])
+    agent = StepAgent(llm=llm, cwd=project, config=_CONFIG)
+    result = await agent.ask("review x.py", mode="review")
+    # Reply is returned as-is; no file modification happened
+    assert "SEARCH" in result.reply
 
 
 @pytest.mark.asyncio
