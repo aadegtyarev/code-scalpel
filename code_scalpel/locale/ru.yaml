@@ -1,0 +1,38 @@
+# Русский каталог UI-строк.
+#
+# Принципы перевода:
+#  • неформальный тон, «ты», без корпоративного «Вы»;
+#  • технические термины (LLM, project_map, recipe) не переводим —
+#    юзер всё равно знает их по англоязычной экосистеме, перевод
+#    создаёт лишний словарный шум;
+#  • CLI/слэш-имена (`/learn`, `--url`) остаются как есть.
+
+status:
+  thinking: "◌ думаю…"
+  idle: "● готов"
+  error: "● ошибка"
+  cancelled: "● Отменено."
+  building_map: "● Строю project map…"
+  remembered: "● Запомнил: {text}"
+  saved_recipe: "● Сохранён {kind}: {path}"
+  learning: "◌ учусь {label}: {name}…"
+  loop_on: "● Итеративный patch loop: вкл"
+  loop_off: "● Итеративный patch loop: выкл"
+  no_compact_target: "Пока нечего сжимать."
+  no_tasks_yet: "● Плана ещё нет. Переключись в plan mode и попроси разбивку."
+
+error:
+  no_llm: "LLM не настроен — проверь конфиг."
+  config: "Ошибка конфига: {message}"
+  path_not_found: "путь не найден: {path}"
+  memory: "Ошибка памяти: {message}"
+  learn_failed: "/learn упал: {message}"
+  generic: "Ошибка: {message}"
+  compact_failed: "Сжатие не получилось: {message}"
+
+slash:
+  remember_usage: "Использование: /remember <что запомнить>"
+  learn_usage: "Использование: /learn <имя> [--url URL]  или  /learn skill <имя> [--url URL]"
+
+footer:
+  hints_default: "[ctrl+t] сменить режим · [ctrl+q] выход"

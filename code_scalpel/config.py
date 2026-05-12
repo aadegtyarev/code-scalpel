@@ -57,6 +57,10 @@ class AgentConfig(BaseModel):
     context_budget_warn: float = 0.70
     context_budget_critical: float = 0.90
     compact_threshold: float = 0.50
+    # UI locale: "en", "ru", or `None` to autodetect from `LC_*`/`LANG`.
+    # Only the TUI surface is affected — prompts the model sees stay
+    # English regardless (weak local models perform better on English).
+    ui_locale: str | None = None
 
 
 class ModeTemperatures(BaseModel):
