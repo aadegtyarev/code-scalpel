@@ -58,8 +58,8 @@ def test_strip_fences_drops_outer_codefence() -> None:
 @pytest.mark.asyncio
 async def test_learn_writes_recipe_under_code_scalpel(tmp_path: Path) -> None:
     """Recipe MD lands at `.code-scalpel/recipes/<name>.md`. The model is
-    fed a recipe-shaped prompt (must mention "recipe"); the saved file
-    matches what the model emitted, with any outer codefence stripped."""
+    fed a recipe-shaped prompt (must mention "recipe" and "lazy"); the saved
+    file matches what the model emitted, with any outer codefence stripped."""
     llm = MockLLMAdapter([_VALID_RECIPE_BODY])
     runtime = Runtime(cwd=tmp_path, config=_CONFIG, llm=llm, with_memory=False)
 
@@ -68,9 +68,11 @@ async def test_learn_writes_recipe_under_code_scalpel(tmp_path: Path) -> None:
     assert saved == tmp_path / ".code-scalpel" / "recipes" / "redis.md"
     assert saved.is_file()
     assert "name: redis" in saved.read_text()
-    # The prompt routed through the recipe template (not the skill one).
     user_msg = next(m for m in llm.calls[0] if m["role"] == "user")["content"]
     assert "recipe" in user_msg.lower()
+    # Prompt must instruct the model to use lazy (not eager) as default.
+    assert "load: lazy" in user_msg
+    assert "keywords" in user_msg
 
 
 @pytest.mark.asyncio

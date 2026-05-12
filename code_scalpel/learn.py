@@ -32,7 +32,8 @@ exact shape:
 
 ---
 name: {name}
-load: eager
+load: lazy
+keywords: ["keyword1", "keyword2"]
 file_patterns: ["..."]
 test_cmd: ["..."]
 lint_cmds: [["..."]]
@@ -42,6 +43,11 @@ allowed_commands: ["..."]
 # {name}
 - short, actionable bullet about a convention
 - another bullet
+
+`load: lazy` means this recipe is injected only when the user's task
+mentions one of the keywords. Pick 2–5 keywords that would naturally
+appear when someone starts working with `{name}` — tool name, common
+command names, framework terms. Keep them short (one word is fine).
 
 Drop fields that don't apply (e.g. omit `test_cmd:` if the tech has no
 test runner). Keep the body under twenty bullets — this is a hint sheet
