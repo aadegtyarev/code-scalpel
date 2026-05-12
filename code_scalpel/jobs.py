@@ -13,7 +13,7 @@ a callback every time the snapshot changes; that callback turns into
 a widget refresh on the Textual side.
 
 Plugin-friendly: anything that wants to expose progress (a custom
-slash command, a third-party agent loop, a /run-plan supervisor)
+slash command, a third-party agent loop, a /go supervisor)
 just acquires a JobRegistry handle and calls `track()`. No Textual
 dependency, no app reach-around.
 """

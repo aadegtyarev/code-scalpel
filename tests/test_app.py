@@ -1345,7 +1345,7 @@ async def test_slash_run_with_no_tasks_file_prints_hint(sandbox: Path) -> None:
         assert app._agent is not None
         app._agent.run_plan = AsyncMock()  # type: ignore[method-assign]
 
-        app._handle_slash("/run")
+        app._handle_slash("/go")
         await pilot.pause(0.2)
 
         app._agent.run_plan.assert_not_called()  # type: ignore[attr-defined]
@@ -1409,7 +1409,7 @@ async def test_slash_run_invokes_run_plan_and_renders_status_lines(
 
         app._agent.run_plan = AsyncMock(side_effect=_fake_run_plan)  # type: ignore[method-assign]
 
-        app._handle_slash("/run")
+        app._handle_slash("/go")
         await pilot.pause(0.5)
 
         app._agent.run_plan.assert_called_once()  # type: ignore[attr-defined]
@@ -1454,7 +1454,7 @@ async def test_slash_run_renders_final_summary(sandbox: Path) -> None:
         )
         app._agent.run_plan = AsyncMock(return_value=result)  # type: ignore[method-assign]
 
-        app._handle_slash("/run")
+        app._handle_slash("/go")
         await pilot.pause(0.5)
 
         output = app.query_one(OutputLog)
@@ -1494,7 +1494,7 @@ async def test_slash_run_cancellation_routes_through_step_worker(
 
         app._agent.run_plan = AsyncMock(side_effect=_slow_run_plan)  # type: ignore[method-assign]
 
-        app._handle_slash("/run")
+        app._handle_slash("/go")
         await pilot.pause(0.1)
         # `_step_worker` must be set — same handle Esc targets.
         worker = getattr(app, "_step_worker", None)
@@ -1752,7 +1752,7 @@ async def test_slash_skills_lists_tools_and_slashes(sandbox: Path) -> None:
         assert "Skills (detected)" in body
         # Slashes section
         assert "Slash commands" in body
-        for slash in ("/new", "/map", "/stats", "/context", "/remember", "/loop", "/run"):
+        for slash in ("/new", "/map", "/stats", "/context", "/remember", "/loop", "/go"):
             assert slash in body
         # Trailing note about pluggable skills
         assert "register_skill" in body

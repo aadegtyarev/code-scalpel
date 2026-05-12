@@ -71,7 +71,7 @@ _SLASH_COMMANDS: list[tuple[str, str]] = [
     ("/remember", "save a project note (e.g. /remember always run linter)"),
     ("/recall", "browse stored notes; with text — search them"),
     ("/loop", "toggle code-mode iterative patch loop (apply → test → retry)"),
-    ("/run", "walk TASKS.md unattended — one task at a time, stop on N failures"),
+    ("/go", "walk TASKS.md unattended — one task at a time, stop on N failures"),
     (
         "/learn",
         "generate a recipe markdown (.code-scalpel/recipes/<name>.md); /learn skill <name> for a skill",
@@ -882,7 +882,7 @@ class ScalpelApp(App[None]):
         if cmd == "/recall" or cmd.startswith("/recall "):
             self._do_recall(cmd.removeprefix("/recall"))
             return
-        if cmd == "/run":
+        if cmd == "/go":
             if self._agent is None:
                 output.print_error("No LLM configured.")
                 return
