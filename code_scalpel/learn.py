@@ -16,6 +16,7 @@ import re
 from pathlib import Path
 from typing import Literal
 
+from code_scalpel.fetch import fetch_markdown
 from code_scalpel.runtime import Runtime
 
 Kind = Literal["recipe", "skill"]
@@ -71,6 +72,19 @@ might contain to imply "do {name} now". Keep the procedure under ten
 steps and bias towards verbs, not theory.
 """
 
+_URL_PREAMBLE = """\
+The following markdown was extracted from `{url}`. Use it as the
+primary source of truth for the recipe/skill body. Where the page
+covers things outside the scope of a code-scalpel recipe/skill,
+just drop them — don't pad.
+
+----- BEGIN FETCHED CONTENT -----
+{content}
+----- END FETCHED CONTENT -----
+
+Now produce the markdown file as instructed below.
+"""
+
 _FRONTMATTER_FENCE = "---"
 
 
@@ -106,14 +120,30 @@ def _target_dir(cwd: Path, kind: Kind) -> Path:
     return cwd / ".code-scalpel" / f"{kind}s"
 
 
-async def learn(runtime: Runtime, name: str, *, kind: Kind = "recipe") -> Path:
+async def learn(
+    runtime: Runtime,
+    name: str,
+    *,
+    kind: Kind = "recipe",
+    url: str | None = None,
+) -> Path:
     """Ask the model for a recipe/skill on `name`, save to disk, return path.
+
+    With `url`, fetch the page and feed its markdown-converted body into
+    the prompt as authoritative source — the model summarises the doc
+    rather than guessing from training. Without `url`, the model writes
+    from its own knowledge.
 
     Overwrites existing files at the same path — the user controls naming
     and re-running `/learn foo` is the intended "regenerate" path. If the
     model returns an empty reply, raises `RuntimeError` instead of writing
-    an empty file."""
-    prompt = (_RECIPE_PROMPT if kind == "recipe" else _SKILL_PROMPT).format(name=name)
+    an empty file. Fetch errors propagate as `RuntimeError` (see
+    `code_scalpel.fetch`)."""
+    template = _RECIPE_PROMPT if kind == "recipe" else _SKILL_PROMPT
+    prompt = template.format(name=name)
+    if url is not None:
+        content = await fetch_markdown(url)
+        prompt = _URL_PREAMBLE.format(url=url, content=content) + "\n" + prompt
     result = await runtime.ask(prompt, mode="ask")
     body = _strip_fences(result.reply)
     if not body.strip() or _FRONTMATTER_FENCE not in body:

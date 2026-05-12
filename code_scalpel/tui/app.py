@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import re
 from pathlib import Path
 from typing import Any
 
@@ -601,6 +602,8 @@ class ScalpelApp(App[None]):
     def _do_learn(self, arg: str) -> None:
         """`/learn <name>` — recipe (default).
         `/learn skill <name>` — skill.
+        `/learn <name> --url <url>` — fetch URL, convert HTML→markdown,
+        feed to model as authoritative source.
 
         Off-loop because the model call is slow; the user sees an inline
         "Generating…" status and can keep working in the input."""
@@ -610,6 +613,15 @@ class ScalpelApp(App[None]):
         if self.runtime is None:
             output.print_error("No LLM configured — check config.")
             return
+
+        # Strip `--url <url>` anywhere in the arg before parsing the name.
+        # Keeps positional handling identical to the no-URL form below.
+        url: str | None = None
+        url_match = re.search(r"--url\s+(\S+)", arg)
+        if url_match is not None:
+            url = url_match.group(1)
+            arg = (arg[: url_match.start()] + arg[url_match.end() :]).strip()
+
         parts = arg.split(maxsplit=1)
         kind: Kind = "recipe"
         if parts and parts[0] == "skill":
@@ -621,17 +633,20 @@ class ScalpelApp(App[None]):
         else:
             name = arg.strip()
         if not name:
-            output.print_error("Usage: /learn <name>  or  /learn skill <name>")
+            output.print_error(
+                "Usage: /learn <name> [--url URL]  or  /learn skill <name> [--url URL]"
+            )
             return
 
         runtime = self.runtime  # capture for closure — narrows the type for mypy
 
         async def _go() -> None:
             footer = self.query_one(StatusFooter)
-            footer.status = f"◌ learning {kind}: {name}…"
-            with self.jobs.track("learn", f"learn {kind}: {name}"):
+            label = f"{kind} from URL" if url else kind
+            footer.status = f"◌ learning {label}: {name}…"
+            with self.jobs.track("learn", f"learn {label}: {name}"):
                 try:
-                    saved = await learn(runtime, name, kind=kind)
+                    saved = await learn(runtime, name, kind=kind, url=url)
                 except Exception as e:
                     output.print_error(f"/learn failed: {e}")
                     footer.status = "● error"
