@@ -671,6 +671,11 @@ class ScalpelApp(App[None]):
                     return
                 rel = saved.relative_to(self.cwd) if saved.is_relative_to(self.cwd) else saved
                 output.print_status(f"● Saved {kind}: {rel}")
+                if kind == "recipe":
+                    output.print_status(
+                        "  Loaded lazily — injected only when your task mentions a keyword."
+                        " To load on every turn: set `load: eager` in the frontmatter."
+                    )
                 footer.status = "● idle"
 
         self.call_after_refresh(lambda: self.run_worker(_go(), exclusive=False, group="learn"))
