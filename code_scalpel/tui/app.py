@@ -21,7 +21,12 @@ from code_scalpel.agent import (
     ToolExecuted,
     UsageReport,
 )
-from code_scalpel.config import AppConfig, autodetect_context_tokens, resolve_model_name
+from code_scalpel.config import (
+    AppConfig,
+    autodetect_context_tokens,
+    autodetect_supports_thinking,
+    resolve_model_name,
+)
 from code_scalpel.diagrams import extract_mermaid_blocks
 from code_scalpel.jobs import JobRegistry
 from code_scalpel.llm.adapter import ChatResponse
@@ -71,16 +76,12 @@ _SLASH_COMMANDS: list[tuple[str, str]] = [
     ("/remember", "save a project note (e.g. /remember always run linter)"),
     ("/recall", "browse stored notes; with text — search them"),
     ("/loop", "toggle code-mode iterative patch loop (apply → test → retry)"),
-    ("/run", "walk TASKS.md unattended — one task at a time, stop on N failures"),
+    ("/go", "walk TASKS.md unattended — one task at a time, stop on N failures"),
     (
         "/learn",
         "generate a recipe markdown (.code-scalpel/recipes/<name>.md); /learn skill <name> for a skill",
     ),
-    ("/help", "list commands"),
-    ("/mode ask", "switch to ask mode"),
-    ("/mode plan", "switch to plan mode"),
-    ("/mode code", "switch to code mode"),
-    ("/mode review", "switch to review mode"),
+    ("/help", "list commands (Ctrl+T cycles modes, Ctrl+L cycles trust)"),
 ]
 
 
@@ -117,6 +118,8 @@ class ScalpelApp(App[None]):
     BINDINGS = [
         Binding("ctrl+q", "quit", "Quit"),
         Binding("ctrl+t", "cycle_mode", "Mode", show=False),
+        Binding("ctrl+l", "cycle_trust", "Trust", show=False),
+        Binding("ctrl+k", "cycle_thinking", "Think", show=False),
         Binding("ctrl+o", "show_last_tool_result", "Open last tool result", show=False),
         Binding("ctrl+j", "show_jobs", "Show background jobs", show=False),
         Binding("ctrl+y", "copy_focused", "Copy focused card output", show=False),
@@ -126,6 +129,8 @@ class ScalpelApp(App[None]):
     ]
 
     _AGENT_MODES: tuple[str, ...] = ("ask", "plan", "code", "review")
+    _TRUST_LEVELS: tuple[str, ...] = ("skeptic", "optimist", "yolo")
+    _THINKING_LEVELS: tuple[str, ...] = ("off", "low", "medium", "high")
 
     def __init__(self, config: AppConfig, cwd: Path = Path(".")) -> None:
         super().__init__()
@@ -133,6 +138,10 @@ class ScalpelApp(App[None]):
         self.cwd = cwd
         self.state = AgentState.load(cwd)
         self._mode_index = 0
+        self._trust_index = self._TRUST_LEVELS.index(config.agent.trust)
+        self._thinking_index = self._THINKING_LEVELS.index(config.agent.thinking_effort)
+        # Set True when _detect_context finds the model supports reasoning params.
+        self._supports_thinking = False
         self._pending_edits: list[Edit] | None = None
         self._last_stream_rate: float = 0.0
         # Real token usage stashed by `_run_first_attempt_streamed` so the
@@ -255,10 +264,9 @@ class ScalpelApp(App[None]):
             self.query_one(OutputLog).print_error(f"Config error: {e}")
 
     async def _detect_context(self) -> None:
-        """One-shot startup discovery: model name and context window. Both
-        come from the same /v1/models endpoint, so we do them together —
-        cuts the round-trip count in half and keeps the footer's two
-        right-side fields in sync."""
+        """One-shot startup discovery: model name, context window, thinking
+        support. All come from the same /v1/models endpoint (and name
+        patterns), so we do them together — cuts the round-trip count."""
         try:
             profile = self.config.current_profile
             model_name = await resolve_model_name(profile)
@@ -271,7 +279,13 @@ class ScalpelApp(App[None]):
                 self._agent._llm.set_model(model_name)
             if tokens:
                 self.state.context_limit = tokens
-                self._update_footer()
+            # supports_thinking: explicit profile override wins; otherwise
+            # try the provider's API metadata, then fall back to name-pattern.
+            if profile.supports_thinking is not None:
+                self._supports_thinking = profile.supports_thinking
+            else:
+                self._supports_thinking = await autodetect_supports_thinking(profile, model_name)
+            self._update_footer()
         except Exception:
             pass
 
@@ -289,7 +303,6 @@ class ScalpelApp(App[None]):
             output.print_error("No LLM configured — check config.")
             return
 
-        self.query_one(StatusFooter).status = "◌ thinking…"
         # Raw text flows through to _run_step / _run_code_with_retry; the
         # Runtime adds the language directive at the agent boundary. One
         # prepare_turn, one channel — see code_scalpel/runtime.py.
@@ -676,7 +689,7 @@ class ScalpelApp(App[None]):
                         "  Loaded lazily — injected only when your task mentions a keyword."
                         " To load on every turn: set `load: eager` in the frontmatter."
                     )
-                footer.status = "● idle"
+                footer.status = ""
 
         self.call_after_refresh(lambda: self.run_worker(_go(), exclusive=False, group="learn"))
 
@@ -699,7 +712,7 @@ class ScalpelApp(App[None]):
                 # Anchor the footer budget to "post-compact" so the bar drops.
                 self.session.mark_compacted()
                 self._update_ctx()
-            footer.status = "● idle"
+            footer.status = ""
 
     def action_cancel_step(self) -> None:
         # Esc on a focused tool card returns the user to the input rather
@@ -882,7 +895,7 @@ class ScalpelApp(App[None]):
         if cmd == "/recall" or cmd.startswith("/recall "):
             self._do_recall(cmd.removeprefix("/recall"))
             return
-        if cmd == "/run":
+        if cmd == "/go":
             if self._agent is None:
                 output.print_error("No LLM configured.")
                 return
@@ -1064,7 +1077,7 @@ class ScalpelApp(App[None]):
                         )
                     else:
                         output.print_error(f"Apply failed: {err}")
-                    footer.status = "● idle"
+                    footer.status = ""
                 else:
                     await md.remove()
                     card = ToolCallCard("Apply", "")
@@ -1081,13 +1094,13 @@ class ScalpelApp(App[None]):
 
                 plan_card = PlanCard.from_tasks_md(full)
                 output.run_worker(output._append(plan_card), exclusive=False)
-                footer.status = "● idle"
+                footer.status = ""
             else:
-                footer.status = "● idle"
+                footer.status = ""
         except asyncio.CancelledError:
             await self._remove_progress(progress)
             output.print_status("● Cancelled.")
-            footer.status = "● idle"
+            footer.status = ""
             raise
         except Exception as e:
             await self._remove_progress(progress)
@@ -1123,7 +1136,7 @@ class ScalpelApp(App[None]):
                 first = await self._run_first_attempt_streamed(task)
             except asyncio.CancelledError:
                 output.print_status("● Cancelled.")
-                footer.status = "● idle"
+                footer.status = ""
                 raise
             except Exception as e:
                 output.print_error(f"Error: {e}")
@@ -1136,7 +1149,7 @@ class ScalpelApp(App[None]):
             if first is None:
                 duration = time.monotonic() - start
                 self._record_loop_usage(task, "", duration, 0)
-                footer.status = "● idle"
+                footer.status = ""
                 return
 
             attempt1, reply1 = first
@@ -1152,7 +1165,7 @@ class ScalpelApp(App[None]):
                 duration = time.monotonic() - start
                 self._record_loop_usage(task, reply1, duration, 1)
                 output.print_status("● Patch loop succeeded after 1 attempt(s).")
-                footer.status = "● idle"
+                footer.status = ""
                 return
 
             # Attempt 1 didn't land. Hand off to `code_with_retry` for the
@@ -1165,7 +1178,7 @@ class ScalpelApp(App[None]):
                 result = await self.runtime.code_with_retry(task)
             except asyncio.CancelledError:
                 output.print_status("● Cancelled.")
-                footer.status = "● idle"
+                footer.status = ""
                 raise
             except Exception as e:
                 output.print_error(f"Error: {e}")
@@ -1180,7 +1193,7 @@ class ScalpelApp(App[None]):
                     output.print_assistant(result.reply)
                 duration = time.monotonic() - start
                 self._record_loop_usage(task, result.reply, duration, 0)
-                footer.status = "● idle"
+                footer.status = ""
                 return
 
             for idx, attempt in enumerate(attempts, start=1):
@@ -1196,7 +1209,7 @@ class ScalpelApp(App[None]):
             final = attempts[-1]
             if final.tests_passed:
                 output.print_status(f"● Patch loop succeeded after {len(attempts)} attempt(s).")
-                footer.status = "● idle"
+                footer.status = ""
             else:
                 # Gave up — fall back to the manual review flow so the user
                 # keeps their escape hatch. They see every attempt above plus
@@ -1212,7 +1225,7 @@ class ScalpelApp(App[None]):
                     self._pending_edits = list(last_edits)
                     footer.status = "● reviewing"
                 else:
-                    footer.status = "● idle"
+                    footer.status = ""
 
     async def _run_first_attempt_streamed(self, task: str) -> tuple[PatchAttempt, str] | None:
         """Stream the first /loop attempt so the user sees tokens instead
@@ -1380,7 +1393,7 @@ class ScalpelApp(App[None]):
                 result = await self._agent.run_plan(on_task_start=_start, on_task_end=_end)
             except asyncio.CancelledError:
                 output.print_status("● Cancelled.")
-                footer.status = "● idle"
+                footer.status = ""
                 raise
             except Exception as e:
                 output.print_error(f"Run-plan error: {e}")
@@ -1396,7 +1409,7 @@ class ScalpelApp(App[None]):
                 f"⤷ Run finished: {done} done, {failed} failed, "
                 f"{skipped} skipped · stopped: {reason} · {duration:.1f}s"
             )
-            footer.status = "● idle"
+            footer.status = ""
 
     def _render_attempt(self, attempt: PatchAttempt) -> str:
         """Card body for one patch attempt: synthesized diff + apply/test
@@ -1565,24 +1578,24 @@ class ScalpelApp(App[None]):
                 self.state.save(self.cwd)
             else:
                 output.print_error(f"Apply failed: {err}")
-            footer.status = "● idle"
+            footer.status = ""
 
         elif action == "reject":
             self._pending_edits = None
             output.print_status("Patch rejected.")
-            footer.status = "● idle"
+            footer.status = ""
 
         elif action == "regen":
             edits = self._pending_edits
             self._pending_edits = None
             if edits is None or self._agent is None:
-                footer.status = "● idle"
+                footer.status = ""
             else:
                 # Debug retry: feed the apply error back to the model and ask
                 # for a fixed patch. One round only — don't spiral.
                 self.run_worker(self._regenerate(edits), exclusive=True, group="step")
                 return
-            footer.status = "● idle"
+            footer.status = ""
 
         self.query_one(ModeInput).focus_input()
 
@@ -1594,19 +1607,45 @@ class ScalpelApp(App[None]):
         self.query_one(ModeInput).set_mode(mode)
         self._update_footer()
 
+    def action_cycle_trust(self) -> None:
+        self._trust_index = (self._trust_index + 1) % len(self._TRUST_LEVELS)
+        level = self._TRUST_LEVELS[self._trust_index]
+        self.config.agent.trust = level  # type: ignore[assignment]
+        self._update_footer()
+
+    def action_cycle_thinking(self) -> None:
+        if not self._supports_thinking:
+            self.notify(
+                "Current model doesn't support thinking params.",
+                title="Thinking effort",
+                timeout=2,
+            )
+            return
+        self._thinking_index = (self._thinking_index + 1) % len(self._THINKING_LEVELS)
+        effort = self._THINKING_LEVELS[self._thinking_index]
+        self.config.agent.thinking_effort = effort  # type: ignore[assignment]
+        self._update_footer()
+
     # ── footer helpers ────────────────────────────────────────────────────────
 
     def _update_footer(self) -> None:
-        """Footer is minimal — hints + status + model. Per-turn metrics live
-        inline in the chat now (see _format_turn_summary)."""
+        """Footer: hints + status + trust/thinking indicators + ctx + model."""
         from code_scalpel.i18n import t
 
         footer = self.query_one(StatusFooter)
-        # The square brackets in the hotkey hints need escaping for Rich
-        # markup; the locale catalog stores them unescaped so the same
-        # text can be reused outside the footer if ever needed.
         raw = t("footer.hints_default")
         footer.hints = raw.replace("[", r"\[")
+
+        _trust_short = {"skeptic": "[skp]", "optimist": "[opt]", "yolo": "[ylo]"}
+        footer.trust = _trust_short.get(self.config.agent.trust, self.config.agent.trust)
+
+        if self._supports_thinking and self.config.agent.thinking_effort != "off":
+            _effort_short = {"low": "◐ low", "medium": "◐ med", "high": "◐ high"}
+            footer.thinking = _effort_short.get(
+                self.config.agent.thinking_effort, self.config.agent.thinking_effort
+            )
+        else:
+            footer.thinking = ""
 
     def _update_ctx(self) -> None:
         """Refresh the footer's ctx segment from the current Session +

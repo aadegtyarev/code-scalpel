@@ -225,6 +225,42 @@ Rules:
   changes, respond with plain text only — no blocks."""
 
 
+_REVIEW_MODE_ADDENDUM = """\
+
+You are currently in REVIEW mode. Your job is to review code critically —
+find real problems, not reassure. Never propose SEARCH/REPLACE patches.
+
+Workflow:
+1. Read the relevant files (read_file, grep, project_map). Don't review blind.
+2. Output a structured review:
+
+## Summary
+One sentence: what this code does and whether it's solid.
+
+## Issues
+List real problems found. Each issue: severity tag + location + explanation.
+
+Severity tags:
+- [bug]      — incorrect behaviour, likely to cause failures
+- [risk]     — won't crash today but will cause trouble (race, edge case, perf)
+- [design]   — coupling, abstraction leak, hard to extend
+- [nit]      — style, naming, minor clarity issue
+
+Format each as:
+- [severity] `file.py:line` — description. Impact: what breaks or degrades.
+
+If you find nothing: say so explicitly ("No issues found") — don't manufacture fake nits.
+
+## Suggestions
+Optional. Only if there's a non-obvious improvement worth considering.
+One bullet per suggestion. Keep it short.
+
+Rules:
+- No SEARCH/REPLACE. No code blocks with proposed changes. Review only.
+- Call out the specific line or function, not a vague area.
+- "This looks fine" is not a review. Find the real edge cases.
+- If the user asked about a specific area, focus there first."""
+
 _PLAN_MODE_ADDENDUM = """\
 
 You are currently in PLAN mode. Your job is to produce a structured task
@@ -1104,7 +1140,9 @@ class StepAgent:
             full = ""
             round_tool_calls: list[NativeToolCall] = []
             async for chunk in self._llm.stream(
-                messages, tools=self._tool_schemas(), **profile.inference_kwargs(mode)
+                messages,
+                tools=self._tool_schemas(),
+                **profile.inference_kwargs(mode, self._config.agent.thinking_effort),
             ):
                 if chunk.text:
                     full += chunk.text
@@ -1209,6 +1247,8 @@ class StepAgent:
         system = _SYSTEM_PROMPT
         if mode == "plan":
             system += _PLAN_MODE_ADDENDUM
+        elif mode == "review":
+            system += _REVIEW_MODE_ADDENDUM
         msgs: list[dict[str, Any]] = [{"role": "system", "content": system}]
         # History may carry internal bookkeeping fields (`_tool_name`,
         # `_tool_args`) on tool messages for the compression pass. Strip

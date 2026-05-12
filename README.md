@@ -86,7 +86,7 @@ Switch with `Ctrl+T` or `/mode <name>`.
 | `ask` | Questions, exploration, code review. Never modifies files. |
 | `plan` | Breaks a task into numbered steps. |
 | `code` | Proposes a patch. You review and confirm before it applies. |
-| `run` | Executes plan steps one by one with confirmation at each step. |
+| `/go` | Executes plan steps one by one with confirmation at each step. |
 
 ---
 
