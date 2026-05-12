@@ -178,13 +178,27 @@ class ScalpelApp(App[None]):
         self.run_worker(self._detect_context(), exclusive=False)
 
     async def on_unmount(self) -> None:
-        """Print a session summary to stdout on exit — handy for cost tracking."""
+        """Capture a session summary for stdout on exit — printed by main().
+        Uses the full `stats_report` (multi-line: model / mode / requests /
+        elapsed / tokens / rate / context / cost) because the one-liner
+        loses everything that the user cares about when reviewing
+        what a session cost. We still pass through if anything throws —
+        a broken summary must never block exit."""
+        from contextlib import suppress
+
         try:
-            line = self.session.summary_line()
+            mode = self._AGENT_MODES[self._mode_index]
+            model: str | None = None
+            with suppress(KeyError, ValueError):
+                model = self.config.current_profile.model
+            report = self.session.stats_report(
+                ctx_limit=self.state.context_limit or None,
+                model=model,
+                mode=mode,
+            )
         except Exception:
             return
-        # Stored for the user to read after the TUI exits; printed by main().
-        self._exit_summary = line
+        self._exit_summary = "Session summary:\n" + report
 
     _exit_summary: str | None = None
 

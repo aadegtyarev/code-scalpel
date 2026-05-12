@@ -93,6 +93,33 @@ async def test_app_starts_with_input_focused(sandbox: Path) -> None:
 
 
 @pytest.mark.asyncio
+async def test_exit_summary_uses_full_stats_report(sandbox: Path) -> None:
+    """on_unmount captures the multi-line stats_report, not the one-liner —
+    the user reviewing what a session cost wants tokens/cost/elapsed/model
+    visible, not a `↑Xk ↓Yk` chunk that drops everything but raw numbers."""
+    app = ScalpelApp(config=_CONFIG, cwd=sandbox)
+    mock = _StreamingMock(["hi"])
+    async with app.run_test(headless=True, size=(80, 24)) as pilot:
+        await pilot.pause(0.1)
+        _attach_mock(app, mock)
+        # Stage some session activity so the summary has something to show.
+        app.session.record(
+            ChatResponse(content="", prompt_tokens=120, completion_tokens=80, cost=0.005)
+        )
+    # on_unmount fires during run_test teardown.
+    assert app._exit_summary is not None
+    summary = app._exit_summary
+    assert "Session summary:" in summary
+    # stats_report shape: labelled rows for tokens / requests / elapsed
+    assert "requests" in summary
+    assert "tokens" in summary
+    assert "elapsed" in summary
+    # Numbers from the recorded response surface in the report
+    assert "120" in summary  # prompt total
+    assert "80" in summary  # completion total
+
+
+@pytest.mark.asyncio
 async def test_app_layout_has_separator_rules(sandbox: Path) -> None:
     app = ScalpelApp(config=_CONFIG, cwd=sandbox)
     async with app.run_test(headless=True, size=(80, 24)) as pilot:
