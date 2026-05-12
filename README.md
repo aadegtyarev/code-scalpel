@@ -1,230 +1,203 @@
 # code-scalpel
 
-TUI coding agent для работы с кодом через **слабые локальные LLM**.
-Принцип: маленький контекст, маленький patch, быстрый тест,
-контролируемая автономность.
+A TUI coding agent that works with your code through local or cloud LLMs.
+Small context. Precise patches. You stay in control.
 
-> Статус: v0.3 в работе. v0.1 (proof-of-concept) и v0.2 (tool-loop +
-> grounding + transparency) закрыты. См. `docs/plan.md` §31.
-
-## Зачем
-
-Большие облачные модели (Claude, GPT) умеют редактировать код по тексту.
-Локальные 7-30B модели — нет, или плохо: галлюцинируют, теряют
-контекст, генерят патчи которые не применяются.
-
-`code-scalpel` — это **harness** который заставляет слабую модель
-вести себя надёжно:
-
-- **навигационный project map** — каждый turn модель видит только
-  paths + line counts (overview), и сама дергает `map_file(path)` для
-  drilldown (классы, сигнатуры, docstrings, intra-project imports).
-  Скейлится на проекты в тысячи файлов без раздутого контекста.
-- **native function-calling** (read_file / map_file / goto_definition /
-  find_references / grep / run_tests) — модель запрашивает что ей
-  нужно, а не получает всё сразу.
-- **строгие grounding rules** в промте — «если символа нет в map, его
-  нет; перед показом кода обязательно read_file».
-- **per-mode temperature** — ask=0.1, code=0.2, debug=0.5. Чтобы
-  retrieval не выдумывал, а edit-режим не был дубовым.
-- **SEARCH/REPLACE patch format** — модель выдаёт diff, мы применяем
-  атомарно. Никаких полу-применённых файлов.
-- **проектная память** — `MemoryStore` (sqlite + FTS5, zero new deps).
-  `/remember` сохраняет факт, `/recall` ищет; на каждый turn агент
-  получает top-3 релевантных записок автоматически.
-- **iterative patch loop** (опт-ин, `/loop` или `agent.iterative_patch_loop`)
-  — в code mode после apply прогоняем pytest, красные тесты возвращаем
-  модели как retry-context. Cap = `agent.max_debug_attempts`.
-
-Тестовая модель: `qwen2.5-coder-14b-instruct` в LM Studio. На 32-тест
-бенче после v0.3 navigation refactor: **27 passing + 5 xfail** (1 старый
-xfail на grep-discovery + 4 свежих: 3 patch-precision регрессии в
-`rename_function` / `add_missing_import` / `remove_unused_import` и 1
-instruction-pivot регрессия в `history_three_turn_topic_continuity`).
-Падение с v0.2 30/31 → v0.3 27/32 — большая часть это **калибровочный
-drift**, а не реальное ухудшение, см. `docs/article_draft.md` гл. 12.
-
-Кросс-модельный бенч (7 моделей, см. `docs/bench-models.md`): coder-14b
-лучший Pareto, gemma-4-26b-a4b лучшее качество (100%) но в 2.5× медленнее.
-
-## Установка
-
-```bash
-# 1) Окружение
-python -m venv .venv && source .venv/bin/activate
-pip install -e ".[dev]"
-
-# 2) LM Studio (отдельно): https://lmstudio.ai
-#    Загрузить qwen2.5-coder-14b-instruct, запустить server на :1234.
 ```
-
-Альтернативный backend — собранный из исходников `llama.cpp` с CUDA:
-
-```bash
-~/src/llama.cpp/build/bin/llama-server \
-  --model path/to/qwen2.5-coder-14b-Q4_K_M.gguf \
-  --port 1234 -ngl 99 --host 127.0.0.1
-```
-
-## Запуск
-
-```bash
-cd ваш-проект
+cd your-project
 code-scalpel
 ```
 
-TUI откроется в текущей папке. Слева футер:
-`[ctrl+t] cycle mode · [ctrl+q] quit · ● idle · qwen2.5-coder-14b`.
+---
 
-После каждого ответа модели в чате появляется dim-строчка-сводка:
+## What you can do
+
+**Ask questions about the codebase**
+"Where is the auth logic?", "Is this function used anywhere?", "Walk me through this flow." The agent navigates the project, reads relevant files, and answers — without you having to specify which files to look at.
+
+**Fix a bug or add a feature**
+Describe the task in plain text. The agent proposes a diff, you review it, confirm, and it applies the patch and runs your tests. If tests fail, it retries. If it can't fix it, it rolls back.
+
+**Plan a larger task**
+The agent breaks your request into concrete steps (T001, T002 …). You can then execute them one by one or let it run through them autonomously.
+
+**Run shell commands — with confirmation**
+The agent can propose and execute shell commands. In the default skeptic mode you see the command and approve or reject it before it runs. Destructive commands (`rm -rf`, `sudo`, `mkfs`, …) are hard-blocked — you can't approve them by accident.
+
+**Teach it about your tools**
+Use `/learn <url>` to fetch docs or paste text — the agent writes a recipe file. On future turns that recipe is injected into context automatically: always (eager recipes) or only when your task mentions that tool by name (lazy recipes). No more explaining your stack from scratch every session.
+
+---
+
+## Install
+
+Requires Python 3.11+ and an OpenAI-compatible LLM server.
+
+```bash
+pip install code-scalpel
+```
+
+Or from source:
+
+```bash
+git clone https://github.com/aadegtyarev/code-scalpel
+cd code-scalpel
+python -m venv .venv && source .venv/bin/activate
+pip install -e .
+```
+
+### LLM backend
+
+The default setup expects [LM Studio](https://lmstudio.ai) running on `localhost:1234`.
+Load a model (tested on `qwen2.5-coder-14b-instruct`), start the local server, done.
+
+Any OpenAI-compatible server works — llama.cpp, vLLM, Ollama, OpenRouter:
+
+```bash
+# llama.cpp example
+llama-server --model qwen2.5-coder-14b-Q4_K_M.gguf --port 1234 -ngl 99
+```
+
+---
+
+## Quick start
+
+```bash
+cd your-project
+code-scalpel          # opens TUI in current directory
+```
+
+The footer shows the active mode and model name. Switch modes with `Ctrl+T`.
+
+Type a task and press Enter. The agent reads your project, calls tools, and streams the response inline. After each reply a summary line shows how many tools were called, tokens used, and context fill:
 
 ```
-⤷ 🔧 2 tools · ↓ 234 tokens · 5 tok/s · 1.4s · ctx 1k/16k (6%)
+⤷ 🔧 3 tools · ↓ 312 tokens · 4.1s · ctx 2k/16k (12%)
 ```
 
-Жёлтое `⚠ no tools used` означает что модель не звала ни одной
-тулзы — высокий шанс что ответ confabulated, проверь через `/map`.
+---
 
-## Режимы
+## Modes
 
-| Режим | Temp | Назначение |
-|---|---|---|
-| `ask` | 0.1 | Q&A, retrieval, обсуждение. Не меняет код. |
-| `plan` | 0.4 | Планирование, TASKS.md *(v0.3+)*. |
-| `code` | 0.2 | Один шаг — модель пишет SEARCH/REPLACE patch. |
-| `review` | 0.1 | Анализ, code review *(v0.3+)*. |
-| `debug` | 0.5 | Sub-режим для regen после неудачи. |
+Switch with `Ctrl+T` or `/mode <name>`.
 
-Переключение: `Ctrl+T` или `/mode ask|plan|code|review`.
-
-## Слаш-команды
-
-| | |
+| Mode | What it does |
 |---|---|
-| `/new` | Очистить сессию (chat + state + history). |
-| `/compact` | Суммаризировать историю в одно сообщение. Освобождает контекст. |
-| `/map` | Показать полный project map. Свёрнуто, Ctrl+O для full view. |
-| `/tasks` | Показать текущий plan из `.code-scalpel/TASKS.md`. |
-| `/stats` | Сводка по сессии: tokens / cost / timing. Заменил старый `/system`. |
-| `/remember <fact>` | Сохранить заметку в проектную память. |
-| `/recall [query]` | Показать сохранённые заметки; с запросом — поиск через FTS5. |
-| `/loop` | Toggle code-mode iterative loop (apply → test → retry). |
-| `/help` | Список команд. |
-| `/mode <name>` | Переключить режим. |
+| `ask` | Questions, exploration, code review. Never modifies files. |
+| `plan` | Breaks a task into numbered steps. |
+| `code` | Proposes a patch. You review and confirm before it applies. |
+| `run` | Executes plan steps one by one with confirmation at each step. |
 
-## Хоткеи
+---
 
-| | |
+## Commands
+
+| Command | What it does |
 |---|---|
-| `Ctrl+T` | Цикл по режимам |
-| `Ctrl+O` | Открыть последний tool-result в попапе с подсветкой |
-| `Ctrl+↑` / `Ctrl+↓` | Прыгать по tool-карточкам в истории; Esc возвращает фокус в инпут |
-| `↑` / `↓` | Bash-style история ввода в инпуте (вместо открытия автокомплита) |
-| `Ctrl+Q` | Выход |
-| `Esc` | Прервать стриминг ответа |
+| `/learn <url>` | Fetch a page and save it as a recipe. |
+| `/learn` | Open editor to write a recipe manually. |
+| `/remember <fact>` | Save a note to project memory (sqlite, persists across sessions). |
+| `/recall [query]` | Show saved notes; with a query, searches by full-text. |
+| `/compact` | Summarise conversation history to free up context. |
+| `/map` | Show the full project file tree. |
+| `/tasks` | Show the current plan from `.code-scalpel/TASKS.md`. |
+| `/stats` | Session summary: tokens, cost, timing. |
+| `/new` | Clear session and start fresh. |
+| `/mode <name>` | Switch mode. |
 
-## Тулзы
+---
 
-Модель вызывает их через native OpenAI function-calling. Все
-результаты рендерятся inline как свёрнутые карточки.
+## Keyboard shortcuts
 
-| Тулза | Что |
+| Key | Action |
 |---|---|
-| `read_file(path)` | Полное содержимое файла с номерами строк. |
-| `map_file(path)` | Per-file outline: классы, сигнатуры, первые предложения docstrings, intra-project imports. Drilldown поверх overview. |
-| `goto_definition(name)` | Где определён символ — `path:line  kind  qualified_name`. AST, без шума grep. |
-| `find_references(name)` | Где упоминается символ (whole-word, cap 50 строк). Парный к goto_definition. |
-| `grep(pattern, path?)` | До 30 совпадений по regex. |
-| `run_tests(args?)` | `pytest`, exit code + truncated output. |
+| `Ctrl+T` | Cycle through modes |
+| `Ctrl+O` | Open last tool result in a full-screen popup |
+| `Ctrl+↑` / `Ctrl+↓` | Jump between tool cards in history |
+| `↑` / `↓` | Input history (like a shell) |
+| `Esc` | Cancel streaming response |
+| `Ctrl+Q` | Quit |
 
-## Диаграммы
+---
 
-Если модель возвращает ```` ```mermaid ``` ```` блок — в TUI поверх ответа
-появляется `MermaidCard`. Три яруса рендера, offline-first:
+## Recipes (`/learn`)
 
-- **Pure-Python ASCII** *(по умолчанию)* — рендерит flowchart-семью
-  (`flowchart TD/LR`, `graph TD/LR`) без внешних бинарников и сети.
-  Подходит для compliance-сегмента где npm недопустим.
-- **mmdc + rich-pixels** *(опционально)* — `npm i -g @mermaid-js/mermaid-cli`
-  плюс `pip install -e ".[diagrams]"`, тогда нерафлчартовые типы
-  (`sequenceDiagram`, `classDiagram`, …) рендерятся в PNG и встраиваются
-  как Unicode half-blocks.
-- **Raw text** — если ни один ярус не сработал, блок показывается как
-  syntax-highlighted текст с подсказкой что установить.
+Recipes let the agent remember things that aren't in your code — how your team uses a particular tool, a library's quirks, conventions that live only in someone's head.
 
-## Архитектура — коротко
-
-```
-TUI (Textual)
-  └─ ScalpelApp
-       ├─ OutputLog       ← inline chat
-       ├─ ModeInput       ← цвет курсора по режиму, HistoryInput (↑/↓)
-       ├─ JobsBar         ← inline индикатор активных background-jobs
-       └─ StatusFooter    ← минимальная: status + model
-agent.StepAgent
-  └─ stream_ask(task, mode)
-       ├─ build user_msg = "OVERVIEW:\n<paths+lines>\n\nTask: <task>"
-       │   (+ Recalled notes из MemoryStore, если что-то нашлось)
-       ├─ chat() с tools=[read_file, map_file, goto_definition,
-       │                  find_references, grep, run_tests]
-       │    └─ цикл: tool_call → execute → tool_result → ...
-       └─ extract SEARCH/REPLACE → patch/edit_block.apply_edits
-       (в code mode + /loop: code_with_retry → apply → run_tests →
-        retry с pytest output до agent.max_debug_attempts)
-patch/edit_block
-  └─ атомарное применение: tmp-файл → rename
-memory.py
-  └─ MemoryStore: sqlite + FTS5, auto-recall top-3 на каждый turn
-index/                   ← v0.3, в работе
-  └─ tree-sitter Phase 1: parser + walkers + shape (parallel с project_map)
-tools/
-  ├─ files.py, search.py, shell.py
-  └─ agent_tools.py    ← JSON Schema для native function-calling
+```bash
+/learn https://redis.io/docs/manual/data-types/
+# agent fetches, summarises, writes .code-scalpel/recipes/redis.md
 ```
 
-Полное описание: `docs/plan.md`.
+Two loading modes, set in the recipe's frontmatter:
 
-## Конфиг
+- **eager** — injected on every turn. Use for things that are always relevant: "we test with pytest -x", "all Python must be typed".
+- **lazy** — injected only when your task mentions a keyword. Use for tool-specific knowledge: the redis recipe loads when you ask about caching, not when you're fixing a CI script.
 
-Дефолтные настройки заиграют без файла. Кастомизация:
+Three recipe locations, in priority order (project overrides user overrides built-in):
+
+1. `.code-scalpel/recipes/` — project-local
+2. `~/.config/code-scalpel/recipes/` — yours across all projects
+3. Built-in recipes that ship with the agent
+
+---
+
+## Configuration
+
+No config file needed to get started. To customise:
 
 ```yaml
-# ~/.config/code-scalpel/config.yaml  (системный)
-# или .code-scalpel/config.yaml       (проект)
+# ~/.config/code-scalpel/config.yaml   (applies to all projects)
+# .code-scalpel/config.yaml            (this project only)
+
 profiles:
   local:
     provider: lmstudio
-    model: auto          # автодетект из /v1/models; явное имя override
-    top_p: 0.9           # shared
-    temperature:         # per-mode dict, или float = одинаково для всех
+    model: auto          # auto-detects the loaded model; or set explicitly
+    temperature:
       ask: 0.1
       code: 0.2
       debug: 0.5
+
+agent:
+  trust: skeptic         # skeptic | optimist | yolo
+  max_file_lines: 400
+  max_debug_attempts: 2
 ```
 
-`model: auto` (или legacy `local-model`) — спросит LM Studio через
-`/v1/models` и подставит первую загруженную. Явное имя
-(`qwen2.5-coder-14b-instruct`) идёт в провайдер без изменений.
+`trust` controls how much the agent can do without asking:
 
-## Разработка
+| Level | Shell commands | Patch apply |
+|---|---|---|
+| `skeptic` (default) | Confirmation required | Confirmation required |
+| `optimist` | Runs after hard-block check | Auto-applied |
+| `yolo` | No filters | Auto-applied |
+
+To use a cloud provider or a different local server:
+
+```yaml
+profiles:
+  openrouter:
+    provider: openrouter
+    model: qwen/qwen-2.5-coder-32b-instruct
+  llamacpp:
+    provider: lmstudio     # same OpenAI-compatible adapter
+    base_url: http://localhost:8080
+    model: auto
+```
+
+API keys go in `.env` (never in yaml):
 
 ```bash
-ruff check . && ruff format --check .
-mypy code_scalpel/
-pytest                          # 453 unit-тестов
-pytest -m llm --run-llm         # 32 LLM-теста под LM Studio
+OPENROUTER_API_KEY=sk-or-...
 ```
 
-Тесты пишутся вместе с кодом, **не после**. Нет теста — нет коммита.
+---
 
-## Доки
+## Contributing
 
-- `docs/plan.md` — архитектура + роадмап (источник правды).
-- `docs/prompts.md` — как писать промты и описания тулз для слабых LLM,
-  с уроками из итерации 2026-05-11 (галлюцинация summary_line).
-- `docs/bench-models.md` — кросс-модельный бенч, 7 моделей × 24 теста.
-- `docs/article_draft.md` — техническая статья о проектировании.
+See [DEVELOPING.md](DEVELOPING.md) — stack, commands, branch and release conventions.
 
 ## License
 
-AGPL-3.0-or-later.
+AGPL-3.0-or-later
