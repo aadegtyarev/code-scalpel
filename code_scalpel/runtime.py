@@ -25,6 +25,7 @@ from code_scalpel.config import AppConfig
 from code_scalpel.llm.adapter import LLMAdapter, OpenAICompatibleAdapter
 from code_scalpel.memory import MemoryStore
 from code_scalpel.session import Session
+from code_scalpel.tools.agent_tools import ConfirmShellExec
 
 
 class Runtime:
@@ -44,6 +45,7 @@ class Runtime:
         config: AppConfig,
         llm: LLMAdapter | None = None,
         with_memory: bool = True,
+        confirm_shell_exec: ConfirmShellExec | None = None,
     ) -> None:
         self.cwd = cwd
         self.config = config
@@ -64,6 +66,7 @@ class Runtime:
             cwd=cwd,
             config=config,
             memory=self.memory,
+            confirm_shell_exec=confirm_shell_exec,
         )
 
     async def stream(

@@ -22,6 +22,7 @@ import json
 import re
 import shlex
 import shutil
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -29,6 +30,11 @@ from typing import Any
 from code_scalpel.tools.files import list_files, read_file
 from code_scalpel.tools.search import ripgrep
 from code_scalpel.tools.shell import AsyncShellRunner, ShellRunner
+
+# Awaitable callback the dispatch invokes when a shell command needs
+# the user's blessing before running (skeptic trust level). Returns
+# True to approve, False to refuse.
+ConfirmShellExec = Callable[[str], Awaitable[bool]]
 
 # OpenAI tools schema — sent with chat() so the model can call them natively.
 TOOL_SCHEMAS: list[dict[str, Any]] = [
@@ -343,12 +349,20 @@ async def execute(
     runner: ShellRunner | None = None,
     trust: str = "skeptic",
     shell_exec_timeout: int = 30,
+    confirm_shell_exec: ConfirmShellExec | None = None,
 ) -> ToolResult:
     """Dispatch a tool call by name. Returns a ToolResult — never raises.
 
-    `trust` and `shell_exec_timeout` are only consulted for the
-    `shell_exec` path; pass them at the call site to keep dispatch
-    a single boundary."""
+    `trust`, `shell_exec_timeout`, `confirm_shell_exec` are only
+    consulted for the `shell_exec` path; pass them at the call site
+    to keep dispatch a single boundary.
+
+    `confirm_shell_exec(command)` is awaited in skeptic mode for
+    non-hard-blocked commands. Return True to approve, False to
+    refuse. When the callback is `None` and confirm is required,
+    the command is refused with a clear message — keeps headless
+    callers (probe, bench) from accidentally running shell on a
+    user's machine."""
     if call.name == "read_file":
         return _tool_read_file(call, cwd, max_lines=max_lines)
     # `project_map` is the unified entry — empty path → tree, path → file
@@ -378,6 +392,7 @@ async def execute(
             runner or AsyncShellRunner(),
             trust=trust,
             timeout=shell_exec_timeout,
+            confirm=confirm_shell_exec,
         )
     return ToolResult(
         call=call,
@@ -721,15 +736,19 @@ async def _tool_shell_exec(
     *,
     trust: str,
     timeout: int,
+    confirm: ConfirmShellExec | None = None,
 ) -> ToolResult:
     """args: `{command: str}` — arbitrary shell command (pipes, redirects,
     quoting all work, no `bash -c` wrapping needed).
 
-    Policy: `code_scalpel.policy.decide(command, trust)` is the only
-    gate. `skeptic` refuses with a "manual confirm UI pending" message;
-    `optimist` refuses commands matching the hard-block list (rm -rf /,
-    sudo, dd of=/dev/*, mkfs, pipe-to-shell, fork bomb); `yolo` allows
-    everything.
+    Policy via `code_scalpel.policy.decide(command, trust)`:
+      • hard-blocked (rm -rf /abs, sudo, mkfs, dd of=/dev/*, pipe-to-
+        shell, fork bomb) — refused regardless of trust except yolo.
+      • optimist / non-blocked — runs.
+      • skeptic / non-blocked — needs interactive confirmation. Caller
+        provides `confirm(command) -> bool`; without one the command
+        is refused (probe / bench: no UI).
+      • yolo — runs unconditionally.
 
     Output is truncated to `_MAX_SHELL_OUTPUT` chars with an explicit
     marker so the model sees the cut. Combined stdout+stderr — same
@@ -748,6 +767,21 @@ async def _tool_shell_exec(
     decision = decide(command, trust)  # type: ignore[arg-type]
     if not decision.allowed:
         return ToolResult(call, output=f"refused: {decision.reason}", ok=False)
+    if decision.requires_confirm:
+        if confirm is None:
+            return ToolResult(
+                call,
+                output=(
+                    "refused: shell_exec at trust=skeptic needs a "
+                    "confirmation handler — none was registered. Build "
+                    "the agent through ScalpelApp (which wires the UI) "
+                    "or set trust to 'optimist' / 'yolo'."
+                ),
+                ok=False,
+            )
+        approved = await confirm(command)
+        if not approved:
+            return ToolResult(call, output="refused: user rejected the command", ok=False)
 
     try:
         result = await runner.run_shell(command, cwd=str(cwd), timeout=timeout)

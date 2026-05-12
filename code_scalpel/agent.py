@@ -25,6 +25,7 @@ from code_scalpel.plan import Task, parse_tasks_md, serialize_tasks
 from code_scalpel.tools.agent_tools import (
     SHELL_EXEC_SCHEMA,
     TOOL_SCHEMAS,
+    ConfirmShellExec,
     ToolCall,
     ToolResult,
     execute,
@@ -464,6 +465,7 @@ class StepAgent:
         *,
         shell_runner: ShellRunner | None = None,
         memory: MemoryStore | None = None,
+        confirm_shell_exec: ConfirmShellExec | None = None,
     ) -> None:
         self._llm = llm
         self._cwd = cwd
@@ -479,6 +481,11 @@ class StepAgent:
         # past decisions) ride along automatically. None disables it
         # entirely so tests / lightweight callers don't take the cost.
         self._memory = memory
+        # Awaitable confirmation hook for `shell_exec` in skeptic mode.
+        # The TUI provides one that mounts a ShellExecCard and awaits
+        # the user's [a]/[r] decision; headless callers leave it None
+        # and skeptic-mode shell_exec calls are refused.
+        self._confirm_shell_exec = confirm_shell_exec
         # Mixed-role transcript: user / assistant / tool / assistant-with-
         # tool_calls. The list flows straight into the next turn's
         # `_initial_messages`, so the shape must be a valid OpenAI-style
@@ -868,17 +875,16 @@ class StepAgent:
             runner=self._shell_runner,
             trust=self._config.agent.trust,
             shell_exec_timeout=self._config.agent.shell_exec_timeout,
+            confirm_shell_exec=self._confirm_shell_exec,
         )
 
     def _tool_schemas(self) -> list[dict[str, Any]]:
-        """Build the tool list per request — `shell_exec` only ships
-        when trust is `optimist` / `yolo`. `skeptic` doesn't yet have
-        the confirmation UI, so the safest behaviour is to hide the
-        tool entirely from the model (saves it from emitting calls
-        we'd reject every time)."""
-        if self._config.agent.trust in ("optimist", "yolo"):
-            return [*TOOL_SCHEMAS, SHELL_EXEC_SCHEMA]
-        return list(TOOL_SCHEMAS)
+        """Build the tool list per request. `shell_exec` now ships at
+        all three trust levels — skeptic gates each call through the
+        confirmation callback registered at construction time (the
+        TUI provides one; headless callers like probe/bench leave it
+        `None` and shell_exec refuses in skeptic)."""
+        return [*TOOL_SCHEMAS, SHELL_EXEC_SCHEMA]
 
     def _remember(self, user_msg: str, assistant_msg: str) -> None:
         self._history.append({"role": "user", "content": user_msg})

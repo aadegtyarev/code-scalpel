@@ -15,12 +15,21 @@ from code_scalpel.policy import (
 )
 
 
-def test_skeptic_refuses_even_innocent_commands() -> None:
-    """No confirmation UI yet → skeptic refuses across the board. When
-    the UI lands, this test changes to "needs_confirm" semantics."""
+def test_skeptic_allows_innocent_with_confirm_required() -> None:
+    """skeptic + non-hard-blocked command → allowed but needs UI
+    confirmation. The dispatch layer enforces by calling the confirm
+    callback; no callback = refused."""
     decision = decide("ls -la", "skeptic")
+    assert decision.allowed is True
+    assert decision.requires_confirm is True
+
+
+def test_skeptic_still_blocks_hard_destructive_commands() -> None:
+    """User explicitly approving `rm -rf /` is destruction-by-typo, not
+    informed consent. Hard blocks apply in skeptic too."""
+    decision = decide("rm -rf /", "skeptic")
     assert decision.allowed is False
-    assert "skeptic" in decision.reason.lower() or "confirm" in decision.reason.lower()
+    assert decision.requires_confirm is False
 
 
 def test_optimist_allows_innocent_commands() -> None:
@@ -125,10 +134,10 @@ def test_auto_confirm_on_for_optimist_and_yolo() -> None:
 
 def test_unknown_level_coerces_to_skeptic_semantics() -> None:
     """A typo in config (`agent.trust: maxtrust`) must NOT unlock shell
-    access. Unknown values fall back to the safest behaviour."""
-    # `decide` rejects (we don't care about exact reason); `auto_confirm`
-    # returns False.
-    assert decide("ls", "maxtrust").allowed is False  # type: ignore[arg-type]
+    access. Unknown values fall back to skeptic — allowed only with
+    confirmation, and `auto_confirm` is False."""
+    decision = decide("ls", "maxtrust")  # type: ignore[arg-type]
+    assert decision.requires_confirm is True
     assert auto_confirm("maxtrust") is False  # type: ignore[arg-type]
 
 
