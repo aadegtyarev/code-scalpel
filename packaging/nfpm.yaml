@@ -1,0 +1,32 @@
+# nfpm config — wraps the PyInstaller binary in a .deb package.
+# Version is overridden via the VERSION env var in CI so the deb name
+# matches the git tag (e.g. v0.3.0 → 0.3.0). Locally `nfpm pkg --packager deb`
+# inherits the placeholder.
+
+name: code-scalpel
+arch: amd64
+platform: linux
+version: ${VERSION}
+section: devel
+priority: optional
+maintainer: Alexander Degtyarev <noreply@github.com>
+description: |
+  TUI coding agent for weak local LLMs.
+  Small context, small patch, fast test, controlled autonomy.
+vendor: code-scalpel
+homepage: https://github.com/aadegtyarev/code-scalpel
+license: AGPL-3.0-or-later
+
+# The PyInstaller binary is self-contained — bundles its own Python, so
+# the .deb has no runtime dependencies beyond glibc (which is always on
+# Debian/Ubuntu). Listing none avoids brittle apt-pin coupling.
+
+contents:
+  - src: ./dist/code-scalpel
+    dst: /usr/bin/code-scalpel
+    file_info:
+      mode: 0755
+  - src: ./LICENSE
+    dst: /usr/share/doc/code-scalpel/copyright
+  - src: ./README.md
+    dst: /usr/share/doc/code-scalpel/README.md

@@ -44,6 +44,13 @@ dev = [
 diagrams = [
     "rich-pixels>=3.0",
 ]
+# Standalone-binary build tooling. The release workflow installs
+# `[build]` alongside `[dev,diagrams]` so PyInstaller sees all the
+# optional deps it needs to bundle. Locally `pip install -e ".[build]"`
+# lets you reproduce CI's binary on your machine.
+build = [
+    "pyinstaller>=6.0",
+]
 
 [tool.ruff]
 target-version = "py311"
