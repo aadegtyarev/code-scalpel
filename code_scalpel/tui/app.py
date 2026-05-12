@@ -70,6 +70,10 @@ _SLASH_COMMANDS: list[tuple[str, str]] = [
     ("/recall", "browse stored notes; with text — search them"),
     ("/loop", "toggle code-mode iterative patch loop (apply → test → retry)"),
     ("/run", "walk TASKS.md unattended — one task at a time, stop on N failures"),
+    (
+        "/learn",
+        "generate a recipe markdown (.code-scalpel/recipes/<name>.md); /learn skill <name> for a skill",
+    ),
     ("/help", "list commands"),
     ("/mode ask", "switch to ask mode"),
     ("/mode plan", "switch to plan mode"),
@@ -594,6 +598,50 @@ class ScalpelApp(App[None]):
         output.add_tool_use(call, result, full=True)
         self._last_tool_result = result
 
+    def _do_learn(self, arg: str) -> None:
+        """`/learn <name>` — recipe (default).
+        `/learn skill <name>` — skill.
+
+        Off-loop because the model call is slow; the user sees an inline
+        "Generating…" status and can keep working in the input."""
+        from code_scalpel.learn import Kind, learn
+
+        output = self.query_one(OutputLog)
+        if self.runtime is None:
+            output.print_error("No LLM configured — check config.")
+            return
+        parts = arg.split(maxsplit=1)
+        kind: Kind = "recipe"
+        if parts and parts[0] == "skill":
+            kind = "skill"
+            name = parts[1].strip() if len(parts) > 1 else ""
+        elif parts and parts[0] == "recipe":
+            # explicit form `/learn recipe <name>` for symmetry
+            name = parts[1].strip() if len(parts) > 1 else ""
+        else:
+            name = arg.strip()
+        if not name:
+            output.print_error("Usage: /learn <name>  or  /learn skill <name>")
+            return
+
+        runtime = self.runtime  # capture for closure — narrows the type for mypy
+
+        async def _go() -> None:
+            footer = self.query_one(StatusFooter)
+            footer.status = f"◌ learning {kind}: {name}…"
+            with self.jobs.track("learn", f"learn {kind}: {name}"):
+                try:
+                    saved = await learn(runtime, name, kind=kind)
+                except Exception as e:
+                    output.print_error(f"/learn failed: {e}")
+                    footer.status = "● error"
+                    return
+                rel = saved.relative_to(self.cwd) if saved.is_relative_to(self.cwd) else saved
+                output.print_status(f"● Saved {kind}: {rel}")
+                footer.status = "● idle"
+
+        self.call_after_refresh(lambda: self.run_worker(_go(), exclusive=False, group="learn"))
+
     async def _do_compact(self) -> None:
         output = self.query_one(OutputLog)
         footer = self.query_one(StatusFooter)
@@ -822,6 +870,11 @@ class ScalpelApp(App[None]):
             self.config.agent.iterative_patch_loop = not self.config.agent.iterative_patch_loop
             state = "on" if self.config.agent.iterative_patch_loop else "off"
             output.print_status(f"● Iterative patch loop: {state}")
+            return
+        if cmd == "/learn" or cmd.startswith("/learn "):
+            # /learn <name>          — recipe (default)
+            # /learn skill <name>    — skill
+            self._do_learn(cmd.removeprefix("/learn").strip())
             return
         if cmd.startswith("/mode "):
             mode = cmd.removeprefix("/mode ").strip()
