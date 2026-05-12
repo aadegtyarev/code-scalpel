@@ -143,34 +143,12 @@ SCENARIOS = [
         check=_contains("mark_compacted"),
     ),
     Scenario(
-        name="task-not-identity",
-        description="'найди место чтобы ...' must trigger tool calls, NOT an identity blurb",
+        name="task-engages-with-project",
+        description="'найди место чтобы ...' must trigger tool calls and engage with real files",
         turns=["найди место, чтобы в футер вывести текущее системное время"],
         # Pass if the reply mentions a real project file or method —
-        # implies the model actually grep'd / listed / read. Fail if
-        # the reply is the identity template "Я — code-scalpel …".
-        check=lambda replies: (
-            (
-                not replies[0].lstrip().lower().startswith(("я — code-scalpel", "i'm code-scalpel"))
-                and any(s in replies[0].lower() for s in ("footer", "status", ".py", "session")),
-                f"task got identity-blurb (no tool calls); reply: {replies[0][:100]!r}",
-            )
-        ),
-    ),
-    Scenario(
-        name="identity",
-        description="'кто ты' must self-introduce 1st person — not echo system prompt",
-        turns=["кто ты"],
-        # Pass if the reply leads with Я/I (first person) and names
-        # code-scalpel. Fail = "Ты — ассистент..." (the bug from
-        # 2026-05-11: weak model translates system prompt back).
-        check=lambda replies: (
-            (
-                replies[0].lstrip().lower().startswith(("я ", "я—", "я-", "i'm", "i am"))
-                and "code-scalpel" in replies[0].lower(),
-                f"reply must start 1st-person + name 'code-scalpel'; got: {replies[0][:80]!r}",
-            )
-        ),
+        # implies the model actually grep'd / listed / read.
+        check=_contains_any("footer", "status", ".py", "session"),
     ),
     Scenario(
         name="plan-mode",

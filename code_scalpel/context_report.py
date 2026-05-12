@@ -40,7 +40,7 @@ def _tokens(text: str) -> int:
 # "why is this big and can I shrink it?", not just the absolute number.
 # Keys must match ContextSegment.name.
 _SEGMENT_NOTES: dict[str, str] = {
-    "System prompt": "static rules: identity, tone, grounding",
+    "System prompt": "static rules: tone, grounding, tools",
     "Tools schema": "function-calling schema for project tools",
     "Skills": "active test/lint/format contracts",
     "Recipes": "learned templates (learn --type recipe)",
@@ -72,7 +72,7 @@ class ContextReport:
         """Grouped layout:
 
           What's in context right now:
-            ┌─ System prompt   2 062t (12.6%)   identity, tone, …
+            ┌─ System prompt   2 062t (12.6%)   tone, grounding …
             ├─ Tools schema    1 166t  (7.1%)   function-calling …
             …
             └─ Conversation        0t  (0.0%)   grows per turn …

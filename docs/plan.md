@@ -2243,24 +2243,37 @@ dual-model setup — ОТЛОЖЕНО ДО ПОСЛЕ v0.4 (см. ниже).
   турн на tool-call без финального текста. Fallback на heuristic
   остался для провайдеров без include_usage, но в норме не
   активен. Глава 19 статьи.
-prompt-bleed regressions (HOOK, probe 2026-05-12 на qwen-coder-14b,
-  7/10 passed): три сценария ушли в нерелевантные паттерны:
-    • `overview` — generic блёрб «Этот проект представляет собой
-      комплексный инструмент…», без анкеров code-scalpel/tui/агент.
-      System prompt не насаждает «опирайся на реальные имена из map».
-    • `flow` — refusal-stub «Извините, но я не могу предоставить
-      информацию о внутренней архитектуре или работе системы…».
-      Прямое нарушение identity-prompt'а (там запрет на «Извините»
-      как корпоративный fallback) — qwen-coder-14b игнорит запрет
-      когда вопрос «как идёт обработка от ввода до LLM».
-    • `classifier-usage` — identity-блок «Я — code-scalpel, ваш
-      локальный кодовый помощник» вместо ответа про usage. Тот же
-      паттерн что строкa 1958-1961 (identity тянет слишком сильно
-      на короткие/конкретные вопросы), но триггер другой —
-      конкретный код-вопрос, не «кто ты».
-  Лечение: сужать identity-блок (literal-triggers only), либо
-  post-hoc guard который ловит identity-template на не-identity-
-  тригеры и переспрашивает модель. Связано с диагнозом строки 1958.
+✓ identity-block removed (2026-05-12): выкинули весь identity-блок
+  целиком — и templates ("Я — code-scalpel"), и anti-impersonation
+  ("not Claude/ChatGPT"). Принцип «чем меньше давление, тем лучше —
+  пусть хоть марсианином называется, лишь бы работала». Из system
+  prompt'а ушли:
+    • лидирующее «You are code-scalpel … NOT Claude/ChatGPT …»
+    • блок «Identity — apply ONLY when …» с whitelist триггеров
+    • templates «Я — code-scalpel, …» / «I'm code-scalpel — …»
+    • «Task replies must not start with "Я — code-scalpel" …»
+  Что осталось: одна поведенческая строка «Don't open task replies
+  with a self-introduction — the user knows which tool they
+  launched. Call the relevant tool first.»
+  Probe до удаления (7/10) → после (8/9):
+    • `overview` ✗→✓ (раньше generic блёрб, теперь зовёт
+      project_map и упоминает TUI)
+    • `classifier-usage` ✗→✓ (раньше identity-блок, теперь
+      проверяет и говорит «не найден»)
+    • `short-followup` ✓→✓ (бонус: «Sonnet» интерпретируется
+      как модель Sonnet, не как просьба написать сонет — раньше
+      модель шла в стих)
+    • `task-not-identity` переименован в `task-engages-with-project`
+      (check тот же — реальный mention файла; identity-half check
+      стал тривиально true)
+  Сняты `test_system_prompt_carries_identity_anchor` и
+  `test_system_prompt_pins_identity` из test_agent.py;
+  `test_system_prompt_bans_task_self_introduction` остался —
+  проверяет одно сохранившееся поведенческое правило.
+  Остался ✗ на `flow` («как идёт обработка от ввода до LLM») —
+  модель выдала абстрактный список «Input Handling / NLU / …»
+  без реальных имён, project_map не позвала. Это не identity-bleed,
+  а слабость на orchestration-вопрос; отдельный HOOK.
 
 self-clarify loop (HOOK, экспериментально): когда модель в ходе задачи
   задаёт уточняющий вопрос пользователю — попробовать перехватить и

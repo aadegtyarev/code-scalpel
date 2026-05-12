@@ -84,47 +84,16 @@ async def test_ask_sends_system_prompt(project: Path) -> None:
 
 
 @pytest.mark.asyncio
-async def test_system_prompt_carries_identity_anchor(project: Path) -> None:
-    """The Identity block guards two distinct failures:
-    (1) "кто ты" regressing to "Ты — ассистент…" — weak LLM
-        translating the English system prompt back verbatim;
-    (2) Identity overreach — answering a short context-question
-        ("где сжимается?") with the identity blurb because the
-        block tugs too hard. Probe regression 2026-05-11.
-
-    Anchors checked:
-    - First-person openings present for both languages.
-    - Explicit trigger list AND an "ONLY" / negative-example clause
-      so the block can't apply to ambient short questions."""
+async def test_system_prompt_bans_task_self_introduction(project: Path) -> None:
+    """Identity templates + anti-impersonation were dropped 2026-05-12 —
+    they bled into classifier-usage / flow probes. The only behavioral
+    rule that survives is "don't open task replies with a self-intro" —
+    that's the part that prevents the regression we actually care about."""
     llm = MockLLMAdapter(["OK"])
     agent = StepAgent(llm=llm, cwd=project, config=_CONFIG)
     await agent.ask("do something")
     system = llm.calls[0][0]["content"]
-    assert "Identity" in system
-    assert "code-scalpel" in system
-    # First-person anchors — without them the model invents English
-    # identity blurbs in a Russian conversation and vice versa.
-    assert "Я — code-scalpel" in system
-    assert "I'm code-scalpel" in system
-    # Tight scoping: triggers enumerated, "ONLY" written explicitly.
-    # NB: no negative example here. An earlier iteration listed
-    # context-shaped questions as "NOT identity" — the model latched
-    # onto those examples and started answering legit context
-    # questions with "Не понял, переспроси?". Whitelist of triggers
-    # beats a blacklist of counterexamples for 14B.
-    assert "ONLY" in system
-    assert "кто ты" in system
-    assert "what are you" in system
-    # Anti-example for task-shaped messages — user reported 2026-05-11
-    # that "найди место чтобы в футер вывести системное время" got an
-    # identity-blurb reply with zero tool calls. The block now names
-    # task-words explicitly and tells the model to call tools instead.
-    assert "найди" in system or "find" in system.lower()
-    assert "project_map" in system or "tools" in system.lower()
-    # Task replies must not open with identity prefixes — phrasing
-    # softened from "ABSOLUTE BAN" to lighter language to lower the
-    # anxiety load on weak models that froze under the heavy form.
-    assert "must not start with" in system or "reserved for identity" in system
+    assert "self-introduction" in system or "self-intro" in system
 
 
 @pytest.mark.asyncio
@@ -545,15 +514,6 @@ async def test_system_prompt_mirrors_user_language() -> None:
 
     text = _SYSTEM_PROMPT.lower()
     assert "language" in text and ("same" in text or "user" in text)
-
-
-@pytest.mark.asyncio
-async def test_system_prompt_pins_identity() -> None:
-    from code_scalpel.agent import _SYSTEM_PROMPT
-
-    text = _SYSTEM_PROMPT.lower()
-    assert "code-scalpel" in text
-    assert "anthropic" in text and "openai" in text
 
 
 @pytest.mark.asyncio
