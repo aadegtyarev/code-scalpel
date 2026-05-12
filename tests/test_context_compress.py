@@ -1,6 +1,14 @@
 from __future__ import annotations
 
-from code_scalpel.context_compress import compress_tool_message, should_compress
+import pytest
+
+from code_scalpel.context_compress import (
+    compress_tool_message,
+    should_compress,
+    summarize_with_llm,
+)
+from code_scalpel.llm.adapter import ChatResponse
+from tests.mocks import MockLLMAdapter
 
 
 def test_should_compress_happy_path() -> None:
@@ -73,3 +81,103 @@ def test_compress_tool_message_no_lines_in_content() -> None:
     )
     assert "1 lines" in out
     assert "only one line" in out
+
+
+def test_compress_tool_message_custom_hint_overrides_first_line() -> None:
+    """When a caller passes `hint=...` (e.g. an LLM summary), that wins
+    over the first-non-empty-line default. The original content's first
+    line is irrelevant to the marker output."""
+    out = compress_tool_message(
+        "ignore me\nignore me too",
+        tool_name="grep",
+        args_summary="pattern=foo",
+        turn=3,
+        hint="3 matches in tests/",
+    )
+    assert "| 3 matches in tests/" in out
+    assert "ignore me" not in out
+
+
+def test_compress_tool_message_empty_hint_drops_separator() -> None:
+    """`hint=""` is a caller saying "no useful summary, skip the hint
+    column" — distinct from the default `None` which means "derive
+    from content". An empty hint must NOT emit a dangling `| `."""
+    out = compress_tool_message(
+        "lots of content here",
+        tool_name="grep",
+        args_summary="",
+        turn=1,
+        hint="",
+    )
+    assert "|" not in out
+
+
+def test_compress_tool_message_truncates_custom_hint() -> None:
+    """An LLM summary that runs long still gets the same truncation
+    treatment as a deterministic first-line — the marker has to stay
+    single-line in a terminal."""
+    out = compress_tool_message(
+        "doesn't matter",
+        tool_name="grep",
+        args_summary="",
+        turn=0,
+        hint="x" * 500,
+    )
+    assert "…" in out
+    assert "x" * 500 not in out
+
+
+@pytest.mark.asyncio
+async def test_summarize_with_llm_returns_first_line() -> None:
+    """Happy path: LLM replies with a one-line summary; helper returns
+    it verbatim."""
+    llm = MockLLMAdapter(["3 occurrences in tests/test_agent.py"])
+    out = await summarize_with_llm("grep output …", llm)
+    assert out == "3 occurrences in tests/test_agent.py"
+    # The prompt that went to the model mentions "summarize" so future
+    # prompt drift trips the test instead of silently changing behaviour.
+    sent = llm.calls[0]
+    assert any("summarize" in m["content"].lower() for m in sent if m["role"] == "user")
+
+
+@pytest.mark.asyncio
+async def test_summarize_with_llm_collapses_multiline_reply() -> None:
+    """Some weak models drift into prose ("Here's the summary:\\nfoo").
+    The helper collapses to the first non-empty line so the marker
+    still works."""
+    llm = MockLLMAdapter(["\n\nHere's the summary:\nactual one-liner\nmore stuff\n"])
+    out = await summarize_with_llm("tool output", llm)
+    assert out == "Here's the summary:"
+    # Note: this is the "first non-empty line" guard — preferred over
+    # complex parsing. The prompt itself asks for a single line; if the
+    # model still drifts, we want the SOMETHING-line, not an empty.
+
+
+@pytest.mark.asyncio
+async def test_summarize_with_llm_returns_empty_on_error() -> None:
+    """LLM unreachable / errored — return "" so the caller falls back
+    to the deterministic first-line hint. A broken summariser must
+    NEVER block the compress pass."""
+
+    class _BoomAdapter:
+        async def chat(self, *args: object, **kwargs: object) -> ChatResponse:
+            raise RuntimeError("network down")
+
+        async def stream(self, *args: object, **kwargs: object):  # type: ignore[no-untyped-def]
+            return
+            yield  # pragma: no cover - unreachable, sentinel for async generator
+
+        def set_model(self, model: str) -> None:
+            pass
+
+    out = await summarize_with_llm("anything", _BoomAdapter())  # type: ignore[arg-type]
+    assert out == ""
+
+
+@pytest.mark.asyncio
+async def test_summarize_with_llm_returns_empty_on_blank_reply() -> None:
+    """Model replied with whitespace only — same as "no useful signal",
+    treat as fallback signal for the caller."""
+    llm = MockLLMAdapter(["   \n  \n"])
+    out = await summarize_with_llm("content", llm)
+    assert out == ""

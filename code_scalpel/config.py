@@ -53,6 +53,14 @@ class AgentConfig(BaseModel):
     compress_tool_results: bool = True
     compress_tool_results_after_turns: int = 3
     compress_tool_results_min_chars: int = 800
+    # Opt-in: when on AND `compress_tool_results` on, the compression
+    # pass asks the model for a one-line summary of each stale tool
+    # output and uses it as the marker hint, instead of the
+    # deterministic "first non-empty line". Useful when tool outputs
+    # start with generic headers ("OK", "matches:", table titles) — an
+    # LLM summary distills the actual result. Costs an extra short
+    # round-trip per compressed message; default off.
+    compress_with_llm: bool = False
     answer_reserve_tokens: int = 4000
     context_budget_warn: float = 0.70
     context_budget_critical: float = 0.90
