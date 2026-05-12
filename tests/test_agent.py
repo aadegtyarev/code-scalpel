@@ -519,17 +519,21 @@ async def test_system_prompt_mirrors_user_language() -> None:
 @pytest.mark.asyncio
 async def test_system_prompt_demands_informal_tone() -> None:
     """The user finds the default formal register grating. Prompt must
-    explicitly require 'ты' in Russian and discourage corporate hedging."""
+    require 'ты' in Russian and discourage corporate hedging — but
+    WITHOUT naming specific phrases (the whitelist 'Sure / Got it /
+    On it are fine' got latched onto as a complete reply 2026-05-12).
+    Categories ("corporate hedging") work; literal phrases prime."""
     from code_scalpel.agent import _SYSTEM_PROMPT
 
     text = _SYSTEM_PROMPT
-    # Russian ты/вы guidance is explicit
     assert '"ты"' in text
     assert '"вы"' in text
-    # Forbidden formal phrases should be called out as anti-examples
-    assert "Извините" in text
-    # Tone keyword anchors the section
     assert "tone" in text.lower()
+    assert "corporate" in text.lower() or "apolog" in text.lower()
+    # The old whitelist of "OK to say" phrases is gone — no priming.
+    assert '"Sure"' not in text
+    assert '"Got it"' not in text
+    assert '"On it"' not in text
 
 
 @pytest.mark.asyncio

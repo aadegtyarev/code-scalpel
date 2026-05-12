@@ -1,18 +1,20 @@
 """Spy on a single agent turn — dump every payload and every response.
 
-Used to understand WHY the `flow` probe fails: model answers
-"Input Handling / NLU / …" instead of naming real project modules.
-We need to see what the model actually receives and what it
-actually emits — system prompt, user message, tool calls (if any),
-tool results, raw response text.
+Used to understand WHY a probe answer looks wrong. We see what the
+model actually receives and what it actually emits — system prompt,
+user message, tool calls (if any), tool results, raw response text.
 
-Run: `source .venv/bin/activate && python scripts/spy_flow.py`
+Run: `source .venv/bin/activate && python scripts/spy_flow.py [question]`
+
+With no argument, runs the original `flow` regression question.
+Quote multi-word questions or it'll only spy on the first token.
 """
 
 from __future__ import annotations
 
 import asyncio
 import json
+import sys
 from collections.abc import AsyncIterator
 from pathlib import Path
 from typing import Any
@@ -27,9 +29,10 @@ from code_scalpel.llm.adapter import (
 )
 from code_scalpel.runtime import Runtime
 
-QUESTION = (
+_DEFAULT_QUESTION = (
     "Как идёт обработка от ввода пользователя до вызова LLM? Назови ключевые модули по порядку."
 )
+QUESTION = sys.argv[1] if len(sys.argv) > 1 else _DEFAULT_QUESTION
 
 _CONFIG = AppConfig(
     profiles={
