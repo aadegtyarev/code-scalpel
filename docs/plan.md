@@ -2822,7 +2822,10 @@ picker+reviewer с защитой от зацикливания.
       когда появится второй пользователь reviewer-температуры.
 ```
 
-### v0.12 — upstream + resume
+### ~~v0.12 — upstream + debug~~ ✓ закрыта 2026-05-13
+
+(Full resume вынесли в отдельный релиз v0.12.5 — там и
+STATE.json, и continue/restart fork. См. ниже.)
 
 ```text
 Тезис: большую модель (платный API или RAM-swap локальной
@@ -2847,23 +2850,14 @@ picker+reviewer с защитой от зацикливания.
       без видимого эффекта; добавим когда найдётся реальный
       use case. Конфиг `upstream_summarise` уже зарезервирован.
 
-- [ ] Full resume сессии.
-      STATE.json расширение: phase (generating/reviewing/applying/
-      testing/idle), last_task_id, open_fork_questions, history
-      summary hash. При старте TUI:
-        a. Парсим STATE.json + git status.
-        b. Если есть незавершённое — inline-карточка через
-           ChoiceCard (это первый Fork в новой сессии!) с
-           «Continue from T003 / Restart».
-        c. На continue: восстанавливаем _history через compact-
-           summary, ставим phase, переоткрываем open forks.
-      Resume = вырожденный fork с двумя опциями.
+Full resume — см. v0.12.5 (отдельный релиз).
 
-- [ ] Конфиги upstream/resume:
-        upstream_profile: <profile-name>  (имя из profiles:)
-        upstream_batching: true            (queue vs sync)
-        upstream_summarise: true           (pre-pass или нет)
-        upstream_flush_on: "/go-end" | "n=5" | "manual"
+✓ Конфиги upstream (2026-05-13): доставлено `upstream_flush_on`
+  (`manual`/`go-end`/`n-pending`), `upstream_flush_pending_threshold`,
+  `upstream_summarise` (зарезервирован). `upstream_profile`
+  передаётся в Runtime через CLI / TUI bootstrap, не как ключ
+  в `profiles:` — пересматриваем когда подключим второй
+  upstream (paid API + local swap одновременно).
 
 ──── Debug — failure investigation (двухуровневый) ────
 
@@ -2872,47 +2866,59 @@ picker+reviewer с защитой от зацикливания.
 + отдельный mode для ручного «у меня упало, разберись». Они
 ортогональны.
 
-- [ ] `run_python` tool (общий для обоих контекстов).
-      Snippet eval в sandbox: `.venv/bin/python -c '<snippet>'`,
-      fallback на `python3 -c` если venv нет. Использует тот же
-      sandbox-wrapper что shell_exec. Зачем: debugger проверяет
-      гипотезу без write_file. «Я думаю проблема в импорте» →
-      run_python('import x; x.y') → ImportError доказал.
+✓ `run_python` tool (2026-05-13): thin wrapper над shell_exec,
+  same bwrap sandbox. Используется debugger'ом для проверки
+  гипотез без write_file. PR #61.
 
-- [ ] mode_debug (manual). `/mode debug` или Ctrl+T до него.
-      `prompts/mode_debug.md` — addendum к system.md:
-        «ты дебаггер, не пиши код пока не подтвердил гипотезу.
-        Шаги: orient → hypothesis → verify (read_file/run_python)
-        → fix only after verified.»
-      Регистрация в `_AGENT_MODES`. Toolset полный (write_file
-      разрешён — юзер сам решает когда применить). Temperature
-      0.3 (поменять `ModeTemperatures.debug` 0.7 → 0.3 — diversity
-      для гипотез, но не творчество).
+✓ mode_debug manual (2026-05-13): `/mode debug` + Ctrl+T;
+  `prompts/mode_debug.md` addendum к system.md. Temperature
+  0.3 (diversity для гипотез, не творчество). PR #61.
 
-- [ ] debug_pass (auto, в code_with_retry).
-      `prompts/debug_pass.md` — система: «дай гипотезу + evidence
-      + suggested_fix». Structured output:
-      `{hypothesis, evidence, suggested_fix}`.
-      Temperature 0.1. Tool whitelist: read_file, grep,
-      project_map, run_python. БЕЗ write_file (debugger не лечит).
-      Триггер: failed run_tests внутри code_with_retry, перед
-      builder retry. Builder получает structured fix-hint вместо
-      raw test_output.
+✓ debug_pass auto в code_with_retry (2026-05-13): structured
+  output `{hypothesis, evidence, suggested_fix}`, temperature
+  0.1, tool whitelist без write_file, триггер на failed
+  run_tests. Builder получает компактный fix-hint вместо
+  raw test_output. PR #62.
 
-- [ ] Anti-loop debug_pass:
-        a. `debug_pass_max_attempts=2` — не более 2 debug→retry
-           циклов на задачу.
-        b. Hypothesis loop: одинаковый hypothesis между attempts →
-           стоп.
-        c. test_output loop: одинаковый test_output между attempts →
-           стоп (semantic anti-loop, дополняет существующий
-           args-based).
+✓ Anti-loop debug_pass (2026-05-13): max_attempts=2 жёсткий
+  потолок, hypothesis-equality stop, test_output equality stop
+  (semantic anti-loop поверх args-based). PR #62.
 
-- [ ] Конфиги debug:
-        debug_pass: bool = False           (opt-in)
-        debug_pass_max_attempts: int = 2
-        debug_pass_temperature: float = 0.1
-        # mode_debug рулится через ModeTemperatures.debug (=0.3)
+✓ Конфиги debug (2026-05-13):
+    debug_pass: bool = False           (opt-in)
+    debug_pass_max_attempts: int = 2
+    debug_pass_temperature: float = 0.1
+    # mode_debug рулится через ModeTemperatures.debug (=0.3)
+```
+
+### v0.12.5 — full resume
+
+```text
+Тезис: TUI должен подбирать незавершённую сессию там, где её
+бросили — после kill, перезагрузки, потери power. Вынесли из
+v0.12 потому что фича крупная и тематически отдельная от
+upstream (последний — про «делегируй наверх», эта — про «не
+теряй ничего»).
+
+- [ ] STATE.json расширение: phase (generating/reviewing/applying/
+      testing/idle), last_task_id, open_fork_questions, history
+      summary hash. Пишется атомарно после каждого
+      state-перехода (по аналогии с _atomic_write для TASKS.md).
+
+- [ ] Resume entry-card. При старте TUI:
+        a. Парсим STATE.json + git status.
+        b. Если есть незавершённое — inline ChoiceCard с
+           «Continue from T003 / Restart».
+        c. На continue: восстанавливаем _history через compact-
+           summary, ставим phase, переоткрываем open forks.
+      Resume = вырожденный fork с двумя опциями (использует
+      существующий HumanForker, не плодим новой UI-сущности).
+
+- [ ] Resume + pending upstream queue.
+      Если в STATE.json есть open_fork_questions — это значит
+      pending queue не была дренирована. Restore queue в Runtime
+      перед start; ChoiceCard сообщает «N pending upstream forks
+      will be flushed on /escalate or end of next /go».
 ```
 
 ### v0.13 — knowledge layer
