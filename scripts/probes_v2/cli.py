@@ -235,15 +235,47 @@ def start(
 def step(
     run_id: Annotated[str, typer.Argument()],
     text: Annotated[str, typer.Argument(help="Реплика юзера (от моего, Claude, лица)")],
+    mode: Annotated[
+        str,
+        typer.Option(
+            "--mode",
+            help="Mode: ask (объясняет, не патчит) / plan (генерирует TASKS.md в DSL) / "
+            "code (iterative patch loop с retry) / review (independent skeptic).",
+        ),
+    ] = "ask",
 ) -> None:
-    """Отправить реплику демону, получить ответ scalpel'а."""
+    """Отправить реплику демону в указанном mode, получить ответ scalpel'а."""
+    if mode not in {"ask", "plan", "code", "review"}:
+        typer.echo(f"error: bad --mode `{mode}`; expected ask|plan|code|review", err=True)
+        raise typer.Exit(2)
     paths = _resolve_run(run_id)
     host, port = _daemon_info(paths)
-    response = send_request(host, port, {"op": "step", "text": text})
+    response = send_request(host, port, {"op": "step", "text": text, "mode": mode})
     if not response.get("ok"):
         typer.echo(f"error: {response.get('error', 'unknown')}", err=True)
         raise typer.Exit(1)
     typer.echo(response["reply"])
+
+
+@app.command()
+def go(run_id: Annotated[str, typer.Argument()]) -> None:
+    """Запустить `agent.run_plan` на сгенерированном TASKS.md в
+    workdir. scalpel сам идёт по плану в code mode с iterative
+    patch loop. Печатает агрегированный результат."""
+    paths = _resolve_run(run_id)
+    host, port = _daemon_info(paths)
+    # /go в среднем длится несколько минут (N задач × code-loop) —
+    # ставим расширенный timeout, иначе IPC закроется по умолчанию.
+    response = send_request(host, port, {"op": "go"}, timeout=1800.0)
+    if not response.get("ok"):
+        typer.echo(f"error: {response.get('error', 'unknown')}", err=True)
+        raise typer.Exit(1)
+    typer.echo(
+        f"stopped_reason: {response['stopped_reason']}\n"
+        f"tasks_completed: {response['tasks_completed']}"
+    )
+    for outcome in response.get("outcomes", []):
+        typer.echo(f"  {outcome['task_id']}: {outcome['status']}")
 
 
 @app.command()
