@@ -690,6 +690,85 @@ async def test_fork_auto_reviewed_false_skips_reviewer(project: Path) -> None:
 
 
 @pytest.mark.asyncio
+async def test_run_plan_resolves_forks_when_enabled(project: Path) -> None:
+    """Integration: auto_detect_forks=True + a resolver attached →
+    run_plan inserts an «Architectural decisions» block at the top
+    of TASKS.md before any task runs."""
+    from code_scalpel.fork import HumanForker
+    from code_scalpel.tools.shell import ShellResult
+    from tests.mocks import MockShellRunner
+
+    tasks_path = project / ".code-scalpel" / "TASKS.md"
+    tasks_path.parent.mkdir(parents=True, exist_ok=True)
+    tasks_path.write_text(
+        "## T001: Wire Postgres support\n\n"
+        "Goal: connect to db\n"
+        "Files: db.py\n"
+        "Acceptance:\n"
+        "- imports cleanly\n"
+        "Test command: pytest\n"
+    )
+
+    detect_payload = (
+        '{"forks": ['
+        '  {"question": "Which Postgres driver?",'
+        '   "options": ['
+        '     {"name": "psycopg2", "summary": "sync"},'
+        '     {"name": "asyncpg", "summary": "async"}'
+        "   ],"
+        '   "context": "FastAPI asyncio service."}'
+        "]}"
+    )
+    # detect_forks + resolver (LocalMetaForker default, no
+    # reviewer for this test) + builder.
+    patch = """\
+db.py
+```python
+<<<<<<< SEARCH
+=======
+import asyncpg
+>>>>>>> REPLACE
+```
+"""
+    llm = MockLLMAdapter(
+        [
+            detect_payload,
+            # LocalMetaForker (auto-reviewed off for simplicity)
+            '{"chosen": "asyncpg", "reasoning": "asyncio match"}',
+            patch,
+        ]
+    )
+    shell = MockShellRunner([ShellResult("1 passed", 0)])
+    cfg = AppConfig(
+        profiles={"local": ModelProfile(provider="lmstudio", model="local-model", temperature=0.1)},
+        agent=AgentConfig(
+            max_files=2,
+            max_file_lines=50,
+            max_debug_attempts=0,
+            iterative_patch_loop=True,
+            enforce_read_before_show=False,
+            auto_git=False,
+            sandbox="off",
+            auto_annotate_plan=False,
+            auto_detect_forks=True,
+            fork_auto_reviewed=False,  # one LLM call for picker, not two
+            fork_human_fallback="local_meta",
+            trust="optimist",
+        ),
+    )
+    agent = StepAgent(llm=llm, cwd=project, config=cfg, shell_runner=shell)
+    resolver = HumanForker(agent, ui_hook=None, config=cfg.agent)
+
+    result = await agent.run_plan(fork_resolver=resolver)
+
+    final = (project / ".code-scalpel" / "TASKS.md").read_text()
+    assert "## Architectural decisions" in final
+    assert "asyncpg" in final
+    assert "Which Postgres driver?" in final
+    assert result.tasks_completed == 1
+
+
+@pytest.mark.asyncio
 async def test_human_forker_esc_raises(project: Path) -> None:
     """User pressed Escape → ForkError so the caller can choose to
     retry, fall back, or bubble."""
