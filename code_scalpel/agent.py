@@ -240,6 +240,19 @@ Rules:
   changes, respond with plain text only — no blocks."""
 
 
+_CODE_MODE_ADDENDUM = """\
+
+You are in CODE mode. Your job is to make file changes, not explain them.
+
+File creation rules (critical — re-read before each task):
+- A file that does not exist yet MUST be created with an empty SEARCH block.
+  Never assume a file exists before calling read_file. If read_file returns
+  "file not found", stop and create the file with SEARCH/REPLACE instead.
+- Use shell_exec only to RUN things (tests, installers, build commands).
+  Never use shell_exec to create or write files — use SEARCH/REPLACE for that.
+- After each task you must have at least one SEARCH/REPLACE block. Plain text
+  answers are only acceptable when the user explicitly asked a question."""
+
 _REVIEW_MODE_ADDENDUM = """\
 
 You are currently in REVIEW mode. Your job is to review code critically —
@@ -1354,6 +1367,8 @@ class StepAgent:
             system += _PLAN_MODE_ADDENDUM
         elif mode == "review":
             system += _REVIEW_MODE_ADDENDUM
+        elif mode == "code":
+            system += _CODE_MODE_ADDENDUM
         msgs: list[dict[str, Any]] = [{"role": "system", "content": system}]
         # History may carry internal bookkeeping fields (`_tool_name`,
         # `_tool_args`) on tool messages for the compression pass. Strip
