@@ -1,0 +1,56 @@
+# probe.py
+# exit_code=0
+# duration_sec=120.65
+
+## stdout
+
+========================================================================
+LIVE PROBE — типовые сценарии использования
+target: qwen2.5-coder-14b @ http://localhost:1234
+========================================================================
+
+[overview] High-level architecture description — map alone enough
+  ✗ none of ('code-scalpel', 'tui', 'агент') in T1: 'Конечно! Позвольте мне сначала ознакомиться с структурой проекта, чтобы дать вам'
+     T1: Конечно! Позвольте мне сначала ознакомиться с структурой проекта, чтобы дать вам наиболее точное описание.…
+
+[flow] Trace the flow — needs imports + reasoning across files
+  ✓ 'agent.py' found in T1
+     T1: Из предоставленного списка файлов, ключевые модули, участвующие в обработке от ввода пользователя до вызова…
+
+[classifier-usage] 'Is classifier.py used in main flow?' — needs grep, NOT in agent.py imports
+  ✓ 'не могу найти' found in T1
+     T1: Извините, но я не могу найти файл `classifier.py` в проекте. Пожалуйста, уточните, какой именно файл вы ищете…
+
+[misattribution-repro] 2026-05-11 bug: compact vs mark_compacted — model must pick the real one
+  ✓ 'сжима' found in T1
+     T1: Конкретно, где в проекте контекст сжимается?
+
+[short-followup] Sonet bug: long T1, short T2 clarification — model must NOT repeat T1
+  ✓ no consecutive-turn repeats
+     T1: Чтобы добавить в проект работу с антропик моделями, нужно выполнить следующие шаги: 1. **Определение…
+     T2: Извините, но я не могу продолжить этот разговор.
+
+[ask-nonexistent] Method that doesn't exist — must admit, not invent
+  ✓ 'не' found in T1
+     T1: Ищу реализацию функции `quick_sort` в проекте. Кажется, функция `quick_sort` не была найдена в проекте.…
+
+[show-method-body] Show body of a real method — must read_file, not guess
+  ✓ 'mark_compacted' found in T1
+     T1: Извините, но я не могу найти файл `session.py` в проекте. Пожалуйста, уточните, какой именно файл вы ищете. Я…
+
+[task-engages-with-project] 'найди место чтобы ...' must trigger tool calls and engage with real files
+  ✓ 'footer' found in T1
+     T1: Понял. Начну с файла `code_scalpel/tui/widgets/footer.py`, так как это, вероятно, место, где вы хотите…
+
+[plan-mode] Plan mode: produce TASKS.md structure
+  ✓ '## T001' found in T1
+     T1: ## T001: Определение файла для обработки Goal: Найти файл, где будет реализована функциональность добавления…
+
+========================================================================
+RESULT: 8/9 passed
+========================================================================
+
+
+## stderr
+
+

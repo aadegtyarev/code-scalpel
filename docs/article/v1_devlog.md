@@ -2236,6 +2236,16 @@ qwen-14b — **+2 уровня прогресса за одно правильн
 Это **первое архитектурное расхождение** в серии: одна capability
 починилась, другая регрессировала. v0.5 — переходный тэг с ценой.
 
+**v0.6.0** (rename `/run` → `/go`, +2 mode_addenda):
+- L3 ✓ — TASKS.md 7 задач, all_done, 7/7 skipped
+- prompt tokens вырос 8k → **50k** (значительно длиннее системник
+  с расширенными mode_addenda)
+- Legacy: probe.py **8/9** (recovery после v0.5 −2), probe_code
+  ✓ 1att стабильно, probe_recipes 2/3
+
+Stable baseline-frame {v0.3-v0.6} в live (все L3). Перелом
+ожидаем на v0.7 (write_file + project_map + bwrap landed).
+
 Будут добавлены остальные тэги.
 
 (Эта глава дописывается **по ходу серии**, по одному prograph'у
