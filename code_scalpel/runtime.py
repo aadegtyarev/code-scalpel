@@ -31,6 +31,7 @@ from code_scalpel.fork import (
     UpstreamProfile,
 )
 from code_scalpel.llm.adapter import LLMAdapter, OpenAICompatibleAdapter
+from code_scalpel.llm.lmstudio_swap import SwapConfig, SwapError, swap_to
 from code_scalpel.memory import MemoryStore
 from code_scalpel.session import Session
 from code_scalpel.state import AgentState
@@ -158,41 +159,58 @@ class Runtime:
         """Drain the pending upstream queue, run each entry through
         UpstreamForker, aggregate the results.
 
-        Override decisions don't auto-rewrite code. They're
-        recorded with the commit SHAs that ran during the queue's
-        lifetime, so the user can review through `/review-overrides`
-        and decide. No-op when `upstream_profile` is unset or the
-        queue is empty — callers (run_plan, /escalate) can invoke
-        this unconditionally at the end of their flow.
+        Single-GPU machines can't hold baseline + upstream in VRAM
+        at once, so we wrap the whole batch in an explicit LM Studio
+        swap: unload baseline → load upstream → run all forks → unload
+        upstream → reload baseline. One swap brackets N forks (cost
+        ~5-10s per load, paid once per flush, not per fork).
+
+        Override decisions don't auto-rewrite code. They're recorded
+        with the commit SHAs that ran during the queue's lifetime, so
+        the user can review through `/review-overrides` and decide.
+        No-op when `upstream_profile` is unset or the queue is empty —
+        callers (run_plan, /escalate) can invoke this unconditionally
+        at the end of their flow.
         """
         if self.upstream_queue is None or self.upstream_profile is None:
             return FlushSummary(confirms=0, overrides=())
         if self.upstream_queue.is_empty():
             return FlushSummary(confirms=0, overrides=())
 
+        baseline_model = self.config.current_profile.model
+        swap_cfg = SwapConfig.from_openai_base(self.upstream_profile.base_url)
+
         forker = UpstreamForker(self.upstream_profile)
         confirms = 0
         overrides: list[FlushOutcome] = []
         errors: list[str] = []
-        for fork, commits in self.upstream_queue.drain():
-            try:
-                upstream_resolution = await forker.resolve(
-                    fork.question, fork.options, fork.context
-                )
-            except Exception as e:
-                errors.append(f"{fork.fingerprint}: {e}")
-                continue
-            overridden = upstream_resolution.chosen != fork.picker_resolution.chosen
-            outcome = FlushOutcome(
-                fork=fork,
-                upstream_resolution=upstream_resolution,
-                overridden=overridden,
-                commits_touched=tuple(commits),
-            )
-            if overridden:
-                overrides.append(outcome)
-            else:
-                confirms += 1
+        try:
+            async with swap_to(swap_cfg, self.upstream_profile.model, fallback=baseline_model):
+                for fork, commits in self.upstream_queue.drain():
+                    try:
+                        upstream_resolution = await forker.resolve(
+                            fork.question, fork.options, fork.context
+                        )
+                    except Exception as e:
+                        errors.append(f"{fork.fingerprint}: {e}")
+                        continue
+                    overridden = upstream_resolution.chosen != fork.picker_resolution.chosen
+                    outcome = FlushOutcome(
+                        fork=fork,
+                        upstream_resolution=upstream_resolution,
+                        overridden=overridden,
+                        commits_touched=tuple(commits),
+                    )
+                    if overridden:
+                        overrides.append(outcome)
+                    else:
+                        confirms += 1
+        except SwapError as e:
+            # Swap не получился — все pending fork'и считаем
+            # неразрешёнными, очередь УЖЕ дренирована (drain()
+            # вызвался до исключения у тех что успели). Возвращаем
+            # пока есть, плюс ошибку.
+            errors.append(f"swap orchestration: {e}")
         return FlushSummary(
             confirms=confirms,
             overrides=tuple(overrides),

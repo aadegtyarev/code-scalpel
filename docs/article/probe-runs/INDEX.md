@@ -28,8 +28,10 @@ grep "retry" INDEX.md         # все где упоминается retry в on
 
 | run-id | date | scenario | project | commit | verdict | turns | tokens | one-liner |
 |---|---|---|---|---|---|---|---|---|
-| _(пока пусто — первый прогон ещё не сделан)_ | | | | | | | | |
+| `c_fix_bug-mini_cli_with_bug-ad51ab8-20260513-144155` | 2026-05-13 | c_fix_bug | mini_cli_with_bug | [`ad51ab8`](https://github.com/aadegtyarev/code-scalpel/commit/ad51ab87bca083ea087ace2c64499c6a1bd4ef7f) | user_gave_up | 3 | 144k | _(нет one-liner)_ |
 
 Дополнительные срезы по версиям / capabilities-матрица —
 появятся когда соберём 5+ прогонов (см. `scripts/probes_v2/PROTOCOL.md`,
 секция «История»).
+| `a_diag_plan-mini_cli-bca504e-20260513-145240` | 2026-05-13 | a_diag_plan | mini_cli | [`bca504e`](https://github.com/aadegtyarev/code-scalpel/commit/bca504e014603de1bb8f0ac9e6b48fd5d6b99ca5) ⚠️dirty | task_solved | 3 | 26k | _(нет one-liner)_ |
+| `c_fix_bug-mini_cli_with_bug-00916ae-20260513-145908` | 2026-05-13 | c_fix_bug | mini_cli_with_bug | [`00916ae`](https://github.com/aadegtyarev/code-scalpel/commit/00916ae070210a4466cbe5be61ab05e76e35e0e6) ⚠️dirty | error | 1 | 31k | _(нет one-liner)_ |
