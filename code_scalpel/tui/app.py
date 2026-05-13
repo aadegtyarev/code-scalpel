@@ -76,6 +76,7 @@ _SLASH_COMMANDS: list[tuple[str, str]] = [
     ("/remember", "save a project note (e.g. /remember always run linter)"),
     ("/recall", "browse stored notes; with text — search them"),
     ("/go", "run plan: next task / full plan / manual retry loop — picks mode via card"),
+    ("/commit-msg", "draft an imperative commit message from the staged or unstaged diff"),
     (
         "/learn",
         "generate a recipe markdown (.code-scalpel/recipes/<name>.md); /learn skill <name> for a skill",
@@ -720,6 +721,60 @@ class ScalpelApp(App[None]):
 
         self.call_after_refresh(lambda: self.run_worker(_go(), exclusive=False, group="learn"))
 
+    async def _do_commit_msg(self) -> None:
+        """Draft a commit message from the current diff.
+
+        Picks the staged diff if anything is staged, otherwise unstaged.
+        Both empty → print a hint and bail. The narrow pass produces
+        an imperative-summary + why-body block; we print it as a
+        verbatim status so the user can copy-paste into `git commit -m`."""
+        output = self.query_one(OutputLog)
+        footer = self.query_one(StatusFooter)
+        assert self._agent is not None
+        import asyncio
+
+        async def _git_diff(*args: str) -> str:
+            proc = await asyncio.create_subprocess_exec(
+                "git",
+                "diff",
+                *args,
+                cwd=str(self.cwd),
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+            out, _ = await proc.communicate()
+            return out.decode("utf-8", errors="replace")
+
+        with self.jobs.track("commit-msg", "Drafting commit message"):
+            footer.status = "◌ commit-msg…"
+            try:
+                staged = await _git_diff("--staged")
+                diff = staged if staged.strip() else await _git_diff()
+            except FileNotFoundError:
+                output.print_error("git not found in PATH.")
+                footer.status = ""
+                return
+            except Exception as e:
+                output.print_error(f"git diff failed: {e}")
+                footer.status = "● error"
+                return
+            if not diff.strip():
+                output.print_status("Nothing to commit — diff is empty.")
+                footer.status = ""
+                return
+            try:
+                result = await self._agent.improve_commit_message(diff)
+            except Exception as e:
+                output.print_error(f"Commit-msg pass failed: {e}")
+                footer.status = "● error"
+                return
+            if result is None or not result.text.strip():
+                output.print_status("Commit-msg pass returned nothing.")
+                footer.status = ""
+                return
+            output.print_status(f"Suggested commit message:\n\n{result.text}")
+            footer.status = ""
+
     async def _do_compact(self) -> None:
         output = self.query_one(OutputLog)
         footer = self.query_one(StatusFooter)
@@ -952,6 +1007,12 @@ class ScalpelApp(App[None]):
             return
         if cmd == "/recall" or cmd.startswith("/recall "):
             self._do_recall(cmd.removeprefix("/recall"))
+            return
+        if cmd == "/commit-msg":
+            if self._agent is None:
+                output.print_error("No LLM configured.")
+                return
+            self.run_worker(self._do_commit_msg(), exclusive=False, group="commit-msg")
             return
         if cmd == "/go":
             if self._agent is None:

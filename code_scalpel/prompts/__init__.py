@@ -30,6 +30,7 @@ MODE_PLAN = _load("mode_plan.md")
 MODE_REVIEW = _load("mode_review.md")
 ANNOTATE_SKILLS = _load("annotate_skills.md")
 PER_STEP_REVIEW = _load("per_step_review.md")
+COMMIT_MESSAGE = _load("commit_message.md")
 
 APPLY_FAILED = _load("retry/apply_failed.md")
 TESTS_FAILED = _load("retry/tests_failed.md")
@@ -42,6 +43,7 @@ FORCE_ANSWER = _load("retry/force_answer.md")
 __all__ = [
     "ANNOTATE_SKILLS",
     "APPLY_FAILED",
+    "COMMIT_MESSAGE",
     "FORCE_ANSWER",
     "MISSING_FILES",
     "MODE_CODE",

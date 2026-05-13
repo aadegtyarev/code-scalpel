@@ -147,6 +147,51 @@ async def test_per_step_review_runs_on_landed_diff(project: Path) -> None:
 
 
 @pytest.mark.asyncio
+async def test_improve_commit_message_handles_empty_diff(project: Path) -> None:
+    """Empty diff → no LLM round-trip. Saves a token-burn on the
+    'I forgot to stage anything' path."""
+    llm = MockLLMAdapter(["unused"])
+    agent = StepAgent(llm=llm, cwd=project, config=_CONFIG)
+
+    result = await agent.improve_commit_message("")
+
+    assert result is None
+    assert llm.calls == []
+
+
+@pytest.mark.asyncio
+async def test_improve_commit_message_runs_with_low_temperature(project: Path) -> None:
+    """Diff present → reviewer runs at temperature 0.2 (stable, not
+    creative). Builder uses ~0.3; we keep close so behaviour is
+    predictable across runs."""
+    llm = MockLLMAdapter(["Add greeting prefix\n\nReason: align with i18n keys."])
+    agent = StepAgent(llm=llm, cwd=project, config=_CONFIG)
+    diff = "--- a/hello.py\n+++ b/hello.py\n@@\n-return 'hi'\n+return 'hello'\n"
+
+    result = await agent.improve_commit_message(diff)
+
+    assert result is not None
+    assert "Add greeting prefix" in result.text
+    assert llm.kwargs_calls[0]["temperature"] == 0.2
+
+
+@pytest.mark.asyncio
+async def test_improve_commit_message_truncates_huge_diff(project: Path) -> None:
+    """4000-char cap protects the prompt budget from a giant rename.
+    Caller still gets a result — better than refusing on size."""
+    llm = MockLLMAdapter(["Rename module across project"])
+    agent = StepAgent(llm=llm, cwd=project, config=_CONFIG)
+    huge = "x = 1\n" * 1000  # 6000 chars
+
+    result = await agent.improve_commit_message(huge)
+
+    assert result is not None
+    sent = llm.calls[0][-1]["content"]
+    assert len(sent) < 4500
+    assert "diff truncated" in sent
+
+
+@pytest.mark.asyncio
 async def test_run_plan_fires_per_step_review_when_enabled(project: Path) -> None:
     """Integration: with per_step_review=True, run_plan surfaces a
     `per_step_review` tool card after the task lands. The reviewer
