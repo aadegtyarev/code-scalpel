@@ -147,6 +147,106 @@ async def test_per_step_review_runs_on_landed_diff(project: Path) -> None:
 
 
 @pytest.mark.asyncio
+async def test_judge_test_sanity_returns_none_for_missing_file(project: Path) -> None:
+    """Caller path: file doesn't exist → no LLM round-trip."""
+    llm = MockLLMAdapter(["unused"])
+    agent = StepAgent(llm=llm, cwd=project, config=_CONFIG)
+
+    result = await agent.judge_test_sanity(project / "no_such_test.py")
+
+    assert result is None
+    assert llm.calls == []
+
+
+@pytest.mark.asyncio
+async def test_judge_test_sanity_sends_file_content(project: Path) -> None:
+    """Happy path — file content is in the user message, prompt is
+    the sanity judge."""
+    test_path = project / "test_hello.py"
+    test_path.write_text("def test_smoke():\n    assert True\n")
+    llm = MockLLMAdapter(['{"verdict":"trivial","reason":"assert True"}'])
+    agent = StepAgent(llm=llm, cwd=project, config=_CONFIG)
+
+    result = await agent.judge_test_sanity(test_path)
+
+    assert result is not None
+    assert '"trivial"' in result.text
+    user_msg = llm.calls[0][-1]["content"]
+    assert "assert True" in user_msg
+    assert llm.kwargs_calls[0]["temperature"] == 0.0
+
+
+@pytest.mark.asyncio
+async def test_run_plan_fires_test_sanity_when_enabled(project: Path) -> None:
+    """Integration: with test_sanity_pass=True, a task that modifies
+    a test file triggers the sanity judge after the patch lands.
+    Surfaces as a test_sanity tool card; doesn't fail the task on
+    trivial verdict (strict-mode is a follow-up)."""
+    from code_scalpel.tools.shell import ShellResult
+    from tests.mocks import MockShellRunner
+
+    # Project needs a test file to modify.
+    (project / "test_hello.py").write_text(
+        "def test_smoke():\n    from hello import hello\n    assert hello() is not None\n"
+    )
+
+    tasks_path = project / ".code-scalpel" / "TASKS.md"
+    tasks_path.parent.mkdir(parents=True, exist_ok=True)
+    tasks_path.write_text(
+        "## T001: Tighten smoke test\n\n"
+        "Goal: assert exact value\n"
+        "Files: test_hello.py\n"
+        "Acceptance:\n"
+        "- explicit value check\n"
+        "Test command: pytest\n"
+    )
+    patch = """\
+test_hello.py
+```python
+<<<<<<< SEARCH
+def test_smoke():
+    from hello import hello
+    assert hello() is not None
+=======
+def test_smoke():
+    from hello import hello
+    assert hello() == 'hi'
+>>>>>>> REPLACE
+```
+"""
+    sanity_text = '{"verdict":"meaningful","reason":"explicit value comparison"}'
+    llm = MockLLMAdapter([patch, sanity_text])
+    shell = MockShellRunner([ShellResult("1 passed", 0)])
+    cfg = AppConfig(
+        profiles={"local": ModelProfile(provider="lmstudio", model="local-model", temperature=0.1)},
+        agent=AgentConfig(
+            max_files=2,
+            max_file_lines=50,
+            max_debug_attempts=0,
+            iterative_patch_loop=True,
+            enforce_read_before_show=False,
+            auto_git=False,
+            sandbox="off",
+            auto_annotate_plan=False,
+            test_sanity_pass=True,
+        ),
+    )
+    agent = StepAgent(llm=llm, cwd=project, config=cfg, shell_runner=shell)
+
+    cards: list[tuple[str, str]] = []
+
+    def _on_tool(call, result):  # type: ignore[no-untyped-def]
+        cards.append((call.name, result.output))
+
+    result = await agent.run_plan(on_tool_executed=_on_tool)
+
+    assert result.tasks_completed == 1
+    assert any(name == "test_sanity" and '"meaningful"' in out for name, out in cards)
+    # Builder ran first, sanity judge second — same shape as per_step_review.
+    assert len(llm.calls) == 2
+
+
+@pytest.mark.asyncio
 async def test_improve_commit_message_handles_empty_diff(project: Path) -> None:
     """Empty diff → no LLM round-trip. Saves a token-burn on the
     'I forgot to stage anything' path."""

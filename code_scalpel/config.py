@@ -114,6 +114,13 @@ class AgentConfig(BaseModel):
     # (0.3 in `code` mode) so the reviewer generates diverse hypotheses
     # about what could break, rather than locking in on the first read.
     review_temperature: float = 0.5
+    # Test-sanity narrow pass: after every successful task in /go that
+    # touched a test file, fire an independent judge — does the test
+    # actually exercise behaviour, or would it pass against a stub?
+    # Trivial → failed task, retry with explicit guidance. Off by
+    # default; the v0.8 reliability bet only ships active when the
+    # user opts in.
+    test_sanity_pass: bool = False
 
 
 class ModeTemperatures(BaseModel):
