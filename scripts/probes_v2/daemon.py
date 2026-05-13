@@ -162,6 +162,30 @@ class ProbeDaemon:
                 )
                 attempt.pop(dropped, None)
 
+    async def _run_kwargs_only(self, func: Any, kwargs: dict[str, Any]) -> Any:
+        """Версия `_compat_call` без позиционного `task` —
+        используется для `run_plan` который позиционных не
+        требует. Аналогично отбрасывает kwargs которых нет в
+        сигнатуре и записывает в adaptations."""
+        attempt = dict(kwargs)
+        while True:
+            try:
+                return await func(**attempt)
+            except TypeError as e:
+                msg = str(e)
+                dropped = None
+                for k in list(attempt.keys()):
+                    if k in msg:
+                        dropped = k
+                        break
+                if dropped is None:
+                    raise
+                self._record_adaptation(
+                    f"{func.__name__}.{dropped}_missing",
+                    f"`{func.__name__}({dropped}=...)` не поддерживается: {msg}",
+                )
+                attempt.pop(dropped, None)
+
     def _record_adaptation(self, key: str, detail: str) -> None:
         """Накапливаем 'отсутствующие фичи на тэге' в
         meta.json.adaptations — это сами по себе данные для статьи."""
@@ -242,7 +266,15 @@ class ProbeDaemon:
     async def handle_go(self) -> dict[str, Any]:
         """Запускает `agent.run_plan` на TASKS.md в workdir. Это
         отдельная команда (не turn): scalpel сам идёт по плану в
-        code mode с iterative patch loop, мы не пишем реплики."""
+        code mode с iterative patch loop, мы не пишем реплики.
+
+        Параметры `run_plan` мигрировали по версиям:
+        - `on_tool_executed` появился позднее (v0.7+)
+        - `fork_resolver` появился c v0.10
+        - `Runtime.fork_resolver` атрибут — тоже с v0.10
+        Compat-shim ниже отбрасывает kwargs которых нет в
+        сигнатуре, и в `meta.json.adaptations` пишет что
+        отсутствует."""
         if self.runtime is None:
             self._init_runtime()
         assert self.runtime is not None
@@ -255,11 +287,22 @@ class ProbeDaemon:
         def _hook(call: ToolCall, result: ToolResult) -> None:
             self._on_tool_executed(call, result)
 
-        try:
-            result = await self.runtime.agent.run_plan(
-                on_tool_executed=_hook,
-                fork_resolver=self.runtime.fork_resolver,
+        kwargs: dict[str, Any] = {"on_tool_executed": _hook}
+        # `Runtime.fork_resolver` появился c v0.10. Берём через
+        # getattr с дефолтом — если атрибута нет, kwarg не
+        # передаём (а если есть и run_plan не понимает —
+        # `_run_kwargs_only` отбросит).
+        fork_resolver = getattr(self.runtime, "fork_resolver", None)
+        if fork_resolver is not None:
+            kwargs["fork_resolver"] = fork_resolver
+        else:
+            self._record_adaptation(
+                "runtime.fork_resolver_missing",
+                "Runtime has no `fork_resolver` attribute on this tag",
             )
+
+        try:
+            result = await self._run_kwargs_only(self.runtime.agent.run_plan, kwargs)
         except Exception as e:  # noqa: BLE001
             append_jsonl(
                 self.paths.timing_jsonl,
