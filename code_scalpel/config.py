@@ -183,6 +183,16 @@ class AgentConfig(BaseModel):
     # decisions» block the builder reads on the first task. Off by
     # default to preserve legacy /go.
     auto_detect_forks: bool = False
+    # debug_pass — auto debugger NarrowPass inside code_with_retry on
+    # failed tests. By analogy with v0.8 per_step_review on done.
+    # Reads structured `{hypothesis, evidence, suggested_fix}` from a
+    # skeptic-debugger prompt at temperature 0.1; builder receives a
+    # compact fix-hint on its next attempt instead of the raw 4 KB
+    # test trace. Off by default; opt-in for /go runs where you want
+    # the extra failure-investigation pass.
+    debug_pass: bool = False
+    debug_pass_max_attempts: int = 2
+    debug_pass_temperature: float = 0.1
 
 
 class ModeTemperatures(BaseModel):

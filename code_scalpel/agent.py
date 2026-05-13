@@ -49,6 +49,62 @@ _MISSING_FILES_PROMPT = _prompts.MISSING_FILES
 _NEEDS_TESTS_PROMPT = _prompts.NEEDS_TESTS
 
 
+def _summarize_edits_for_debug(edits: list[Edit]) -> str:
+    """Build a compact diff string the debug_pass NarrowPass can
+    digest. For SEARCH/REPLACE edits we concatenate (path, search,
+    replace) tuples; for write_file synthetic edits (empty search/
+    replace) we just list the touched paths.
+
+    Capped at ~2 KB so the prompt budget stays sane on plans that
+    touch many files in one task."""
+    if not edits:
+        return "(no edits)"
+    chunks: list[str] = []
+    for edit in edits:
+        if edit.search or edit.replace:
+            chunks.append(
+                f"=== {edit.path} ===\n"
+                f"--- before ---\n{edit.search}\n"
+                f"--- after ---\n{edit.replace}\n"
+            )
+        else:
+            chunks.append(f"=== {edit.path} (write_file, full overwrite) ===")
+    joined = "\n".join(chunks)
+    if len(joined) > 2000:
+        joined = joined[:2000] + "\n…(truncated)"
+    return joined
+
+
+def _format_debug_retry_prompt(
+    *,
+    test_output: str,
+    hypothesis: str,
+    evidence: str,
+    suggested_fix: str,
+) -> str:
+    """Splice the debugger's findings into the retry prompt.
+
+    Keeps the raw test_output (builder still needs the trace) but
+    leads with the structured fix-hint. Empty hypothesis means the
+    debugger gave up — surface that honestly instead of pretending
+    we have a lead."""
+    if not hypothesis and not suggested_fix:
+        return _TESTS_FAILED_PROMPT.format(output=test_output)
+    parts = ["The previous attempt failed tests. A debugger pass investigated:"]
+    if hypothesis:
+        parts.append(f"\nHypothesis: {hypothesis}")
+    if evidence:
+        parts.append(f"Evidence: {evidence}")
+    if suggested_fix:
+        parts.append(f"Suggested fix: {suggested_fix}")
+    parts.append("\n--- Raw test output ---\n" + test_output)
+    parts.append(
+        "\nApply the suggested fix if you can verify it solves the real cause. "
+        "Don't paper over with try/except."
+    )
+    return "\n".join(parts)
+
+
 def _changes_include_tests(edits: list[Edit]) -> bool:
     """True if any edit targets a path that looks like a test file."""
     for edit in edits:
@@ -146,6 +202,22 @@ _CODE_MODE_ADDENDUM = "\n\n" + _prompts.MODE_CODE
 _REVIEW_MODE_ADDENDUM = "\n\n" + _prompts.MODE_REVIEW
 _PLAN_MODE_ADDENDUM = "\n\n" + _prompts.MODE_PLAN
 _DEBUG_MODE_ADDENDUM = "\n\n" + _prompts.MODE_DEBUG
+
+# Schema for the auto debug_pass output. Three required strings;
+# the runtime passes the response straight through `response_format=
+# json_schema`, so the model is sampler-forced to fill them. Empty
+# `evidence` / `suggested_fix` are allowed — the prompt tells the
+# model to leave them blank if it couldn't verify.
+_DEBUG_PASS_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "hypothesis": {"type": "string"},
+        "evidence": {"type": "string"},
+        "suggested_fix": {"type": "string"},
+    },
+    "required": ["hypothesis", "evidence", "suggested_fix"],
+    "additionalProperties": False,
+}
 
 
 @dataclass(frozen=True)
@@ -632,6 +704,7 @@ class StepAgent:
         mode: str = "code",
         on_tool_executed: Callable[[ToolCall, ToolResult], None] | None = None,
         force_loop: bool = False,
+        task_label: str = "",
     ) -> StepResult:
         """Iterative patch loop: ask the model, apply, run tests, retry on failure.
 
@@ -679,6 +752,14 @@ class StepAgent:
 
         # Initial attempt + up to max_retries retries.
         last_result: StepResult | None = None
+        # State for debug_pass anti-loop. The hypothesis-loop guard
+        # stops the retry chain when the debugger says the same
+        # thing twice in a row — that's a sign we're stuck.
+        # test_output guard is a semantic backup on top of the
+        # existing arg-based anti-loop.
+        seen_hypotheses: set[str] = set()
+        last_test_output: str = ""
+        debug_pass_runs = 0
         for i in range(max_retries + 1):
             result = await self.ask(prompt, mode=mode, on_tool_executed=on_tool_executed)
             last_result = result
@@ -731,7 +812,20 @@ class StepAgent:
                         )
                     if i == max_retries:
                         break
-                    prompt = _TESTS_FAILED_PROMPT.format(output=test_output)
+                    prompt, broke = await self._build_failure_retry_prompt(
+                        test_output=test_output,
+                        diff="(write_file-based, no inline diff)",
+                        task_label=task_label,
+                        on_tool_executed=on_tool_executed,
+                        seen_hypotheses=seen_hypotheses,
+                        last_test_output=last_test_output,
+                        debug_pass_runs=debug_pass_runs,
+                    )
+                    if broke:
+                        break
+                    if self._config.agent.debug_pass:
+                        debug_pass_runs += 1
+                    last_test_output = test_output
                     continue
                 # Check for failed read_file calls on non-existent files.
                 # Model tried to read a file that doesn't exist yet — tell it
@@ -792,7 +886,24 @@ class StepAgent:
                 )
             if i == max_retries:
                 break
-            prompt = _TESTS_FAILED_PROMPT.format(output=test_output)
+            # Build retry prompt — with debug_pass hint when configured,
+            # raw test_output otherwise. Semantic anti-loop (hypothesis
+            # repeat / identical test_output) breaks the chain early.
+            diff_text = _summarize_edits_for_debug(result.edits)
+            prompt, broke = await self._build_failure_retry_prompt(
+                test_output=test_output,
+                diff=diff_text,
+                task_label=task_label,
+                on_tool_executed=on_tool_executed,
+                seen_hypotheses=seen_hypotheses,
+                last_test_output=last_test_output,
+                debug_pass_runs=debug_pass_runs,
+            )
+            if broke:
+                break
+            if self._config.agent.debug_pass:
+                debug_pass_runs += 1
+            last_test_output = test_output
 
         # Exhausted retries. Roll BACK to pre-loop state for files that
         # existed before — those got mutated by SEARCH/REPLACE and the
@@ -999,6 +1110,7 @@ class StepAgent:
                     mode="code",
                     on_tool_executed=on_tool_executed,
                     force_loop=True,
+                    task_label=f"{task.id} — {task.title}",
                 )
             except Exception:
                 # Surface to the caller — cancellation propagates,
@@ -1701,6 +1813,164 @@ class StepAgent:
             # so the same test produces the same verdict across runs
             # — important if we ever start gating CI on this.
             temperature=0.0,
+        )
+        return await self.run_narrow_pass(pass_spec, user_message)
+
+    async def _build_failure_retry_prompt(
+        self,
+        *,
+        test_output: str,
+        diff: str,
+        task_label: str,
+        on_tool_executed: Callable[[ToolCall, ToolResult], None] | None,
+        seen_hypotheses: set[str],
+        last_test_output: str,
+        debug_pass_runs: int,
+    ) -> tuple[str, bool]:
+        """Build the retry prompt after a failed-test attempt.
+
+        Returns (prompt, should_break). When debug_pass is on AND
+        budget left, runs the auto debugger NarrowPass and splices
+        its `suggested_fix` into a richer retry prompt. Otherwise
+        falls back to the raw `_TESTS_FAILED_PROMPT.format(...)`.
+
+        Anti-loop guards (always active when debug_pass is on):
+          a. `seen_hypotheses` — if the debugger names a hypothesis
+             we've already seen, we're stuck. Break with a marker
+             prompt.
+          b. `last_test_output` — if the test_output is bit-identical
+             to the previous attempt, the patch didn't change
+             behaviour at all. Break.
+        """
+        if not self._config.agent.debug_pass:
+            # debug_pass off → legacy behaviour. Don't add semantic
+            # anti-loop either — existing tests rely on exhausting
+            # `max_debug_attempts` even when the test output repeats.
+            return _TESTS_FAILED_PROMPT.format(output=test_output), False
+
+        # Semantic anti-loop (debug_pass only): test_output identical
+        # between attempts means the patch did nothing testable. No
+        # point in another retry, even with a debugger hint.
+        if test_output and test_output == last_test_output:
+            return (
+                _TESTS_FAILED_PROMPT.format(output=test_output)
+                + "\n\n(Stopping retries: test output identical to the "
+                "previous attempt — the patch didn't change behaviour.)",
+                True,
+            )
+        if debug_pass_runs >= self._config.agent.debug_pass_max_attempts:
+            return _TESTS_FAILED_PROMPT.format(output=test_output), False
+
+        try:
+            debug_result = await self.debug_pass(
+                task_id=task_label.split(" — ", 1)[0] if " — " in task_label else "",
+                task_title=(task_label.split(" — ", 1)[1] if " — " in task_label else task_label),
+                diff=diff,
+                test_output=test_output,
+            )
+        except Exception:
+            return _TESTS_FAILED_PROMPT.format(output=test_output), False
+        if debug_result is None:
+            return _TESTS_FAILED_PROMPT.format(output=test_output), False
+
+        # Parse the structured payload. Schema is enforced by
+        # response_format, but we still tolerate empty fields and
+        # malformed JSON gracefully — fallback to raw prompt.
+        from code_scalpel.fork import _extract_json_object
+
+        payload = _extract_json_object(debug_result.text)
+        if payload is None:
+            return _TESTS_FAILED_PROMPT.format(output=test_output), False
+        try:
+            data = json.loads(payload)
+        except json.JSONDecodeError:
+            return _TESTS_FAILED_PROMPT.format(output=test_output), False
+        hypothesis = str(data.get("hypothesis", "")).strip()
+        evidence = str(data.get("evidence", "")).strip()
+        suggested_fix = str(data.get("suggested_fix", "")).strip()
+
+        # Surface the debug card so the user sees what the debugger
+        # found. Doesn't matter if hypothesis empty — that's still
+        # useful information ("debugger gave up").
+        if on_tool_executed is not None:
+            call = ToolCall(name="debug_pass", body="{}")
+            body_lines = [f"Hypothesis: {hypothesis or '(none)'}"]
+            if evidence:
+                body_lines.append(f"Evidence: {evidence}")
+            if suggested_fix:
+                body_lines.append(f"Suggested fix: {suggested_fix}")
+            with suppress(Exception):
+                on_tool_executed(
+                    call,
+                    ToolResult(call, output="\n".join(body_lines), ok=bool(hypothesis)),
+                )
+
+        # Hypothesis loop: same claim twice → break. Otherwise
+        # remember and proceed.
+        if hypothesis and hypothesis in seen_hypotheses:
+            return (
+                _TESTS_FAILED_PROMPT.format(output=test_output)
+                + f"\n\n(Stopping retries: debugger repeated the same "
+                f"hypothesis — {hypothesis!r}. Likely stuck.)",
+                True,
+            )
+        if hypothesis:
+            seen_hypotheses.add(hypothesis)
+
+        prompt = _format_debug_retry_prompt(
+            test_output=test_output,
+            hypothesis=hypothesis,
+            evidence=evidence,
+            suggested_fix=suggested_fix,
+        )
+        return prompt, False
+
+    async def debug_pass(
+        self,
+        *,
+        task_id: str,
+        task_title: str,
+        diff: str,
+        test_output: str,
+    ) -> PassResult | None:
+        """Failure-investigation NarrowPass. Symmetric to v0.8
+        per_step_review (which runs on done); debug_pass runs on
+        failed inside code_with_retry, before the builder retries.
+
+        Returns structured `{hypothesis, evidence, suggested_fix}`
+        as JSON. Caller (code_with_retry) splices the
+        suggested_fix into the next retry prompt instead of the
+        raw test_output dump.
+
+        No tools yet — debug_pass works off the diff and the
+        test_output text. If probe-time calibration shows it
+        helps materially to give the debugger read_file / grep /
+        run_python access, that's an extension on top of the
+        same NarrowPass spec; the prompt already names them.
+        """
+        from code_scalpel.narrow_pass import NarrowPass
+
+        if not test_output.strip():
+            return None
+        # Cap test_output to keep the prompt under control — pytest
+        # tracebacks can be 4-10 KB. Head is where the failing test
+        # line lives; the rest is fixture/teardown noise.
+        max_chars = 3000
+        truncated_test = (
+            test_output
+            if len(test_output) <= max_chars
+            else test_output[:max_chars] + "\n…(truncated)"
+        )
+        user_message = (
+            f"Task: {task_id} — {task_title}\n\n"
+            f"Diff:\n```\n{diff or '(no diff — write_file based)'}\n```\n\n"
+            f"Test output:\n```\n{truncated_test}\n```\n"
+        )
+        pass_spec = NarrowPass(
+            name="debug_pass",
+            system_prompt=_prompts.DEBUG_PASS,
+            temperature=self._config.agent.debug_pass_temperature,
+            output_schema=_DEBUG_PASS_SCHEMA,
         )
         return await self.run_narrow_pass(pass_spec, user_message)
 

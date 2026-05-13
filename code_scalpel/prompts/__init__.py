@@ -29,6 +29,7 @@ MODE_CODE = _load("mode_code.md")
 MODE_PLAN = _load("mode_plan.md")
 MODE_REVIEW = _load("mode_review.md")
 MODE_DEBUG = _load("mode_debug.md")
+DEBUG_PASS = _load("debug_pass.md")
 ANNOTATE_SKILLS = _load("annotate_skills.md")
 PER_STEP_REVIEW = _load("per_step_review.md")
 COMMIT_MESSAGE = _load("commit_message.md")
@@ -50,6 +51,7 @@ __all__ = [
     "ANNOTATE_SKILLS",
     "APPLY_FAILED",
     "COMMIT_MESSAGE",
+    "DEBUG_PASS",
     "DETECT_FORKS",
     "FORCE_ANSWER",
     "FORK_CLARIFY",
