@@ -1,0 +1,19 @@
+{
+  "run_id": "c_fix_bug-mini_cli_with_bug-a392a2e-20260513-160019",
+  "scenario": "c_fix_bug",
+  "project": "mini_cli_with_bug",
+  "version_tag": "main_a392a2e",
+  "git_sha": "a392a2ec8c1d641bbd112679bb34a79ea6e8aa2f",
+  "git_dirty": false,
+  "git_commit_url": "https://github.com/aadegtyarev/code-scalpel/commit/a392a2ec8c1d641bbd112679bb34a79ea6e8aa2f",
+  "git_checkout_cmd": "git checkout a392a2ec8c1d641bbd112679bb34a79ea6e8aa2f",
+  "model_name_expected": "qwen/qwen2.5-coder-14b",
+  "model_name_actual": "qwen/qwen2.5-coder-14b",
+  "model_base_url": "http://localhost:1234/v1",
+  "upstream_model": null,
+  "started_at": "2026-05-13T16:00:19Z",
+  "ended_at": "2026-05-13T16:04:40Z",
+  "ended_reason": "user_gave_up",
+  "user_role": "claude-acting-as-user-per-tone-of-voice.md",
+  "command": "probe start c_fix_bug mini_cli_with_bug"
+}
