@@ -29,6 +29,7 @@ MODE_CODE = _load("mode_code.md")
 MODE_PLAN = _load("mode_plan.md")
 MODE_REVIEW = _load("mode_review.md")
 ANNOTATE_SKILLS = _load("annotate_skills.md")
+PER_STEP_REVIEW = _load("per_step_review.md")
 
 APPLY_FAILED = _load("retry/apply_failed.md")
 TESTS_FAILED = _load("retry/tests_failed.md")
@@ -47,6 +48,7 @@ __all__ = [
     "MODE_PLAN",
     "MODE_REVIEW",
     "NEEDS_TESTS",
+    "PER_STEP_REVIEW",
     "READ_BEFORE_SHOW",
     "SYSTEM",
     "TESTS_FAILED",

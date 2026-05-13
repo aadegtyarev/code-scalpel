@@ -103,6 +103,17 @@ class AgentConfig(BaseModel):
     # (o1/o3, deepseek-r1, qwq). Ignored when ModelProfile.supports_thinking
     # is False or None (auto-detected as unsupported). Toggled via Ctrl+K.
     thinking_effort: Literal["off", "low", "medium", "high"] = "off"
+    # Per-step review: after every successful task in /go, fire an
+    # independent reviewer turn (same model, different system prompt,
+    # higher temperature, read-only tools). The reviewer surfaces risks
+    # as a chat card; no auto-fix yet — that's a follow-up. Off by
+    # default so legacy /go behaviour is preserved; enable when you
+    # want the v0.8 «narrow passes» reliability bet active.
+    per_step_review: bool = False
+    # Sampling temperature for the reviewer turn. Higher than builder
+    # (0.3 in `code` mode) so the reviewer generates diverse hypotheses
+    # about what could break, rather than locking in on the first read.
+    review_temperature: float = 0.5
 
 
 class ModeTemperatures(BaseModel):
