@@ -136,6 +136,13 @@ class AgentConfig(BaseModel):
     # Per-linter timeout (seconds). A stuck mypy on a huge project must
     # not freeze /go between tasks.
     lint_pass_timeout: int = 15
+    # AST-based import-graph check. After each /go task, audits every
+    # `from <in-project module> import <name>` in touched files and
+    # flags names that aren't actually exported. Catches the 14b
+    # pattern of importing a function under a hallucinated name.
+    # Off by default. Strict-mode (turn into failed task) lands after
+    # probe-set calibration.
+    import_graph_check: bool = False
 
 
 class ModeTemperatures(BaseModel):
