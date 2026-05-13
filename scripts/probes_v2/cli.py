@@ -270,12 +270,16 @@ def finalize(
         time.sleep(0.1)
 
     # Снапшот workdir → final_tree (раскрытый, не tar.gz —
-    # удобно `grep`/`ls` в репо).
+    # удобно `grep`/`ls` в репо). Исключаем `.git` чтобы он не
+    # попал в основной репо как gitlink (вложенный submodule
+    # pointer, который git не клонирует).
     if paths.workdir.exists():
         if paths.final_tree.exists():
             shutil.rmtree(paths.final_tree)
         shutil.copytree(
-            paths.workdir, paths.final_tree, ignore=shutil.ignore_patterns(".daemon.json")
+            paths.workdir,
+            paths.final_tree,
+            ignore=shutil.ignore_patterns(".daemon.json", ".git"),
         )
         # Workdir вне репо ниже probe-runs/<id>/.workdir — удаляем
         # после снапшота, чтобы не таскать дубликат.
