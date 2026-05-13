@@ -28,6 +28,7 @@ SYSTEM = _load("system.md")
 MODE_CODE = _load("mode_code.md")
 MODE_PLAN = _load("mode_plan.md")
 MODE_REVIEW = _load("mode_review.md")
+MODE_DEBUG = _load("mode_debug.md")
 ANNOTATE_SKILLS = _load("annotate_skills.md")
 PER_STEP_REVIEW = _load("per_step_review.md")
 COMMIT_MESSAGE = _load("commit_message.md")
@@ -56,6 +57,7 @@ __all__ = [
     "FORK_REVIEWER",
     "MISSING_FILES",
     "MODE_CODE",
+    "MODE_DEBUG",
     "MODE_PLAN",
     "MODE_REVIEW",
     "NEEDS_TESTS",

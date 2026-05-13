@@ -196,14 +196,17 @@ class ModeTemperatures(BaseModel):
     the consistent-refusal pattern.
 
     plan stays moderate (creative breakdown). code stays low-mid
-    (single-shot patch precision). debug high (retry diversity).
+    (single-shot patch precision). debug LOW-mid — hypothesis
+    generation wants some diversity, not creativity. The old 0.7
+    default was unused (no `debug` mode existed yet); 0.3 is the
+    informed value: between picker's 0.0 and reviewer's 0.5.
     """
 
     ask: float = 0.7
     plan: float = 0.6
     code: float = 0.3
     review: float = 0.3
-    debug: float = 0.7
+    debug: float = 0.3
 
     def for_mode(self, mode: str) -> float:
         # Unknown modes fall back to ask — safest default for surprising callers.

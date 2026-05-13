@@ -3056,6 +3056,43 @@ ruff config — получает его. Снимает класс ошибок 
       keyboard navigation (tabs / r cycle / ctrl+s copy). Зависимости
       пока не покупаем — это далёкое quality-of-life, не reliability.
 
+- [ ] Trust-driven defaults consolidation.
+      Сейчас trust (Ctrl+L) уже рулит: shell_exec confirm, patch-apply
+      auto, fork timer (skeptic ∞ / optimist 120s / yolo direct),
+      run_python confirmation. Это паттерн: уровень доверия — единая
+      ось для всех yes/no-автоматов. Распространить дальше:
+        • `per_step_review` default: skeptic=on, optimist=on, yolo=off
+          (банзай не хочет лишних turn'ов).
+        • `fork_auto_reviewed`: skeptic=on (двойной), yolo=off (быстро).
+        • `auto_detect_forks`: skeptic=on, optimist=on, yolo=on.
+        • `lint_pass` / `import_graph_check`: skeptic=on, yolo=off.
+        • `max_debug_attempts`: skeptic=1, optimist=2, yolo=3.
+        • write_file confirmation в debug mode: skeptic=confirm,
+          optimist=auto, yolo=auto.
+      Сейчас всё это отдельные конфиг-флаги. Унифицировать: каждый
+      «политический» bool → функция `from_trust(trust)`. Юзер
+      может override-нуть руками, но **дефолт** выводится из одной
+      ручки. «Не плодить сущности» — точно сюда.
+      Делать вместе с PassSpec unification (один большой
+      перетряс defaults).
+
+- [ ] Per-session «(s) trust override» pattern везде.
+      `(s) allow-for-session` уже работает на ShellExecCard
+      (одобрил один раз — в этой сессии не спрашивают повторно за
+      ту же команду). Это элегантный «trust по кусочкам» без
+      глобального изменения уровня. Распространить паттерн:
+        • ChoiceCard для fork'ов: `(s)` «всегда брать asyncpg в этой
+          сессии» — после первого выбора такие же fork'и
+          разрешаются автоматически.
+        • Per-step review: `(s)` «не показывай review этой задачи
+          в этой сессии».
+        • write_file в debug mode (если включим confirm): `(s)`
+          «доверяй мне write_file этих файлов в этой сессии».
+      Архитектурно: общая абстракция `SessionWhitelist` хранит
+      (action_type, fingerprint) → approved. ShellExecCard уже
+      делает это вручную; вытащить в общий слой при унификации
+      request-cards (см. backlog entry выше).
+
 - [ ] PassSpec unification — слить manual modes и auto passes
       на один rail (большая правка, оплачивает себя сильно).
       Сейчас два параллельных мира:

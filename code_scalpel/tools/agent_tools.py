@@ -332,6 +332,35 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
             },
         },
     },
+    {
+        "type": "function",
+        "function": {
+            "name": "run_python",
+            "description": (
+                "Evaluate a short Python snippet in the project directory and "
+                "return stdout+stderr+exit. Repl-style probe — use to verify a "
+                "debug hypothesis without writing to disk: `import x; print(type(x.y))` "
+                "or `from mod import f; f('test')`. Same sandbox as shell_exec. "
+                "Prefers `.venv/bin/python` if present; falls back to `python3` "
+                "(NOT `python` — Debian/Ubuntu often lacks that symlink). "
+                "Single snippet per call, no multi-statement scripts beyond a "
+                "handful of lines — for those use write_file + run_tests."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "snippet": {
+                        "type": "string",
+                        "description": (
+                            "Python source to feed to `python -c`. Newlines OK. "
+                            "Tip: prefix with imports the verification needs."
+                        ),
+                    }
+                },
+                "required": ["snippet"],
+            },
+        },
+    },
 ]
 
 
@@ -500,6 +529,16 @@ async def execute(
         return await _tool_run_tests(call, cwd, runner or AsyncShellRunner())
     if call.name == "shell_exec":
         return await _tool_shell_exec(
+            call,
+            cwd,
+            runner or AsyncShellRunner(),
+            trust=trust,
+            timeout=shell_exec_timeout,
+            confirm=confirm_shell_exec,
+            sandbox=sandbox,
+        )
+    if call.name == "run_python":
+        return await _tool_run_python(
             call,
             cwd,
             runner or AsyncShellRunner(),
@@ -1015,6 +1054,57 @@ async def _run_argv_unchecked(argv: list[str], cwd: Path, timeout: int) -> Shell
         stdout=stdout.decode(errors="replace"),
         returncode=proc.returncode if proc.returncode is not None else 0,
     )
+
+
+async def _tool_run_python(
+    call: ToolCall,
+    cwd: Path,
+    runner: ShellRunner,
+    *,
+    trust: str,
+    timeout: int,
+    confirm: ConfirmShellExec | None = None,
+    sandbox: str = "auto",
+) -> ToolResult:
+    """args: `{snippet: str}` — small Python expression for verification.
+
+    Thin wrapper over `shell_exec`: builds `<python> -c <snippet>`,
+    delegates to the shell path for all the heavy lifting (trust
+    policy / confirmation / sandbox / timeout / output truncation).
+    No duplicate policy code — one source of truth, same trust
+    semantics as any other side-effectful tool.
+
+    Interpreter pick (in order): `.venv/bin/python`, `python3`,
+    `python`. The bare `python` is last because Debian/Ubuntu
+    often ships only `python3` symlinked.
+    """
+    decoded = _decode_args(call.body)
+    snippet = str(decoded.get("snippet", decoded.get("_raw", ""))).strip()
+    if not snippet:
+        return ToolResult(call, output="error: empty snippet", ok=False)
+
+    if (cwd / ".venv" / "bin" / "python").is_file():
+        interpreter = ".venv/bin/python"
+    elif shutil.which("python3") is not None:
+        interpreter = "python3"
+    else:
+        interpreter = "python"
+    command = f"{interpreter} -c {shlex.quote(snippet)}"
+
+    # Delegate to shell_exec — same policy, same sandbox, same trust.
+    # Preserve the visible tool name so the chat card reads `run_python`
+    # rather than `shell_exec` (UX clarity; underlying logic identical).
+    inner_call = ToolCall(name="shell_exec", body=json.dumps({"command": command}))
+    inner = await _tool_shell_exec(
+        inner_call,
+        cwd,
+        runner,
+        trust=trust,
+        timeout=timeout,
+        confirm=confirm,
+        sandbox=sandbox,
+    )
+    return ToolResult(call=call, output=inner.output, ok=inner.ok)
 
 
 async def _tool_shell_exec(
