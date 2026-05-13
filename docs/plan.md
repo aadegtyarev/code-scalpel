@@ -3007,6 +3007,31 @@ ruff config — получает его. Снимает класс ошибок 
       keyboard navigation (tabs / r cycle / ctrl+s copy). Зависимости
       пока не покупаем — это далёкое quality-of-life, не reliability.
 
+- [ ] Prompt-cache awareness: разделить «каналы» turn-типов.
+      Сейчас все NarrowPass'ы (builder / per_step_review / test_sanity /
+      detect_forks / commit_msg / fork_local_meta / fork_reviewer /
+      fork_clarify) ходят через один Adapter взаимно-перемежающимися
+      вызовами. Каждый переключение system-prompt'а обнуляет prefix
+      KV-cache у провайдера — builder turn N пересчитывает с нуля
+      тот же mode_code (~3k токенов), потому что между ним и turn N+1
+      был reviewer с другим префиксом. На больших system'ах это
+      3-5x скорости впустую.
+      Три уровня решения:
+        a. Группировать turns одного типа: сначала все builder'ы
+           подряд, потом все review pass'ы пачкой. Кэш сохраняется,
+           но review задерживается → UX hit.
+        b. Несколько HTTP-клиентов к одному endpoint (per-conn
+           affinity на LM Studio даёт выигрыш не всегда; на
+           openrouter / openai чистый no-op).
+        c. Explicit prompt caching API (Anthropic уже есть,
+           LM Studio в работе). Самый чистый путь — когда подключим
+           upstream-провайдеров в v0.12.
+      Уровень (a) можно замерить через probe сейчас: запустить
+      два варианта /go (interleaved vs batched) и сравнить
+      total wall-time + token-rate. Без цифр не имеет смысла менять
+      flow. Делать рядом с v0.12 upstream — концептуально та же
+      «model switching cost» проблема.
+
 - [ ] LM Studio model swap для v0.12 upstream-batching.
       Кейс: локальная мощная модель (например gemma-26b) не помещается
       в RAM одновременно с qwen-14b. Перед upstream flush нужно
