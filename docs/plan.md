@@ -2810,22 +2810,37 @@ ruff config — получает его. Снимает класс ошибок 
       без обязательной аннотации плана. Аннотация остаётся как
       override.
 
-- [ ] Auto-discovery stack-skills (Python classes).
-      Сейчас новые стэк-skills (PythonSkill / JsTsSkill / GoSkill /
-      DockerSkill / PostgresSkill / SqliteSkill) регистрируются
-      ВРУЧНУЮ в `code_scalpel/skills/__init__.py`. User-skills
-      (markdown под `.code-scalpel/skills/`) уже подхватываются по
-      файловой системе. Свести: класс-based skills тоже грузить
-      через entry-points / pkgutil walk модулей `code_scalpel.skills.*`,
-      каждый сам регистрируется в `__init__`. Добавить новый стек =
-      положить файл, не править реестр.
+- [ ] Stack-skills как markdown + auto-discovery (большая правка).
+      Сейчас стэк-skills (PythonSkill / JsTsSkill / GoSkill /
+      DockerSkill / PostgresSkill / SqliteSkill) — Python-классы,
+      руками зарегистрированные в `code_scalpel/skills/__init__.py`.
+      Перевести на markdown-с-frontmatter, тот же формат что у
+      user-skills под `.code-scalpel/skills/`. Frontmatter:
+      `name`, `description`, `detect_files` (glob-патtern или
+      python expression), `test_command`, `lint_command`,
+      `format_command`, `keywords`. Body — инструкция модели.
+      Built-in директория `code_scalpel/skills_builtin/*.md`
+      шипится с пакетом и сканится при старте; user может
+      override-ить одноимённым файлом в `.code-scalpel/skills/`.
+      Не путать с рецептами — recipe это «знание про инструмент»,
+      skill это «знание про стек» с поведенческим контрактом
+      (test/lint/format).
 
 - [ ] `/skills load <name>...` — принудительная загрузка per-session.
-      `/skills` уже показывает каталог; добавить подкоманду load
-      которая грузит один или несколько скиллов в текущую сессию
-      (как если бы модель сама позвала `load_skill`). Полезно когда
-      пользователь знает что задача потребует stack-знаний раньше
-      чем модель поймёт это сама.
+      `/skills` показывает каталог; добавить `/skills load X Y Z`
+      которая грузит выбранные skills в текущую сессию (как если
+      бы модель сама позвала `load_skill`). Полезно когда юзер
+      знает что задача потребует stack-знаний раньше чем модель
+      поймёт сама.
+
+- [ ] `/recipes` + `/recipes load <name>...` — симметрично скиллам.
+      Сейчас рецепты только через `/learn <name>` (генерация) и
+      auto-load по ключевым словам. Добавить листинг доступных
+      рецептов в чат и принудительную загрузку выбранных в сессию.
+      Рецепты и скиллы остаются разделёнными — рецепт это
+      «инструкция про инструмент / API / паттерн», skill это
+      «контракт про стек» — но интерфейс просмотра/загрузки
+      выравнивается.
 ```
 
 ### Backlog (без версии)
