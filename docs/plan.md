@@ -2513,42 +2513,38 @@ Rust language skill / Kubernetes component skill — по запросу.
 
 Остаётся в v0.7 (чек-лист закрытия):
 
-- [ ] Bug G — нулевая session summary.
-      requests=0, prompt=0, completion=0, total=0, context=0/limit
-      несмотря на полную /go сессию. elapsed считается правильно —
-      таймер живёт, usage counters не инкрементируются. Связка
-      `ChatResponse.usage` → session-аккаунтинг порвалась где-то
-      в недавнем рефакторе (write_file / sandbox / annotation pass).
-      Проверить session.py и накопитель в _compress_old_tool_results.
+- [x] Bug G — нулевая session summary (2026-05-13). StepAgent
+      теперь принимает опциональный Session и кормит его сам в
+      stream_ask / annotate_plan / _compact. /go больше не обходит
+      bookkeeping. TUI убирает дубль вручную, UsageReport остаётся
+      для turn-summary UI. Тест: test_stream_ask_writes_into_session.
 
-- [ ] Auto-compact по порогу.
-      compact_threshold (0.50 в config.py:67) сейчас никем не читается.
-      Зашить фоновый триггер в /go между задачами: достигли fill% —
-      сжать историю через существующий compress, показать
-      однострочный статус, продолжить. Не прерывает поток.
+- [x] Auto-compact по порогу (2026-05-13). StepAgent.maybe_auto_compact
+      проверяет fill ratio из Session и вызывает compact() +
+      mark_compacted() при пересечении compact_threshold. run_plan
+      зовёт его между задачами. TUI прокидывает state.context_limit.
+      Surfaces через synthetic auto_compact tool card. Тест:
+      test_maybe_auto_compact_fires_past_threshold.
 
-- [ ] Loose end A — `python` vs `python3` в sandbox.
-      Скилл обновлён под python3, проверить полный цикл /go на чистом
-      проекте; если /usr/bin/python отсутствует — фоллбэк или явная
-      диагностика.
+- [x] Loose end E — двойная загрузка скилла (2026-05-13).
+      mode_code.md Step 2 уже явно говорит «DO NOT call load_skill
+      again for those same skills» — формулировка достаточная,
+      ничего тонить не нужно.
 
-- [ ] Loose end B — `mkdir` перед `write_file` в одной задаче.
-      write_file сам создаёт parents, mkdir всегда падает exit 1
-      в sandbox. Перенесено в v0.9 (machine checks) как mkdir guard.
+- [→ v0.9] Loose end A — python vs python3 в sandbox. Это runtime-
+      issue, ловится machine check'ом «команда из скилла исполнима».
 
-- [ ] Loose end C — `write_file content=""` повторно.
-      Перенесено в v0.9 как strict guard в _tool_write_file.
+- [→ v0.9] Loose end B — mkdir перед write_file. Machine guard
+      в _execute_native: no-op + warning.
 
-- [ ] Loose end D — лейбл "rolled back" вводит в заблуждение.
-      Перенесено в v0.9: явно перечислять что осталось на диске.
+- [→ v0.9] Loose end C — write_file content="". Strict reject
+      в _tool_write_file.
 
-- [ ] Loose end E — двойная загрузка скилла (модель + auto-load).
-      Частично решено: _tool_load_skill идемпотентен. Проверить что
-      mode_code.md Step 2 не подталкивает к лишнему load_skill при
-      существующей аннотации.
+- [→ v0.9] Loose end D — «rolled back» лейбл. Заменить на
+      «kept partial progress» с перечнем оставшихся файлов.
 
-- [ ] Loose end F — TUI визуал annotation pass на длинных планах
-      (10+ задач). Проверить и поправить.
+- [→ v0.10] Loose end F — TUI annotation pass на длинных планах.
+      Уйдёт вместе с co-pilot mode (там общая ревизия UI карточек).
 ```
 
 ✓ write_file как канонический инструмент записи (2026-05-13):
