@@ -2205,67 +2205,79 @@ qwen-14b — **+2 уровня прогресса за одно правильн
 от v0.3 к main через канонический workflow `plan → go`. На
 каждом тэге смотрим `reached_level` и числа.
 
-**v0.3.0** (baseline, MVP):
-- L2 ✓ TASKS.md в DSL — `_PLAN_MODE_ADDENDUM` + `_maybe_save_plan`
-  работают с MVP
-- L3 ✓ run_plan прошёл all_done по 6 задачам
-- L4 ✗ 0/6 tasks_completed — модель в code-flow не эмитит SR
-  (нет `_CODE_MODE_ADDENDUM` на v0.3, только plan)
-- 44k tokens, 0 tools, 0 commits
-- Legacy: probe.py 8/9, probe_code ✗ 3att red (variance — другой
-  прогон давал ✓; кейс простой `calc.add fix` нестабилен на 14b)
+**Главная корректировка по ходу:** я начал серию с предположения
+что модель будет писать SEARCH/REPLACE-блоки в code mode.
+**Это было неверно** — системник на v0.3-v0.6 **вообще не учит**
+модель формату патчей. Только `_PLAN_MODE_ADDENDUM` есть (учит
+TASKS.md DSL), и он **явно запрещает** SR в plan mode. На v0.7
+впервые landed `prompts/mode_code.md` который учит модель
+использовать **`write_file`** (не SR!) с пошаговым checklist'ом
+«Orient → Read → **Write** → Test → Fix → Commit».
 
-**v0.4.0** (cosmetic release):
-- L3 ✓ (= v0.3) — TASKS.md в DSL, run_plan all_done
-- 7/7 skipped (vs 6/6 на v0.3 — модель сделала чуть больше задач,
-  но также все skipped)
-- Legacy: probe.py 8/9, probe_code ✗ 3att red — **байт-в-байт как v0.3**
+Поэтому правильное **ожидание**:
+- v0.3-v0.6: TASKS.md ✓, run_plan ✓, но **0 done** — code-mode
+  инструкции для модели нет, она отвечает текстом юзеру как
+  по общему системнику
+- v0.7+: модель учится write_file, появляются tool calls
 
-Подтверждение baseline-frame {v0.3, v0.4}.
+### Сводная таблица
 
-**v0.5.0** (code_with_retry landed):
-- L3 ✓ (= v0.3-v0.4) — TASKS.md 7 задач, run_plan all_done, 7/7 skipped
-- Live идентично baseline'у
-- Legacy показал **расхождение по axes**:
-  - probe_code (узкий SR fix): **✓ 1att** (vs ✗ 3att до) — fix узких
-    патчей починился с landing'ом `code_with_retry`
-  - probe.py (basic /ask): **6/9** (vs 8/9 до) — регрессия −2.
-    Что-то в системнике/поведении ask v0.5 просело
-  - probe_recipes (новый): 2/3
+| Тэг | reached | requests | total tok | peak tok | tools | skipped | stopped_reason |
+|---|---|---|---|---|---|---|---|
+| v0.3 | L3 | 9 | 44k | 6.8k | 0 | 6/6 | all_done |
+| v0.4 | L3 | 12 | 59k | 6.6k | 0 | 7/7 | all_done |
+| v0.5 | L3 | 13 | 79k | 9.4k | 0 | 7/7 | all_done |
+| v0.6 | L3 | 10 | 50k | 7.3k | 0 | 7/7 | all_done |
+| **v0.7** | L3 | **4** | 18k | 5.9k | **3** | 1/7 | **task_not_done** |
 
-Это **первое архитектурное расхождение** в серии: одна capability
-починилась, другая регрессировала. v0.5 — переходный тэг с ценой.
+`prompt_total` — **сумма** по всем round-trips, не размер
+системника. `prompt_peak` — макс одного запроса (все ≤ 16k
+context limit). Системник стабилен, что меняется — количество
+запросов и активность tools.
 
-**v0.6.0** (rename `/run` → `/go`, +2 mode_addenda):
-- L3 ✓ — TASKS.md 7 задач, all_done, 7/7 skipped
-- prompt tokens вырос 8k → **50k** (значительно длиннее системник
-  с расширенными mode_addenda)
-- Legacy: probe.py **8/9** (recovery после v0.5 −2), probe_code
-  ✓ 1att стабильно, probe_recipes 2/3
+### По версиям
 
-Stable baseline-frame {v0.3-v0.6} в live (все L3). Перелом
-ожидаем на v0.7 (write_file + project_map + bwrap landed).
+**v0.3.0** (baseline, MVP). L1+L2+L3 ✓ — plan-pipeline работает
+с MVP, TASKS.md сохранён в DSL автоматом через
+`_PLAN_MODE_ADDENDUM` + `_maybe_save_plan`. L4 ✗ — нет
+`_CODE_MODE_ADDENDUM`, модель не знает что делать с task'ом.
+Legacy: probe.py 8/9, probe_code ✗.
 
-**v0.7.0** (write_file + annotate_plan landed) — **первый прорыв
-в tools**:
-- reached_level: **L3** (тот же что baseline, но качественно иначе)
-- **tool_calls: 0 → 3** (annotate_plan ×2 + project_map ×1)
-- LLM requests: 10 → 4 (run_plan остановился на T001)
-- stopped_reason: all_done → **task_not_done** (run_plan честнее
-  классифицирует skipped после фикса «surface tool calls»)
-- files на диске: всё ещё 0 (write_file в API есть, но модель
-  его не дёргает на задаче «создать файл»)
+**v0.4.0** (cosmetic). Идентично v0.3 во всех осях. Подтверждение
+baseline-frame {v0.3, v0.4}.
 
-Это **первая точка прогресса** в серии после ровного baseline'а
-{v0.3-v0.6}. План-цепочка обогатилась: модель **сама** дёрнула
-project_map чтобы прочитать проект, annotate_plan автоматически
-обогатил TASKS.md деталями. Но звено «писать через write_file»
-ещё не закрыто — это для следующих версий.
+**v0.5.0** (code_with_retry landed). L3 как baseline — **функция**
+`code_with_retry` появилась в коде, но **без addendum'а в
+системнике** модель ей не пользуется. **Самый дорогой прогон в
+серии**: 13 requests, 79k total tokens, peak 9.4k. Wasted compute.
+Legacy показал **первое расхождение по axes**: probe_code
+починился ✓ (с landing'ом code_with_retry — для узких fix'ов
+работает), но probe.py упал 8/9 → 6/9 (что-то в общем ask
+системнике просело).
+
+**v0.6.0** (rename `/run` → `/go`, +REVIEW_ADDENDUM). L3 как
+baseline. Stop_reason all_done с 7/7 skipped. Legacy: probe.py
+**recovery** 8/9, probe_code ✓ стабильно.
+
+**v0.7.0** (`prompts/mode_code.md` landed) — **переломный тэг**.
+Reached_level всё ещё L3, но **качественно иначе**:
+- **tool_calls 0 → 3** (annotate_plan ×2 + project_map ×1)
+- stopped_reason: **task_not_done** (новая классификация —
+  run_plan честнее останавливается на skipped, не пробегает all)
+- Появился `prompts/mode_code.md` — **первый раз** системник
+  учит модель «в code mode используй write_file»
+- annotate_plan — auto narrow_pass перед run_plan'ом дёргает
+  project_map и обогащает TASKS.md
+
+Files на диск всё ещё **не легли** — модель дёрнула project_map,
+поняла проект, **но не довела до write_file** на T001
+«создать структуру». Гипотезы: T001 текст неоднозначен или нужны
+few-shot примеры в `mode_code.md`. Достоверно: **именно с
+появлением `_CODE_MODE_ADDENDUM`** появились реальные tools.
 
 Будут добавлены остальные тэги.
 
-(Эта глава дописывается **по ходу серии**, по одному prograph'у
-на тэг.)
+(Эта глава дописывается **по ходу серии**.)
 
 ---
 
