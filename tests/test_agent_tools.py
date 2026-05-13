@@ -820,6 +820,86 @@ async def test_write_file_rejects_empty_content(tmp_path: Path) -> None:
 
 
 @pytest.mark.asyncio
+async def test_write_file_diff_for_new_file(tmp_path: Path) -> None:
+    """Создаётся новый файл — diff помечен `/dev/null` как source,
+    содержит каждую строку как `+`. Это сигнал TUI «новый файл,
+    не overwrite»."""
+    call = ToolCall(name="write_file", body='{"path": "new.py", "content": "x = 1\\ny = 2\\n"}')
+    result = await execute(call, tmp_path)
+    assert result.ok is True
+    assert result.diff is not None
+    assert "/dev/null" in result.diff
+    assert "+x = 1" in result.diff
+    assert "+y = 2" in result.diff
+
+
+@pytest.mark.asyncio
+async def test_write_file_diff_for_overwrite(tmp_path: Path) -> None:
+    """Overwrite существующего файла — diff содержит и `-` для
+    старых строк, и `+` для новых. unified_diff даёт context-
+    линии и заголовки `@@`."""
+    (tmp_path / "f.py").write_text("a = 1\nb = 2\nc = 3\n")
+    call = ToolCall(
+        name="write_file", body='{"path": "f.py", "content": "a = 1\\nb = 99\\nc = 3\\n"}'
+    )
+    result = await execute(call, tmp_path)
+    assert result.ok is True
+    assert result.diff is not None
+    assert "-b = 2" in result.diff
+    assert "+b = 99" in result.diff
+    # Контекст и шапка должны быть на месте
+    assert "a/f.py" in result.diff
+    assert "b/f.py" in result.diff
+
+
+@pytest.mark.asyncio
+async def test_write_file_diff_for_replace_lines(tmp_path: Path) -> None:
+    """Range mode — diff отражает реальное удаление/вставку, не
+    весь файл целиком."""
+    (tmp_path / "f.py").write_text("L1\nL2\nL3\nL4\nL5\n")
+    call = ToolCall(
+        name="write_file",
+        body='{"path": "f.py", "content": "REPLACED\\n", "start_line": 2, "end_line": 4}',
+    )
+    result = await execute(call, tmp_path)
+    assert result.ok is True
+    assert result.diff is not None
+    assert "-L2" in result.diff
+    assert "-L3" in result.diff
+    assert "-L4" in result.diff
+    assert "+REPLACED" in result.diff
+    # L1 и L5 не тронуты — должны выглядеть как context
+    assert "-L1" not in result.diff
+    assert "-L5" not in result.diff
+
+
+@pytest.mark.asyncio
+async def test_write_file_diff_for_insert_after(tmp_path: Path) -> None:
+    """insert_after — diff показывает только новые строки в
+    нужной позиции."""
+    (tmp_path / "f.py").write_text("L1\nL2\n")
+    call = ToolCall(
+        name="write_file",
+        body='{"path": "f.py", "content": "INSERTED\\n", "insert_after_line": 1}',
+    )
+    result = await execute(call, tmp_path)
+    assert result.ok is True
+    assert result.diff is not None
+    assert "+INSERTED" in result.diff
+
+
+@pytest.mark.asyncio
+async def test_write_file_no_diff_when_failed(tmp_path: Path) -> None:
+    """Если запись провалилась (отказ от content=""), diff не
+    должен быть выставлен — TUI пропускает рендер."""
+    (tmp_path / "f.py").write_text("keep\n")
+    call = ToolCall(name="write_file", body='{"path": "f.py", "content": ""}')
+    result = await execute(call, tmp_path)
+    assert result.ok is False
+    assert result.diff is None
+
+
+@pytest.mark.asyncio
 async def test_write_file_rejects_absolute_path(tmp_path: Path) -> None:
     call = ToolCall(name="write_file", body='{"path": "/etc/x", "content": "bad"}')
     result = await execute(call, tmp_path)
