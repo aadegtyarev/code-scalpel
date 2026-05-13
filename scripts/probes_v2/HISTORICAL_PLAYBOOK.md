@@ -1,136 +1,161 @@
 # Historical Playbook — пошаговая операционка на одну версию
 
 Один и тот же чек-лист на каждый тэг от v0.3 до main. Артефакты
-обоих типов (live + legacy) ложатся в `docs/article/probe-runs/`
-основного репо через symlink.
+ложатся в `docs/article/probe-runs/` основного репо через symlink.
+
+## Главный workflow — plan → go
+
+**Каноническая последовательность** (повторяет TUI: `/mode plan`
+→ задача → `/loop` → `/go`):
+
+1. `probe step --mode plan` с базовой задачей → модель пишет
+   TASKS.md в DSL, `_maybe_save_plan` сохраняет автоматически
+2. **Проверить** что TASKS.md сохранился. Если нет — корректирующий
+   plan-turn с явной просьбой формата (это не подсказка про
+   содержание, это про DSL)
+3. `probe go <run-id>` → `agent.run_plan()` ходит по TASKS.md
+4. `probe finalize` — собираем артефакты и mechcheckers
+
+См. подробное описание сценария в `scenarios/notes_cli.md`.
+
+## Capabilities matrix по версиям
+
+| Версия | Tools | mode_addenda | `iterative_patch_loop` | slash | Особенности |
+|---|---|---|---|---|---|
+| v0.3.0 | 9 | plan, code | False (default OFF) | `/run` | базовый MVP, нет write_file |
+| v0.5.0 | 10 | plan, code | False | `/run` | + retrieve tool (?) |
+| v0.6.0 | 10 | + 2 (review?) | False | **`/go`** (rename) | переход name |
+| v0.7.0 | **15** (+5) | 6 (+2) | False | `/go` | **write_file**, project_map, bwrap |
+| v0.8.0 | 15 | 6 | False | `/go` | narrow passes, annotate_plan |
+| v0.9.0 | 15 | 6 | False | `/go` | machine guards (files/tests/commit) |
+| v0.10.0 | 15 | 6 | False | `/go` | Fork API |
+| v0.11.0 | 15 | 6 | False | `/go` | ReviewedAuto fork |
+| v0.12.0 | **16** (+1) | 6 | False | `/go` + `/escalate` | UpstreamPendingQueue, swap |
+
+**Главное:** `iterative_patch_loop` по умолчанию **выключен на
+всех версиях**. В probe мы передаём `force_loop=True` через
+`code_with_retry` kwargs. На v0.3-v0.4 этот kwarg отсутствует →
+compat-shim в `daemon._compat_call` его отбросит → retry-loop
+не сработает. Это **фиксируется как наблюдение**, не лечится.
 
 ## 0. Перед серией (один раз)
 
 - LM Studio запущена с `qwen/qwen2.5-coder-14b` на `localhost:1234`
-- Основной репо в чистом состоянии — `git status --porcelain` пусто
-- Никаких параллельных probe-демонов: `pgrep -fa scripts.probes_v2.daemon`
-- `lms ps` показывает qwen-14b (baseline)
+- `lms ps` показывает qwen-14b
+- Основной репо в чистом состоянии
+- Нет других probe-демонов: `pgrep -fa scripts.probes_v2.daemon`
 
 ## 1. Подготовка worktree
 
 ```bash
 TAG=v0.X.Y
-WORKTREE=../scalpel-${TAG}
+WT=../scalpel-${TAG}
 
-git worktree add ${WORKTREE} ${TAG}
-mkdir -p ${WORKTREE}/scripts ${WORKTREE}/docs/article
+git worktree add ${WT} ${TAG}
+mkdir -p ${WT}/scripts ${WT}/docs/article
+cp -r scripts/probes_v2 ${WT}/scripts/
+cp scripts/__init__.py ${WT}/scripts/
+ln -s "$(pwd)/docs/article/probe-runs" ${WT}/docs/article/probe-runs
 
-# Копируем актуальный probe-инструментарий из main репо.
-# Старые версии не имели probes_v2/ — нам нужен runner main'а.
-cp -r scripts/probes_v2 ${WORKTREE}/scripts/
-cp scripts/__init__.py ${WORKTREE}/scripts/
-
-# Симлинк на artefact-папку основного репо — артефакты сразу
-# в git'е main, не размазаны по worktree.
-ln -s "$(pwd)/docs/article/probe-runs" ${WORKTREE}/docs/article/probe-runs
-
-# venv в worktree → scalpel = код тэга
-cd ${WORKTREE}
+cd ${WT}
 python -m venv .venv
 source .venv/bin/activate
 pip install -e ".[dev]" --quiet
 ```
 
-## 2. Live-прогон (одна базовая задача)
-
-Из ${WORKTREE}:
+## 2. Запуск probe (один и тот же на всех версиях)
 
 ```bash
-python -m scripts.probes_v2.cli start notes_cli notes_cli_empty
-# → печатает run-id, запоминаем
+ID=$(python -m scripts.probes_v2.cli start notes_cli notes_cli_empty)
+echo "run-id: $ID"
 ```
 
-Затем серия `step` с **той же первой репликой** на каждом тэге
-(см. `scenarios/notes_cli.md`):
+`user_plan.md` в `docs/article/probe-runs/$ID/` я пишу перед
+первым step'ом — что ожидаю, как буду реагировать на типичные
+ходы scalpel'а.
+
+## 3. Step 1: plan
 
 ```bash
-python -m scripts.probes_v2.cli step <run-id> "хочу собрать python-CLI для заметок: команды add, list, search, delete. json-storage, pytest. спроектируй и реализуй с тестами. если есть архитектурные вопросы — задай." --mode ask
+python -m scripts.probes_v2.cli step $ID "хочу собрать python-CLI для заметок: команды add, list, search, delete. json-storage, pytest. спроектируй и реализуй с тестами. если есть архитектурные вопросы — задай." --mode plan
 ```
 
-Дальше реагируем по reference-таблице в `scenarios/notes_cli.md`.
-Reply на каждом ходу — короткий, в `user_tone_of_voice.md` стиле,
-не диктуем решения.
-
-**Стоп-условия:**
-- scalpel дошёл до L5+ (TASKS.md выполнен через `/go`) → `task_solved`
-- scalpel остановился сам / 15+ turn'ов / семантическая петля → `user_gave_up`
-- инфраструктурная ошибка → `error`
+## 4. Проверка TASKS.md
 
 ```bash
-python -m scripts.probes_v2.cli finalize <run-id> --reason=<task_solved|user_gave_up|error>
+ls docs/article/probe-runs/$ID/.workdir/.code-scalpel/TASKS.md
 ```
 
-Затем я (Claude) пишу `evaluation.md` по шаблону из `PROTOCOL.md`,
-указываю `reached_level`.
+- Файл есть → идём на `probe go`
+- Файла нет → даём корректирующий plan-turn:
+  ```bash
+  python -m scripts.probes_v2.cli step $ID "не понял — пиши именно в формате как у нас принято: ## T001: <title> с полями Files / Acceptance / Test command. 3-7 задач." --mode plan
+  ```
+  Если после двух plan-turn'ов TASKS.md так и нет → фиксируем
+  L1 (план в reply, но не в DSL) → финализируем `partial`,
+  `probe go` уже не запускаем (нет смысла).
 
-## 3. Legacy probe pack (после live, или параллельно если LM Studio свободна)
+## 5. Step: go
 
-Из того же worktree:
+```bash
+python -m scripts.probes_v2.cli go $ID
+```
+
+Печатает `stopped_reason` + список outcomes. Возможные:
+- `all_done` → весь план выполнен → L5 (потом ещё pytest зелёный?)
+- `max_failures` → застряло на N-й задаче → L3-L4
+- `no_tasks` → TASKS.md не было (значит и не должны были звать go)
+- `plan_modified` → промежуточная редакция TASKS.md (вряд ли у нас)
+
+## 6. Finalize
+
+```bash
+python -m scripts.probes_v2.cli finalize $ID --reason=<task_solved|user_gave_up|error>
+```
+
+## 7. Evaluation
+
+Я пишу `evaluation.md` в `docs/article/probe-runs/$ID/` по
+шаблону из PROTOCOL.md. Главное — указать `reached_level` и
+сравнение с предыдущей версией.
+
+## 8. Legacy probe pack
+
+Параллельно (или после live):
 
 ```bash
 python -m scripts.probes_v2.legacy_pack ${TAG}
 ```
 
-Гоняет `probe.py`, `probe_code.py`, `probe_recipes.py`,
-`probe_forks.py`, `probe_fork_reviewer.py`, `probe_e2e_forks.py`.
-На ранних тэгах часть из них **отсутствует** в `scripts/` — это
-data, не ошибка (`status: skipped`).
+Артефакты в `docs/article/probe-runs/legacy/${TAG}/`.
 
-Артефакты: `docs/article/probe-runs/legacy/${TAG}/`:
-- `<probe>.txt` — stdout/stderr/exit_code каждого
-- `summary.json` — агрегат с `pass_rate_guess` где удалось распарсить
-
-## 4. Cleanup
+## 9. Cleanup
 
 ```bash
 cd /path/to/main/repo
-git worktree remove ${WORKTREE} --force
-# venv внутри удалится вместе с worktree
+git worktree remove ${WT} --force
 ```
 
-Артефакты остались в основном репо благодаря symlink'у. Коммитим:
+Артефакты остались в main репо через symlink. Коммитим:
 
 ```bash
+git checkout -b probe/historical-${TAG}
 git add docs/article/probe-runs/
-git commit -m "historical: ${TAG} — L<N> reached, legacy pack done"
-git push
+git commit -m "probe: historical ${TAG} — L<N> reached"
+git push -u origin probe/historical-${TAG}
+gh pr create --title "probe: historical ${TAG}" --body "..."
+gh pr merge --merge --delete-branch
+git checkout main && git pull
 ```
 
-## 5. Перед следующим тэгом
+## Перед следующим тэгом
 
-- `lms ps` → убеждаемся что qwen-14b всё ещё baseline (а не gemma
-  застряла от swap-теста)
-- Если нет: `lms unload <other> && lms load qwen/qwen2.5-coder-14b`
+- `lms ps` → qwen-14b baseline
 - `pgrep -fa scripts.probes_v2.daemon` → ноль активных
+- `git status --porcelain` → чисто
 
 ## Порядок прохода
 
-**От старого к новому** — v0.3.0 → v0.4.0 → v0.5.0 → ... → main.
-Это даёт «как меняется до» сразу видно перед прогоном следующей.
-
-На каждом тэге:
-1. Live notes_cli (одна базовая реплика, реакция по `scenarios/notes_cli.md`)
-2. Legacy probe pack
-3. evaluation.md с reached_level + сравнением с предыдущим тэгом
-4. Commit + переход
-
-## Краткая отчётность для каждой версии (в evaluation.md)
-
-```markdown
-## Reached level: L<N>
-
-## По сравнению с предыдущим тэгом (vX.Y-1)
-- Что улучшилось: ...
-- Что осталось так же: ...
-- Что регрессировало: ...
-
-## Legacy pack
-- probe_code: <N>/24 (на vX.Y-1 было <M>/24)
-- probe_forks: ... (если уже есть)
-- ...
-```
+**От v0.3.0 к main** по нарастающей. На каждом тэге **одни и те
+же** реплики и команды (см. секцию 3-6). Сравнение всегда
+«новый со старым» в evaluation.md.
