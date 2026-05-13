@@ -78,11 +78,33 @@ class ForkError(RuntimeError):
 HumanResolver = Callable[[str, tuple[ForkOption, ...], str], Awaitable[ForkResolution]]
 
 
+_RESOLVER_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "chosen": {"type": "string"},
+        "reasoning": {"type": "string"},
+    },
+    "required": ["chosen", "reasoning"],
+    "additionalProperties": False,
+}
+
+
 class LocalMetaForker:
     """Resolver that re-uses the local LLM with an architect system
-    prompt and strict JSON output. Cheap, deterministic per-seed,
-    works without user input — the default «keep /go moving»
-    fallback when human isn't available."""
+    prompt and sampler-enforced JSON output. Cheap, deterministic per
+    seed, works without user input — the default «keep /go moving»
+    fallback when human isn't available.
+
+    Output discipline comes from `response_format=json_schema`
+    (LM Studio / OpenAI / OpenRouter all support it), not from
+    prompt-begging. Probe (scripts/probe_forks.py) calibrated this
+    on 14b: structured is faster and removes the parser-error class
+    entirely vs JSON-via-prompt.
+
+    Fallback path for providers without structured output is the
+    same brace-tracking JSON parser — works on free-text JSON too,
+    so this code path is forgiving in either world.
+    """
 
     def __init__(self, agent: StepAgent) -> None:
         self._agent = agent
@@ -105,6 +127,7 @@ class LocalMetaForker:
             # 0.0 — picking an option is a judgement, not a creative
             # writing task. The user wants reproducible /go runs.
             temperature=0.0,
+            output_schema=_RESOLVER_SCHEMA,
         )
         result = await self._agent.run_narrow_pass(pass_spec, user_message)
         return _parse_resolver_reply(result.text, options)
