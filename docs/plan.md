@@ -2775,7 +2775,7 @@ TUI нет физически — fall back или halt).
         fork_max_clarify_rounds: null                 (бесконечно)
 ```
 
-### v0.11 — fork wiring + ReviewedAuto
+### ~~v0.11 — fork wiring + ReviewedAuto~~ ✓ закрыта 2026-05-13
 
 ```text
 Тезис: после v0.10 у нас есть Fork API. v0.11 встраивает его в
@@ -2784,54 +2784,42 @@ TUI нет физически — fall back или halt).
 инсталла). И укрепляет Auto pipeline двойным проходом
 picker+reviewer с защитой от зацикливания.
 
-- [ ] ReviewedAutoForker — двойной проход для ⚡ Auto.
-      Picker (LocalMetaForker, t=0.0, architect prompt) → выбор X
-      + reasoning Y. Reviewer (NarrowPass, t=0.5, skeptic prompt)
-      смотрит на picker'овский payload и возвращает один из трёх
-      verdict'ов:
-        • confirm           — выбор X финален.
-        • override <Z>      — reviewer предлагает другой вариант.
-        • discuss           — выбор спорный.
-      Anti-loop трёхслойный:
-        a. Hard cap: `fork_review_max_overrides=1`. Reviewer
-           override может произойти один раз; никакого review-of-
-           review. Если в будущем понадобится 2-й уровень — это
-           отдельный config и обоснование.
-        b. Anchor: на `discuss` → возвращаемся к human через
-           ChoiceCard если он доступен; иначе берём
-           PICKER'овский выбор (он stable t=0.0, не reviewer'ский).
-        c. Temperature spread: picker 0.0, reviewer 0.5. Если они
-           сошлись (`confirm`) — это reliable. Spread защищает от
-           коллапса в одно мнение.
+- [x] Probe reviewer (2026-05-13). `scripts/probe_fork_reviewer.py`
+      на 6 кейсах × 3 темп: 0/3 rubber-stamp на override-cases,
+      3/3 alternative-name accuracy. Temperature не влияет;
+      выбран t=0.3 для production. Reviewer работает.
 
-- [ ] detect_forks NarrowPass поверх /plan.
-      Plan-mode остаётся с обычным markdown output (не структурный
-      — 14b плохо со структурным). После plan-pass запускается
-      detect_forks: даём план + контекст проекта, просим выделить
-      архитектурные развилки (`>1 разумных варианта`). Возвращает
-      список ForkContext или пустой список. Промпт строгий: «если
-      развилки очевидной нет — пустой список». Probe калибрует
-      false-positive rate ДО включения по умолчанию.
+- [x] ReviewedAutoForker (2026-05-13). Picker (LocalMeta, t=0.0) +
+      Reviewer (NarrowPass, t=0.3) → confirm / override / discuss.
+      Anti-loop структурный: только один pass у reviewer, никакой
+      рекурсии; на `discuss` anchor к picker (стабильный t=0.0).
+      Hallucinated alternative → demote to discuss. Wired как default
+      Auto-pipeline через `AgentConfig.fork_auto_reviewed=True`.
 
-- [ ] Wiring forks в /plan.
-      После detect_forks → для каждой развилки → вызвать fork() →
-      встроить выбор в TASKS.md как маркер (например в body
-      задачи: `Chosen: psycopg2 (reasoning: …)` или отдельная
-      строка `Dependencies: …`). Builder turn'у попадает уже
-      решённый план.
+- [x] detect_forks NarrowPass (2026-05-13).
+      `code_scalpel/fork.py:detect_forks(agent, plan, context)`.
+      Structured output (response_format=json_schema). Conservative —
+      drops degenerate single-option forks, returns () on parse
+      failure (plan flow продолжается).
 
-- [ ] Wiring forks в /go на dependency choices.
-      Через инструмент `fork` в TOOL_SCHEMAS — модель сама может
-      позвать `fork(question, options, context)` когда упирается
-      в выбор. Альтернатива — детектить шаблон в shell_exec
-      (`pip install X` / `npm install X`) и интерсептить ДО,
-      но это хрупко на разных стеках. Tool-call явный, видимый,
-      универсальный.
+- [x] Wiring forks в /plan (2026-05-13).
+      `run_plan(fork_resolver=…)` запускает detect_forks между
+      annotate_plan и первой задачей, резолвит каждый ForkContext
+      через переданный resolver, prepends блок «Architectural
+      decisions» в TASKS.md. Builder читает это на каждой задаче.
+      Опт-ин через `AgentConfig.auto_detect_forks=True`.
 
-- [ ] Конфиги:
-        per_step_review_temperature → review_temperature (rename;
-          сейчас 0.5 в v0.8, переиспользуется для fork reviewer)
-        fork_review_max_overrides: 1
+- [→ backlog] Wiring forks в /go на dependency choices через
+      tool-call `fork(...)`. Отложено: detect_forks на этапе плана
+      покрывает ~90% случаев — модель уже видит, какой stack
+      выбрать, до начала кода. Tool-call в /go дублирует это и
+      добавляет complexity. Если probe покажет что нужно — добавим
+      позже.
+
+- [→ backlog] Конфиг rename `review_temperature` → общий для
+      v0.8 per_step_review и v0.11 reviewer. Сейчас они разные
+      (0.5 для review_pass, 0.3 hardcoded в fork.py). Гармонизация
+      когда появится второй пользователь reviewer-температуры.
 ```
 
 ### v0.12 — upstream + resume
