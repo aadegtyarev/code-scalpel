@@ -58,6 +58,32 @@ def _changes_include_tests(edits: list[Edit]) -> bool:
     return False
 
 
+def _test_paths_from_step_result(step_result: StepResult, cwd: Path) -> list[Path]:
+    """Pick test-like .py paths out of a StepResult's last attempt.
+
+    Test sanity wants to judge what the model just wrote. Edits live on
+    `attempts[-1].edits` for SEARCH/REPLACE; for write_file the edit
+    tuple is synthetic (empty search/replace) but the `.path` is the
+    truth source. Either way we resolve to the cwd-rooted absolute
+    Path so the reader can `is_file()`.
+    """
+    if not step_result.attempts:
+        return []
+    last = step_result.attempts[-1]
+    out: list[Path] = []
+    seen: set[str] = set()
+    for edit in last.edits:
+        path = edit.path
+        if not path.endswith(".py") or path in seen:
+            continue
+        parts = Path(path).parts
+        name = Path(path).name
+        if "tests" in parts or name.startswith("test_") or name.endswith("_test.py"):
+            seen.add(path)
+            out.append(cwd / path)
+    return out
+
+
 def _changes_include_prod_code(edits: list[Edit]) -> bool:
     """True if any edit touches a non-test `.py` file."""
     for edit in edits:
@@ -997,6 +1023,25 @@ class StepAgent:
                                 ToolResult(call, output=review.text, ok=True),
                             )
 
+            # Test-sanity pass — independent judge on every modified
+            # test file. Off by default; opt in via
+            # config.agent.test_sanity_pass. Surfaces verdict as a
+            # synthetic tool card; doesn't fail the task on trivial
+            # verdicts yet (the prompt's calibration needs probe data
+            # first — strict-mode lands once we trust the judge).
+            if outcome.status == "done" and self._config.agent.test_sanity_pass:
+                touched = _test_paths_from_step_result(step_result, self._cwd)
+                for test_path in touched:
+                    with suppress(Exception):
+                        verdict = await self.judge_test_sanity(test_path)
+                        if verdict is not None and on_tool_executed is not None:
+                            call = ToolCall(name="test_sanity", body=str(test_path))
+                            with suppress(Exception):
+                                on_tool_executed(
+                                    call,
+                                    ToolResult(call, output=verdict.text, ok=True),
+                                )
+
             if outcome.status == "done":
                 live_tasks[idx] = Task(id=task.id, title=task.title, body=task.body, done=True)
                 # Persist atomically. We refresh `initial_hash` against
@@ -1480,6 +1525,50 @@ class StepAgent:
             prompt_tokens=response.prompt_tokens,
             completion_tokens=response.completion_tokens,
         )
+
+    async def judge_test_sanity(self, test_path: Path) -> PassResult | None:
+        """Narrow pass that judges whether a test file actually
+        exercises behaviour.
+
+        Returns None if the file doesn't exist or is empty (caller
+        treats as «nothing to check»). PassResult.text is JSON
+        `{verdict, reason}`; callers parse it.
+
+        Why a narrow pass and not a pure AST check: the failure mode
+        we keep hitting on 14b is "test imports the module, calls a
+        function, asserts on something trivial like `is not None`".
+        AST can't tell behaviour-asserting from trivial-asserting; a
+        skim by a reviewer model can. v0.9 will add the AST-only
+        sibling check (empty-test detect) — they catch different
+        bugs.
+        """
+        from code_scalpel.narrow_pass import NarrowPass
+
+        if not test_path.is_file():
+            return None
+        try:
+            content = test_path.read_text()
+        except OSError:
+            return None
+        if not content.strip():
+            return None
+        # Cap at 4k chars; sanity check on a giant file is dubious
+        # but a truncated head is still useful — most trivial tests
+        # are at the top.
+        max_chars = 4000
+        truncated = (
+            content if len(content) <= max_chars else content[:max_chars] + "\n…(truncated)\n"
+        )
+        user_message = f"File: {test_path.name}\n\n```\n{truncated}\n```\n"
+        pass_spec = NarrowPass(
+            name="test_sanity",
+            system_prompt=_prompts.TEST_SANITY,
+            # Sanity wants a stable judgement, not creativity. 0.0
+            # so the same test produces the same verdict across runs
+            # — important if we ever start gating CI on this.
+            temperature=0.0,
+        )
+        return await self.run_narrow_pass(pass_spec, user_message)
 
     async def improve_commit_message(self, diff: str) -> PassResult | None:
         """Narrow pass that turns a raw diff into a clean commit
