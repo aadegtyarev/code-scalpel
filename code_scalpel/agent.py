@@ -19,6 +19,7 @@ from code_scalpel.context_compress import (
 
 if TYPE_CHECKING:
     from code_scalpel.memory import MemoryStore
+    from code_scalpel.narrow_pass import NarrowPass, PassResult
     from code_scalpel.session import Session
 from code_scalpel import prompts as _prompts
 from code_scalpel.llm.adapter import ChatResponse, LLMAdapter, NativeToolCall
@@ -980,6 +981,22 @@ class StepAgent:
                 with suppress(Exception):
                     on_task_end(outcome)
 
+            # Per-step review — independent skeptic turn on the diff
+            # we just landed. Off by default; opt in via
+            # config.agent.per_step_review. Surfaces verdict as a
+            # synthetic tool card so the user sees the findings
+            # without leaving /go. No auto-fix yet — that's v0.8.b.
+            if outcome.status == "done" and self._config.agent.per_step_review:
+                with suppress(Exception):
+                    review = await self.per_step_review(task, step_result)
+                    if review is not None and on_tool_executed is not None:
+                        call = ToolCall(name="per_step_review", body=task.id)
+                        with suppress(Exception):
+                            on_tool_executed(
+                                call,
+                                ToolResult(call, output=review.text, ok=True),
+                            )
+
             if outcome.status == "done":
                 live_tasks[idx] = Task(id=task.id, title=task.title, body=task.body, done=True)
                 # Persist atomically. We refresh `initial_hash` against
@@ -1425,6 +1442,86 @@ class StepAgent:
             if rel in task:
                 return rel
         return None
+
+    async def run_narrow_pass(
+        self,
+        pass_spec: NarrowPass,
+        user_message: str,
+    ) -> PassResult:
+        """Execute one narrow pass — a single LLM turn with a custom
+        system prompt, a custom sampling temperature, no tools, no
+        history threading. Used by per-step review, test-sanity check,
+        commit-message pass — v0.8's «5 small turns beat one fat
+        turn» bet.
+
+        Session bookkeeping rides along: tokens land on
+        `self._session` the same way stream_ask / annotate_plan /
+        compact do, so the exit summary stays honest.
+        """
+        from code_scalpel.narrow_pass import PassResult
+
+        messages = [
+            {"role": "system", "content": pass_spec.system_prompt},
+            {"role": "user", "content": user_message},
+        ]
+        profile = self._config.current_profile
+        kwargs = profile.inference_kwargs("ask")
+        # Override the per-mode temperature with the pass's own — the
+        # whole reason narrow passes exist is to break out of the
+        # builder's deterministic sampling for hypothesis-generation
+        # roles like reviewer.
+        kwargs["temperature"] = pass_spec.temperature
+        response = await self._llm.chat(messages, **kwargs)
+        if self._session is not None:
+            self._session.record(response)
+        return PassResult(
+            name=pass_spec.name,
+            text=(response.content or "").strip(),
+            prompt_tokens=response.prompt_tokens,
+            completion_tokens=response.completion_tokens,
+        )
+
+    async def per_step_review(
+        self,
+        task: Task,
+        step_result: StepResult,
+    ) -> PassResult | None:
+        """Independent skeptic review of the diff produced by one task.
+
+        Wires per_step_review.md + AgentConfig.review_temperature into
+        run_narrow_pass. Returns None if there's nothing to review
+        (no edits, no successful write_file). The caller decides what
+        to do with the verdict — currently /go surfaces it as a tool
+        card; auto-fix is a follow-up.
+        """
+        from code_scalpel.narrow_pass import NarrowPass
+        from code_scalpel.patch.edit_block import edits_to_diff
+
+        # Pull every attempt's edits so the reviewer sees what landed,
+        # not just the last attempt. For write_file-based tasks the
+        # synthesized empty Edit tuple has no diff text — fall back to
+        # listing the touched paths so the reviewer at least knows
+        # which files changed.
+        attempts = step_result.attempts
+        last = attempts[-1] if attempts else None
+        if last is None or not last.tests_passed:
+            return None
+        diff = edits_to_diff(list(last.edits), self._cwd) if last.edits else ""
+        if not diff.strip():
+            paths = sorted({e.path for e in last.edits if e.path})
+            if not paths:
+                return None
+            diff = "(no inline diff — write_file produced)\nFiles touched:\n" + "\n".join(
+                f"  - {p}" for p in paths
+            )
+
+        user_message = f"Task: {task.id} — {task.title}\n\nDiff:\n```\n{diff}\n```\n"
+        pass_spec = NarrowPass(
+            name="per_step_review",
+            system_prompt=_prompts.PER_STEP_REVIEW,
+            temperature=self._config.agent.review_temperature,
+        )
+        return await self.run_narrow_pass(pass_spec, user_message)
 
     async def maybe_auto_compact(
         self,
