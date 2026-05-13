@@ -1599,6 +1599,87 @@ def hello():
 
 
 @pytest.mark.asyncio
+async def test_run_plan_persists_state_on_task_transitions(project: Path) -> None:
+    """Хуки v0.12.5 PR-B: при подключённом AgentState run_plan
+    обновляет current_task / step_phase / completed_tasks и пишет
+    STATE.json после каждого перехода. На happy-path (одна задача)
+    проверяем итоговое состояние."""
+    from code_scalpel.state import AgentState
+    from code_scalpel.tools.shell import ShellResult
+    from tests.mocks import MockShellRunner
+
+    _write_tasks(project, _TASKS_THREE)
+
+    edit_main = """\
+main.py
+```python
+<<<<<<< SEARCH
+from hello import hello
+hello()
+=======
+from hello import hello
+
+hello()
+>>>>>>> REPLACE
+```
+"""
+    edit_doc = """\
+hello.py
+```python
+<<<<<<< SEARCH
+def hello():
+    return "hi"
+=======
+def hello():
+    \"\"\"Greet.\"\"\"
+    return "hi"
+>>>>>>> REPLACE
+```
+"""
+    llm = MockLLMAdapter([_GOOD_PATCH_NOOP, edit_main, edit_doc])
+    shell = MockShellRunner([ShellResult("1 passed", 0)] * 3)
+    state = AgentState()
+    agent = StepAgent(
+        llm=llm,
+        cwd=project,
+        config=_retry_config(),
+        shell_runner=shell,
+        state=state,
+    )
+
+    result = await agent.run_plan()
+
+    assert result.stopped_reason == "all_done"
+    # current_task сброшен после успеха, step_phase=idle
+    assert state.current_task is None
+    assert state.step_phase == "idle"
+    # Все три ID добавлены без дублей
+    assert state.completed_tasks == ["T001", "T002", "T003"]
+    # STATE.json должен лежать на диске после save'ов
+    state_file = project / ".code-scalpel" / "STATE.json"
+    assert state_file.exists()
+    reloaded = AgentState.load(project)
+    assert reloaded.completed_tasks == ["T001", "T002", "T003"]
+
+
+@pytest.mark.asyncio
+async def test_run_plan_state_save_no_op_when_state_unset(project: Path) -> None:
+    """state=None — никаких save'ов и никаких ошибок (probe/bench
+    путь)."""
+    from code_scalpel.tools.shell import ShellResult
+    from tests.mocks import MockShellRunner
+
+    _write_tasks(project, _TASKS_THREE)
+    llm = MockLLMAdapter([_GOOD_PATCH_NOOP] * 3)
+    shell = MockShellRunner([ShellResult("1 passed", 0)] * 3)
+    agent = StepAgent(llm=llm, cwd=project, config=_retry_config(), shell_runner=shell)
+
+    await agent.run_plan()
+
+    assert not (project / ".code-scalpel" / "STATE.json").exists()
+
+
+@pytest.mark.asyncio
 async def test_run_plan_stops_after_consecutive_failures(project: Path) -> None:
     """Two consecutive failed tasks → stop with reason `max_failures`."""
     from code_scalpel.tools.shell import ShellResult

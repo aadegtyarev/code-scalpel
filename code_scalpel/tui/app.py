@@ -287,6 +287,7 @@ class ScalpelApp(App[None]):
                 config=self.config,
                 confirm_shell_exec=self._confirm_shell_exec,
                 fork_ui_hook=self._fork_ui_hook,
+                state=self.state,
             )
             # Bridge the runtime's quartet to legacy fields so the rest of
             # the TUI keeps using `self._agent`, `self.session`,
