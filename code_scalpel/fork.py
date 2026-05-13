@@ -121,6 +121,23 @@ class ChoiceCardOption:
 HumanResolver = Callable[[str, tuple[ForkOption, ...], str], Awaitable[ForkResolution]]
 
 
+@dataclass(frozen=True)
+class UpstreamProfile:
+    """Configuration for an upstream resolver: base_url + model.
+
+    Carved out of the regular ModelProfile because upstream has
+    different semantics — it's used in batches, not interleaved
+    with builder turns, and the user typically picks a stronger
+    model (gemma-26b locally, claude/gpt-4o via API). Keep the
+    contract small so swapping providers later is one dataclass.
+    """
+
+    base_url: str
+    model: str
+    api_key: str = ""  # ignored for LM Studio, required for OpenAI/Anthropic
+    ttl_seconds: int | None = 300  # native LM Studio knob; ignored elsewhere
+
+
 _RESOLVER_SCHEMA = {
     "type": "object",
     "properties": {
@@ -461,6 +478,170 @@ class _ReviewVerdict:
     reasoning: str
 
 
+class UpstreamForker:
+    """Resolver that escalates a fork to a separately-configured
+    stronger model — either a larger local model (gemma-26b,
+    qwen3-coder-30b) or a paid API (Anthropic, OpenRouter, OpenAI).
+
+    Different semantics from LocalMeta and ReviewedAuto: upstream
+    is **expensive**, both in tokens (paid API) and in switching
+    cost (RAM eviction on a single GPU). So the right pattern is
+    «accumulate forks, flush in a batch». PR-C2 wires the pending
+    queue and flush triggers; this class is the resolver itself —
+    given a fork, send it through, return a resolution.
+
+    Implementation details:
+    - Uses LM Studio's native `/api/v1/chat` endpoint when the
+      upstream profile points at an LM Studio host. Native gives
+      us live model_load.progress events for cold loads (gemma-26b
+      takes ~30s to load — without progress that's a freeze).
+    - Falls back to OpenAI-compat for other providers (Anthropic
+      via the `messages` endpoint comes in a later cut; for now we
+      assume OpenAI-compat there too).
+    - Structured output via response_format=json_schema — same
+      schema LocalMeta uses, so the picker→upstream override
+      pipeline in PR-C2 can compare resolutions field-by-field.
+    - `event_sink` is an optional callable that receives every
+      NativeStreamEvent as it arrives. `OperationCard` plugs in
+      here for the user-visible phase bar.
+
+    The class doesn't queue or batch — that's the Runtime's job.
+    A single `resolve(...)` call goes out, gets back one
+    ForkResolution. Batching is just calling resolve() in a loop
+    against the same upstream profile (keeping the model warm via
+    `ttl_seconds`).
+    """
+
+    def __init__(
+        self,
+        upstream: UpstreamProfile,
+        *,
+        event_sink: Callable[[object], None] | None = None,
+        http_client: object | None = None,  # httpx.AsyncClient, kept as object to avoid import
+    ) -> None:
+        self._upstream = upstream
+        self._event_sink = event_sink
+        self._http_client = http_client
+
+    async def resolve(
+        self,
+        question: str,
+        options: tuple[ForkOption, ...],
+        context: str,
+    ) -> ForkResolution:
+        if not options:
+            raise ForkError("no options to choose from")
+        options_block = "\n".join(f"- {o.name}: {o.summary}" for o in options)
+        user_message = (
+            f"Question:\n{question}\n\nOptions:\n{options_block}\n\nContext:\n{context}\n"
+        )
+        messages: list[dict[str, object]] = [
+            {"role": "system", "content": _prompts.FORK_LOCAL_META},
+            {"role": "user", "content": user_message},
+        ]
+        return await self._dispatch(messages, options)
+
+    async def _dispatch(
+        self,
+        messages: list[dict[str, object]],
+        options: tuple[ForkOption, ...],
+    ) -> ForkResolution:
+        """Route to native or OpenAI-compat based on the upstream
+        URL. LM Studio is detected by the `/v1` suffix on the base
+        URL — the convention LM Studio prints in its server panel.
+        Other providers (Anthropic, OpenAI) get the OpenAI-compat
+        path; native events / live load progress aren't available
+        there (the protocols don't emit them).
+        """
+        if not self._is_lmstudio_url(self._upstream.base_url):
+            return await self._dispatch_openai_compat(messages, options)
+        return await self._dispatch_native(messages, options)
+
+    @staticmethod
+    def _is_lmstudio_url(base_url: str) -> bool:
+        """LM Studio's HTTP server prints `http://host:port/v1`;
+        we detect by the trailing `/v1`. Override via the upstream
+        profile if you proxy through a path-rewriter (rare).
+        """
+        return base_url.rstrip("/").endswith("/v1")
+
+    async def _dispatch_native(
+        self,
+        messages: list[dict[str, object]],
+        options: tuple[ForkOption, ...],
+    ) -> ForkResolution:
+        """Stream through `/api/v1/chat`, accumulating text deltas
+        and forwarding every event to the optional sink so the
+        OperationCard can render phase progress in real time."""
+        from contextlib import suppress
+
+        from code_scalpel.llm.lmstudio_native import native_chat
+        from code_scalpel.llm.native_events import MessageDelta, StreamError
+
+        text_parts: list[str] = []
+        async for event in native_chat(
+            base_url=self._upstream.base_url,
+            model=self._upstream.model,
+            messages=[{"role": str(m["role"]), "content": str(m["content"])} for m in messages],
+            temperature=0.0,
+            response_format={
+                "type": "json_schema",
+                "json_schema": {
+                    "name": "fork_upstream",
+                    "strict": True,
+                    "schema": _RESOLVER_SCHEMA,
+                },
+            },
+            ttl_seconds=self._upstream.ttl_seconds,
+            client=self._http_client,  # type: ignore[arg-type]
+        ):
+            if self._event_sink is not None:
+                # Sink exceptions (UI bug) must not crash resolution.
+                with suppress(Exception):
+                    self._event_sink(event)
+            if isinstance(event, MessageDelta):
+                text_parts.append(event.content)
+            elif isinstance(event, StreamError):
+                raise ForkError(f"upstream stream error: {event.message}")
+        return _parse_resolver_reply("".join(text_parts), options)
+
+    async def _dispatch_openai_compat(
+        self,
+        messages: list[dict[str, object]],
+        options: tuple[ForkOption, ...],
+    ) -> ForkResolution:
+        """OpenAI-compat path for non-LM-Studio upstreams. No live
+        load events here — the endpoint doesn't emit them; we just
+        send the request and parse the reply. UI-side the
+        OperationCard will be in fallback mode (no progress bar
+        for load, only «◌ generating…»)."""
+        from openai import AsyncOpenAI
+
+        client = AsyncOpenAI(
+            base_url=self._upstream.base_url,
+            api_key=self._upstream.api_key or "not-needed",
+        )
+        # Cast through Any — OpenAI SDK requires a tightly-typed
+        # message union we don't need to model for this code path.
+        from typing import Any, cast
+
+        response = await client.chat.completions.create(
+            model=self._upstream.model,
+            messages=cast(Any, messages),
+            temperature=0.0,
+            response_format={
+                "type": "json_schema",
+                "json_schema": {
+                    "name": "fork_upstream",
+                    "strict": True,
+                    "schema": _RESOLVER_SCHEMA,
+                },
+            },
+        )
+        content = response.choices[0].message.content or ""
+        return _parse_resolver_reply(content, options)
+
+
 class ReviewedAutoForker:
     """Two-pass resolver: picker + skeptic reviewer + anchor.
 
@@ -753,5 +934,7 @@ __all__ = [
     "HumanResolver",
     "LocalMetaForker",
     "ReviewedAutoForker",
+    "UpstreamForker",
+    "UpstreamProfile",
     "detect_forks",
 ]
