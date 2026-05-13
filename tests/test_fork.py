@@ -404,6 +404,186 @@ async def test_human_forker_headless_error_policy_raises(project: Path) -> None:
         )
 
 
+# ── ReviewedAutoForker (picker + skeptic reviewer + anchor) ───────────────────
+
+
+@pytest.mark.asyncio
+async def test_reviewed_auto_confirm_returns_picker_choice(project: Path) -> None:
+    """Picker picks A; reviewer confirms → ReviewedAuto returns A.
+    The happy path: both passes agree, no override, no escalation."""
+    from code_scalpel.fork import ReviewedAutoForker
+
+    llm = MockLLMAdapter(
+        [
+            # picker output
+            '{"chosen": "a", "reasoning": "fits the constraint"}',
+            # reviewer output
+            '{"verdict": "confirm", "alternative": "", "reasoning": "agrees"}',
+        ]
+    )
+    agent = StepAgent(llm=llm, cwd=project, config=_CONFIG)
+    forker = ReviewedAutoForker(agent)
+
+    res = await forker.resolve(
+        "q",
+        (ForkOption("a", "first"), ForkOption("b", "second")),
+        "ctx",
+    )
+
+    assert res.chosen == "a"
+
+
+@pytest.mark.asyncio
+async def test_reviewed_auto_override_returns_alternative(project: Path) -> None:
+    """Picker picks A; reviewer overrides to B → ReviewedAuto
+    returns B. This is exactly the failure mode the second pass is
+    there to catch: picker walked into a constraint."""
+    from code_scalpel.fork import ReviewedAutoForker
+
+    llm = MockLLMAdapter(
+        [
+            '{"chosen": "a", "reasoning": "looked fine"}',
+            '{"verdict": "override", "alternative": "b", "reasoning": "constraint X rules out a"}',
+        ]
+    )
+    agent = StepAgent(llm=llm, cwd=project, config=_CONFIG)
+    forker = ReviewedAutoForker(agent)
+
+    res = await forker.resolve(
+        "q",
+        (ForkOption("a", "first"), ForkOption("b", "second")),
+        "ctx",
+    )
+
+    assert res.chosen == "b"
+    assert "constraint X" in res.reasoning
+
+
+@pytest.mark.asyncio
+async def test_reviewed_auto_discuss_anchors_to_picker(project: Path) -> None:
+    """Picker picks A; reviewer says `discuss` → ReviewedAuto
+    returns the picker's choice (it's stable, t=0.0). Inside the
+    auto pipeline there's no human to escalate to; the anchor
+    avoids a second-guessing loop."""
+    from code_scalpel.fork import ReviewedAutoForker
+
+    llm = MockLLMAdapter(
+        [
+            '{"chosen": "a", "reasoning": "fine"}',
+            '{"verdict": "discuss", "alternative": "", "reasoning": "tie"}',
+        ]
+    )
+    agent = StepAgent(llm=llm, cwd=project, config=_CONFIG)
+    forker = ReviewedAutoForker(agent)
+
+    res = await forker.resolve(
+        "q",
+        (ForkOption("a", "first"), ForkOption("b", "second")),
+        "ctx",
+    )
+
+    assert res.chosen == "a"
+    assert "anchored" in res.reasoning
+
+
+@pytest.mark.asyncio
+async def test_reviewed_auto_override_to_unknown_demotes_to_discuss(
+    project: Path,
+) -> None:
+    """Reviewer hallucinates an alternative name not in the option
+    set → treat as `discuss` and anchor to picker. Trusting the
+    invented name would silently corrupt the resolution."""
+    from code_scalpel.fork import ReviewedAutoForker
+
+    llm = MockLLMAdapter(
+        [
+            '{"chosen": "a", "reasoning": "ok"}',
+            '{"verdict": "override", "alternative": "made-up", "reasoning": "imaginary"}',
+        ]
+    )
+    agent = StepAgent(llm=llm, cwd=project, config=_CONFIG)
+    forker = ReviewedAutoForker(agent)
+
+    res = await forker.resolve(
+        "q",
+        (ForkOption("a", "first"), ForkOption("b", "second")),
+        "ctx",
+    )
+
+    assert res.chosen == "a"
+    assert "anchored" in res.reasoning
+
+
+@pytest.mark.asyncio
+async def test_reviewed_auto_used_by_default_in_human_forker(project: Path) -> None:
+    """`fork_auto_reviewed=True` (default) routes the auto pipeline
+    through the picker+reviewer pair. The third LLM call is the
+    reviewer; without it there'd only be two messages on the bus."""
+    from code_scalpel.fork import HumanForker
+
+    llm = MockLLMAdapter(
+        [
+            # picker
+            '{"chosen": "a", "reasoning": "ok"}',
+            # reviewer
+            '{"verdict": "confirm", "alternative": "", "reasoning": "agrees"}',
+        ]
+    )
+    cfg = AppConfig(
+        profiles={"local": ModelProfile(provider="lmstudio", model="m")},
+        agent=AgentConfig(
+            trust="optimist",
+            fork_auto_reviewed=True,
+            enforce_read_before_show=False,
+        ),
+    )
+    agent = StepAgent(llm=llm, cwd=project, config=cfg)
+
+    async def fake_hook(_t, _o, _to):  # type: ignore[no-untyped-def]
+        return "*"  # user delegates to auto
+
+    forker = HumanForker(agent, ui_hook=fake_hook, config=cfg.agent)
+    res = await forker.resolve(
+        "q",
+        (ForkOption("a", "x"), ForkOption("b", "y")),
+        "ctx",
+    )
+
+    assert res.chosen == "a"
+    assert len(llm.calls) == 2  # picker + reviewer
+
+
+@pytest.mark.asyncio
+async def test_fork_auto_reviewed_false_skips_reviewer(project: Path) -> None:
+    """Opt-out flag — caller wants the single-pass LocalMeta path
+    (faster, no override safety net). Only one LLM call, no reviewer."""
+    from code_scalpel.fork import HumanForker
+
+    llm = MockLLMAdapter(['{"chosen": "a", "reasoning": "ok"}'])
+    cfg = AppConfig(
+        profiles={"local": ModelProfile(provider="lmstudio", model="m")},
+        agent=AgentConfig(
+            trust="optimist",
+            fork_auto_reviewed=False,
+            enforce_read_before_show=False,
+        ),
+    )
+    agent = StepAgent(llm=llm, cwd=project, config=cfg)
+
+    async def fake_hook(_t, _o, _to):  # type: ignore[no-untyped-def]
+        return "*"
+
+    forker = HumanForker(agent, ui_hook=fake_hook, config=cfg.agent)
+    res = await forker.resolve(
+        "q",
+        (ForkOption("a", "x"), ForkOption("b", "y")),
+        "ctx",
+    )
+
+    assert res.chosen == "a"
+    assert len(llm.calls) == 1
+
+
 @pytest.mark.asyncio
 async def test_human_forker_esc_raises(project: Path) -> None:
     """User pressed Escape → ForkError so the caller can choose to
