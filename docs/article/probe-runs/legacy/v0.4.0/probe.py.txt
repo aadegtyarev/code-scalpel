@@ -1,0 +1,56 @@
+# probe.py
+# exit_code=0
+# duration_sec=196.04
+
+## stdout
+
+========================================================================
+LIVE PROBE — типовые сценарии использования
+target: qwen2.5-coder-14b @ http://localhost:1234
+========================================================================
+
+[overview] High-level architecture description — map alone enough
+  ✓ 'tui' found in T1
+     T1: Конечно, давайте начнем с того, чтобы получить общий взгляд на структуру проекта. Я буду использовать…
+
+[flow] Trace the flow — needs imports + reasoning across files
+  ✓ 'agent.py' found in T1
+     T1: Вот ключевые модули, участвующие в обработке от ввода пользователя до вызова LLM: 1.…
+
+[classifier-usage] 'Is classifier.py used in main flow?' — needs grep, NOT in agent.py imports
+  ✗ none of ('не используется', 'только в тестах', 'not used') in T1: 'Проверим, используется ли `classifier.py` в основном потоке агента.\n\nИзвините, н'
+     T1: Проверим, используется ли `classifier.py` в основном потоке агента. Извините, но файл `agent.py` не найден в…
+
+[misattribution-repro] 2026-05-11 bug: compact vs mark_compacted — model must pick the real one
+  ✓ 'сжима' found in T1
+     T1: Контекст сжимается в файле `compression.py`. Давайте проверим его содержимое. Извините, но файл…
+
+[short-followup] Sonet bug: long T1, short T2 clarification — model must NOT repeat T1
+  ✓ no consecutive-turn repeats
+     T1: Чтобы добавить в проект работу с антропик моделями, нужно выполнить несколько шагов: 1. **Определение…
+     T2: Извините, но я не могу продолжить обсуждение в данном направлении. Если у вас есть другие вопросы или задачи,…
+
+[ask-nonexistent] Method that doesn't exist — must admit, not invent
+  ✓ 'не' found in T1
+     T1: Я сначала проверю, есть ли такая функция в проекте. Функция `quick_sort` не была найдена в проекте. Возможно,…
+
+[show-method-body] Show body of a real method — must read_file, not guess
+  ✗ 'mark_compacted' missing from T1: 'Извините, но я не могу найти файл `Session.py` в вашем проекте. Пожалуйста, уточ'
+     T1: Извините, но я не могу найти файл `Session.py` в вашем проекте. Пожалуйста, уточните, какой именно файл вы…
+
+[task-engages-with-project] 'найди место чтобы ...' must trigger tool calls and engage with real files
+  ✓ 'footer' found in T1
+     T1: Из списка файлов, `code_scalpel/tui/widgets/footer.py` выглядит как наиболее подходящий для внесения…
+
+[plan-mode] Plan mode: produce TASKS.md structure
+  ✓ '## T001' found in T1
+     T1: ## T001: Определение места в коде для добавления /history Goal: Найти и определить место в коде, где…
+
+========================================================================
+RESULT: 7/9 passed
+========================================================================
+
+
+## stderr
+
+
