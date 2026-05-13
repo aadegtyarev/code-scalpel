@@ -2720,69 +2720,190 @@ Rust language skill / Kubernetes component skill — по запросу.
       теперь это видно пользователю.
 ```
 
-### v0.10 — fork delegation
+### v0.10 — fork basics
 
 ```text
 Тезис: на архитектурной развилке решение делегируется лучше
-подходящему «мозгу». 14b слабо взвешивает trade-offs; человек
-делает это за 5 секунд; та же 14b в роли «архитектор» с другим
-промптом и контекстом работает иначе чем builder; upstream
-сильная модель — крайнее средство по дорогим решениям.
+подходящему «мозгу». Человек ≈ сильная LLM для критических
+решений; если не понимает — может уточнить, и тогда модель
+обязана развернуть. 14b в роли «архитектор» — backup когда
+человек ушёл. Большую модель оставляем на v0.12 (она дорогая
+и должна работать пачкой, не на каждый fork).
 
-Единая абстракция — Fork API. Переключатель `fork_resolver` в
-config + Ctrl+? в TUI:
-  • `human`       — ChoiceCard с 2-3 опциями, ждать ответа.
-                    Дефолт для интерактивного режима.
-  • `local_meta`  — отдельный turn в той же модели со специальным
-                    system prompt «ты архитектор; выбери ОДНУ опцию,
-                    объясни в 3 строки, не пиши код», temperature
-                    0.0 (стабильность), strict JSON
-                    {chosen, reasoning}. Для случаев когда юзер
-                    не хочет прерываться.
-  • `upstream`    — внешняя сильная модель через тот же llm.adapter
-                    интерфейс, отдельный профиль в config. Требует
-                    API-ключ; вызывается только на дорогих
-                    архитектурных решениях (не на каждом fork'е).
+Единая абстракция — Fork API:
+  fork(question, options, context, *, critical=False) -> ForkResolution
 
-- [ ] Каркас Fork API.
-      `fork(question, options: list[ForkOption], context) ->
-      ForkResolution`. Реализация роутится по fork_resolver.
-      Возвращает выбранную опцию + reasoning (для логов и
-      воспроизводимости в STATE.json).
+Резолвер выбирается по `fork_resolver` в config + slash `/fork`:
+  • `human`       — ChoiceCard с диалогом. Дефолт.
+  • `local_meta`  — 14b в роли архитектора. Backup для headless.
+  • `upstream`    — задел; реализация в v0.12.
 
-- [ ] Fork в /plan.
-      Plan-pass перечисляет >1 «разумного» подхода в structured
-      output → вызывается fork(). Resolver выбирает; plan
-      продолжается с выбором. ChoiceCard используется для
-      human-mode.
+✓ Каркас Fork API (2026-05-13). `code_scalpel/fork.py`: frozen
+  `ForkOption`/`ForkResolution`, `ForkError`, `HumanResolver`
+  Callable type, `LocalMetaForker`. Tolerant brace-counting JSON
+  parser. ⚠ JSON-формат для LocalMeta пересматривается под
+  «текст-формат» (см. probe pass ниже) — на 14b stricter JSON
+  через промпт хрупкий, перепишем в `Pick: …` плоский текст
+  после probe-калибровки.
 
-- [ ] Fork в /go на dependency-выборах.
-      Перед генерацией кода с зависимостью X — модель формирует
-      2-3 кандидата (HTTP client, ORM, test runner, ASGI server)
-      с однострочным описанием → fork() → builder работает с
-      выбором.
+ВАЖНО: формат вывода резолвера определяется probe-калибровкой
+ДО кодинга (узкий проход «generic_fix_not_prompt»):
+  1. fork_local_meta — стабилен ли «Pick: X / Why: Y» текст
+     на 14b? Сравнить с JSON и (если LM Studio поддерживает)
+     с `response_format=json_schema` structured output.
+  2. fork_reviewer — умеет ли 14b сказать `override` или всегда
+     rubber-stamp'ит `confirm`? Если всегда соглашается —
+     ReviewedAuto бесполезен; перепишем промпт или поменяем
+     температуру до того как код v0.11 будет написан.
+  3. clarify pass — реально углубляет варианты или просто
+     перефразирует? Без углубления `?` кнопка вырождается.
 
-- [ ] Full resume сессии (бывший v0.7).
-      Resume = fork «restart vs continue» — частный случай той же
-      абстракции. Расширить STATE.json: фаза (generating/reviewing/
-      applying/testing/idle), последняя задача, открытые
-      fork-вопросы. При старте — inline-карточка «Resume? Task T003,
-      phase testing» с продолжить/начать-заново. Если в момент
-      crash'а был открытый fork — переоткрыть его.
+- [ ] Probe-пасс перед кодингом резолверов и detect_forks.
+      `scripts/probe_forks.py` запускает три промпта на 14b
+      (LM Studio) с фиксированными test-кейсами; печатает diff
+      между JSON / Pick-текст / structured-output. Промпты
+      фиксируются ПОСЛЕ probe, не ДО.
 
-- [ ] `code-scalpel init` — интерактивный онбординг (бывший v0.7).
-      Создаёт .code-scalpel/, серия forks с human mode (модель не
-      может выбрать вместо пользователя на init'е): провайдер
-      (lmstudio/openrouter/openai), модель, режим sandbox. Пишет
-      config.yaml.
+- [ ] HumanForker через ChoiceCard — диалог, не одиночный prompt.
+      ChoiceCard несёт три класса кнопок:
+        [A] [B] [C] ...    — собственно варианты;
+        [?: explain]       — расширить (NarrowPass «expand
+                             options»), карточка перерисовывается
+                             с extended summaries; бесконечный
+                             clarify, юзер сам решает когда хватит;
+        [⚡: auto]         — делегировать в LocalMetaForker
+                             (без reviewer'а пока — он в v0.11).
+      Trust-aware таймер (Ctrl+L переключатель уже есть):
+        • skeptic — ∞, юзер обязан ответить;
+        • optimist — 120s countdown, по таймауту → ⚡ Auto;
+        • yolo — сразу ⚡ Auto, КРОМЕ `critical=True` forks где
+                 60s ChoiceCard с countdown, потом ⚡ Auto.
 
-- [ ] TUI toggle.
-      Ctrl+? переключает fork_resolver между human/local_meta/
-      upstream. Индикатор в футере: [fork:human] /
-      [fork:auto] / [fork:gpt-4o]. Меняется в рантайме.
+- [ ] `fork_human_fallback: local_meta | error` для headless
+      (probe / bench / /go в фоне без TUI). Default — `local_meta`
+      (мягкий путь). Логируется в stderr — silent fallback скрыл бы
+      что fork сработал.
+
+- [ ] Slash `/fork <resolver>` — переключение в рантайме. Индикатор
+      в футере: `[fork:human]` / `[fork:auto]` / `[fork:upstream]`.
+      Slash вместо Ctrl-хоткея чтобы не съедать клавишу; хоткей
+      добавим если по факту окажется нужен ежедневно.
+
+- [ ] Конфиги:
+        fork_resolver: human | local_meta | upstream  (default human)
+        fork_human_fallback: local_meta | error       (default local_meta)
+        fork_human_timeout_optimist: 120              (sec)
+        fork_human_timeout_yolo_critical: 60          (sec)
+        fork_max_clarify_rounds: null                 (бесконечно)
 ```
 
-### v0.11 — knowledge layer
+### v0.11 — fork wiring + ReviewedAuto
+
+```text
+Тезис: после v0.10 у нас есть Fork API. v0.11 встраивает его в
+два места где он реально снимает класс ошибок 14b — в /plan
+(архитектурные развилки до кода) и в /go (dependency choices до
+инсталла). И укрепляет Auto pipeline двойным проходом
+picker+reviewer с защитой от зацикливания.
+
+- [ ] ReviewedAutoForker — двойной проход для ⚡ Auto.
+      Picker (LocalMetaForker, t=0.0, architect prompt) → выбор X
+      + reasoning Y. Reviewer (NarrowPass, t=0.5, skeptic prompt)
+      смотрит на picker'овский payload и возвращает один из трёх
+      verdict'ов:
+        • confirm           — выбор X финален.
+        • override <Z>      — reviewer предлагает другой вариант.
+        • discuss           — выбор спорный.
+      Anti-loop трёхслойный:
+        a. Hard cap: `fork_review_max_overrides=1`. Reviewer
+           override может произойти один раз; никакого review-of-
+           review. Если в будущем понадобится 2-й уровень — это
+           отдельный config и обоснование.
+        b. Anchor: на `discuss` → возвращаемся к human через
+           ChoiceCard если он доступен; иначе берём
+           PICKER'овский выбор (он stable t=0.0, не reviewer'ский).
+        c. Temperature spread: picker 0.0, reviewer 0.5. Если они
+           сошлись (`confirm`) — это reliable. Spread защищает от
+           коллапса в одно мнение.
+
+- [ ] detect_forks NarrowPass поверх /plan.
+      Plan-mode остаётся с обычным markdown output (не структурный
+      — 14b плохо со структурным). После plan-pass запускается
+      detect_forks: даём план + контекст проекта, просим выделить
+      архитектурные развилки (`>1 разумных варианта`). Возвращает
+      список ForkContext или пустой список. Промпт строгий: «если
+      развилки очевидной нет — пустой список». Probe калибрует
+      false-positive rate ДО включения по умолчанию.
+
+- [ ] Wiring forks в /plan.
+      После detect_forks → для каждой развилки → вызвать fork() →
+      встроить выбор в TASKS.md как маркер (например в body
+      задачи: `Chosen: psycopg2 (reasoning: …)` или отдельная
+      строка `Dependencies: …`). Builder turn'у попадает уже
+      решённый план.
+
+- [ ] Wiring forks в /go на dependency choices.
+      Через инструмент `fork` в TOOL_SCHEMAS — модель сама может
+      позвать `fork(question, options, context)` когда упирается
+      в выбор. Альтернатива — детектить шаблон в shell_exec
+      (`pip install X` / `npm install X`) и интерсептить ДО,
+      но это хрупко на разных стеках. Tool-call явный, видимый,
+      универсальный.
+
+- [ ] Конфиги:
+        per_step_review_temperature → review_temperature (rename;
+          сейчас 0.5 в v0.8, переиспользуется для fork reviewer)
+        fork_review_max_overrides: 1
+```
+
+### v0.12 — upstream + resume
+
+```text
+Тезис: большую модель (платный API или RAM-swap локальной
+сильной модели) подключаем БАТЧАМИ. Переключение модели имеет
+стоимость; на каждое решение её гонять нельзя. Тематически рядом
+живёт full resume — обе фичи про «работа продолжается с
+накопленного состояния».
+
+- [ ] UpstreamForker + pending queue.
+      `fork_resolver=upstream` НЕ вызывает upstream сразу.
+      Вместо этого: queue.append(ForkContext); продолжаем работу
+      с picker'овским выбором (LocalMetaForker) как «временный».
+      Flush пачкой по триггеру:
+        • явный `/escalate` slash;
+        • конец /go (configurable);
+        • достижение N pending forks (configurable).
+      Upstream получает компактный payload (см. summarise_forks)
+      и возвращает по каждому fork: подтверждение или override
+      с указанием задачи которую надо пересмотреть.
+
+- [ ] summarise_forks pre-pass.
+      Перед upstream flush — NarrowPass на 14b сжимает каждый
+      ForkContext в 5 строк (question / options / picker pick /
+      реason). Это снижает upstream-токены в разы; на 14b почти
+      бесплатно. Опт-аут через `upstream_summarise=false` для
+      случаев когда нужен full context.
+
+- [ ] Full resume сессии.
+      STATE.json расширение: phase (generating/reviewing/applying/
+      testing/idle), last_task_id, open_fork_questions, history
+      summary hash. При старте TUI:
+        a. Парсим STATE.json + git status.
+        b. Если есть незавершённое — inline-карточка через
+           ChoiceCard (это первый Fork в новой сессии!) с
+           «Continue from T003 / Restart».
+        c. На continue: восстанавливаем _history через compact-
+           summary, ставим phase, переоткрываем open forks.
+      Resume = вырожденный fork с двумя опциями.
+
+- [ ] Конфиги:
+        upstream_profile: <profile-name>  (имя из profiles:)
+        upstream_batching: true            (queue vs sync)
+        upstream_summarise: true           (pre-pass или нет)
+        upstream_flush_on: "/go-end" | "n=5" | "manual"
+```
+
+### v0.13 — knowledge layer
 
 ```text
 Тезис: эталон бьёт pretraining. Модель не вспоминает как выглядит
@@ -2894,7 +3015,7 @@ ruff config — получает его. Снимает класс ошибок 
       / test_config_load.py / test_config_autodetect.py.
 ```
 
-### v0.12 — web tools
+### v0.14 — web tools
 
 ```text
 Web search + чтение статей — инструменты для агента.
