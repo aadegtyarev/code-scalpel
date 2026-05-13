@@ -43,3 +43,4 @@ capabilities-матрице:
 |---|---|---|---|---|---|---|---|---|
 | _(пока пусто — historical-серия ещё не запущена)_ | | | | | | | | |
 | `notes_cli-notes_cli_empty-9d9ba4f-20260513-164542` | 2026-05-13 | notes_cli | notes_cli_empty | [`9d9ba4f`](https://github.com/aadegtyarev/code-scalpel/commit/9d9ba4fc452fd168d8af7f9946b662c4a6a3f216) ⚠️dirty | user_gave_up | 3 | 13k | _(нет one-liner)_ |
+| `notes_cli-notes_cli_empty-5f09a0d-20260513-165724` | 2026-05-13 | notes_cli | notes_cli_empty | [`5f09a0d`](https://github.com/aadegtyarev/code-scalpel/commit/5f09a0d1749c193196b583054ad5c41176af1cdd) ⚠️dirty | user_gave_up | 2 | 10k | _(нет one-liner)_ |
