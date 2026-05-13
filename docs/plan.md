@@ -2990,6 +2990,19 @@ ruff config — получает его. Снимает класс ошибок 
 Долгоиграющие пункты — без жёсткой версии, тащим когда созреет
 обоснование или прижмёт.
 
+- [ ] Update-card в TUI: «Update(path) — +N −M» + цветной diff.
+      Сейчас ToolResult.diff уже несёт unified-diff для каждого
+      успешного write_file (v0.12.5 PR между PR-B и PR-C).
+      Reviewer и retry уже его используют. Осталось довести в
+      TUI: новая `UpdateCard` (или расширить ToolUseCard) которая
+      детектит `call.name == "write_file"` + `result.diff is
+      not None` и рисует diff-карточку как у Claude Code
+      (заголовок «Update(path)» с числами, тело — раскраска
+      `+/-/@@`). Требует прокинуть tool_results в PatchAttempt
+      или передавать step_result в _render_attempt — это
+      рефактор средний; пока render показывает «(no edits)»
+      для write_file-only attempt'ов, но данные есть на руках.
+
 - [ ] i18n кодбазы: всё на английский.
       Цель — международная аудитория. Сейчас bilingual: docstring'и
       по-английски, inline-комментарии часто по-русски, plan.md

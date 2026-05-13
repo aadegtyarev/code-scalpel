@@ -465,6 +465,14 @@ class ToolResult:
     call: ToolCall
     output: str
     ok: bool
+    # Optional unified-diff string for tools that mutate a file
+    # (currently only write_file). When set, the TUI renders an
+    # «Update(path) — +N −M» card with the diff body; agent code
+    # uses it to fill in attempt.diff / per_step_review payloads
+    # instead of the «(no inline diff — write_file based)»
+    # placeholder. None for tools that don't produce a diff or
+    # for failed calls.
+    diff: str | None = None
 
 
 def parse_tool_calls(text: str) -> list[ToolCall]:
@@ -796,6 +804,11 @@ def _tool_write_file(call: ToolCall, cwd: Path) -> ToolResult:
             call, output="error: replace mode needs both start_line and end_line", ok=False
         )
 
+    # Capture old content BEFORE we compute final_content — needed
+    # both for the existing replace/insert math and for the post-write
+    # diff. Empty string when the file is new (overwrite-creating).
+    old_content = target.read_text() if target.is_file() else ""
+
     final_content: str
     summary: str
     if mode_replace:
@@ -811,8 +824,7 @@ def _tool_write_file(call: ToolCall, cwd: Path) -> ToolResult:
                 output=f"error: invalid line range start={start_line} end={end_line}",
                 ok=False,
             )
-        original = target.read_text()
-        lines = original.splitlines(keepends=True)
+        lines = old_content.splitlines(keepends=True)
         if start_line > len(lines):
             return ToolResult(
                 call,
@@ -832,8 +844,7 @@ def _tool_write_file(call: ToolCall, cwd: Path) -> ToolResult:
                 ok=False,
             )
         if target.is_file():
-            original = target.read_text()
-            lines = original.splitlines(keepends=True)
+            lines = old_content.splitlines(keepends=True)
         else:
             # Insert into a new file is just "create with this content";
             # insert_after must be 0 to make sense in that case.
@@ -860,11 +871,37 @@ def _tool_write_file(call: ToolCall, cwd: Path) -> ToolResult:
     line_count = final_content.count("\n") + (
         0 if final_content.endswith("\n") or not final_content else 1
     )
+    diff = _unified_diff_for_write(path_str, old_content, final_content)
     return ToolResult(
         call,
         output=f"{summary} ({line_count} lines, {len(final_content)} chars total)",
         ok=True,
+        diff=diff,
     )
+
+
+def _unified_diff_for_write(path: str, old: str, new: str) -> str | None:
+    """Build a unified diff between old/new file content for write_file.
+
+    Returns None when there's nothing to show — either content is
+    unchanged (rare; the empty-content guard catches the common case)
+    or the file was empty before and after. New-file creation
+    produces a diff with an `/dev/null` source label so the renderer
+    can tell «brand new» from «overwrite-replace»."""
+    import difflib
+
+    if old == new:
+        return None
+    from_label = "/dev/null" if not old else f"a/{path}"
+    to_label = f"b/{path}"
+    lines = difflib.unified_diff(
+        old.splitlines(keepends=True),
+        new.splitlines(keepends=True),
+        fromfile=from_label,
+        tofile=to_label,
+        n=3,
+    )
+    return "".join(lines) or None
 
 
 def _tool_project_map(call: ToolCall, cwd: Path) -> ToolResult:

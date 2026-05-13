@@ -424,6 +424,22 @@ def _successful_write_paths(tool_results: tuple[ToolExecuted, ...]) -> list[str]
     return paths
 
 
+def _collect_write_file_diffs(tool_results: tuple[ToolExecuted, ...]) -> str:
+    """Concatenate the unified-diff strings produced by every successful
+    write_file call in this turn. ToolResult.diff is populated by
+    `_tool_write_file` for overwrite / replace / insert modes.
+
+    Returns "" when no write_file produced a diff (e.g. all calls
+    failed, or the turn was pure read-only). Caller chooses between
+    this and an inline SEARCH/REPLACE diff for display."""
+    chunks = [
+        r.result.diff
+        for r in tool_results
+        if r.call.name == "write_file" and r.result.ok and r.result.diff
+    ]
+    return "\n".join(chunks)
+
+
 def _missing_file_paths(tool_results: tuple[ToolExecuted, ...]) -> list[str]:
     """Return file paths from failed read_file calls where the file was not found.
 
@@ -837,9 +853,10 @@ class StepAgent:
                         )
                     if i == max_retries:
                         break
+                    write_diff = _collect_write_file_diffs(result.tool_results)
                     prompt, broke = await self._build_failure_retry_prompt(
                         test_output=test_output,
-                        diff="(write_file-based, no inline diff)",
+                        diff=write_diff or "(write_file-based, no diff captured)",
                         task_label=task_label,
                         on_tool_executed=on_tool_executed,
                         seen_hypotheses=seen_hypotheses,
@@ -2092,12 +2109,17 @@ class StepAgent:
             return None
         diff = edits_to_diff(list(last.edits), self._cwd) if last.edits else ""
         if not diff.strip():
-            paths = sorted({e.path for e in last.edits if e.path})
-            if not paths:
-                return None
-            diff = "(no inline diff — write_file produced)\nFiles touched:\n" + "\n".join(
-                f"  - {p}" for p in paths
-            )
+            # write_file path: collect the real unified diffs we
+            # captured at tool-execution time (v0.12.5). Falls back to
+            # «files touched» listing only if even that's empty —
+            # shouldn't happen on a successful turn but keeps the
+            # reviewer robust against tool-side surprises.
+            diff = _collect_write_file_diffs(step_result.tool_results)
+            if not diff.strip():
+                paths = sorted({e.path for e in last.edits if e.path})
+                if not paths:
+                    return None
+                diff = "(no diff captured) Files touched:\n" + "\n".join(f"  - {p}" for p in paths)
 
         user_message = f"Task: {task.id} — {task.title}\n\nDiff:\n```\n{diff}\n```\n"
         pass_spec = NarrowPass(
