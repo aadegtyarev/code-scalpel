@@ -193,6 +193,23 @@ class AgentConfig(BaseModel):
     debug_pass: bool = False
     debug_pass_max_attempts: int = 2
     debug_pass_temperature: float = 0.1
+    # Upstream forker batch-flush trigger. When `upstream` profile is
+    # set, every Auto-path fork is enqueued; this controls when the
+    # queue gets drained through the upstream model.
+    #   manual    — only `/escalate` flushes (default; cheap, user-driven).
+    #   go-end    — flush at the end of every /go run (catches everything,
+    #               but lets builder commit work on temporary picks first).
+    #   n-pending — flush as soon as the queue reaches
+    #               `upstream_flush_pending_threshold`. Bounds latency on
+    #               long /go runs at the cost of more upstream calls.
+    upstream_flush_on: Literal["manual", "go-end", "n-pending"] = "manual"
+    upstream_flush_pending_threshold: int = 5
+    # When ≥5 forks land in one flush we run a summarise_forks
+    # NarrowPass first to compress shared ForkContext — keeps the
+    # upstream prompt linear in `len(unique question)` rather than
+    # `sum(len(context))`. Cheap optimisation, kept opt-out for
+    # deterministic-output tests.
+    upstream_summarise: bool = True
 
 
 class ModeTemperatures(BaseModel):

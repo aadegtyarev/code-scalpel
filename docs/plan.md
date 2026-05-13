@@ -2831,24 +2831,21 @@ picker+reviewer с защитой от зацикливания.
 живёт full resume — обе фичи про «работа продолжается с
 накопленного состояния».
 
-- [ ] UpstreamForker + pending queue.
-      `fork_resolver=upstream` НЕ вызывает upstream сразу.
-      Вместо этого: queue.append(ForkContext); продолжаем работу
-      с picker'овским выбором (LocalMetaForker) как «временный».
-      Flush пачкой по триггеру:
-        • явный `/escalate` slash;
-        • конец /go (configurable);
-        • достижение N pending forks (configurable).
-      Upstream получает компактный payload (см. summarise_forks)
-      и возвращает по каждому fork: подтверждение или override
-      с указанием задачи которую надо пересмотреть.
+✓ UpstreamForker + pending queue (2026-05-13, PR-C2): запущен
+  с триггерами `/escalate` и `go-end`. Триггер `n-pending` есть
+  в конфиге, но в /go-цикле пока не вызывается — это in-loop
+  callback, дополним когда упрёмся в задачу с большим
+  количеством forks подряд. record_commit прицеплен к
+  head_after в StepAgent.run_plan; FlushSummary рендерится
+  одной строкой плюс per-override breakdown. Глава 28 статьи.
 
-- [ ] summarise_forks pre-pass.
+- [ ] summarise_forks pre-pass (отложено в backlog).
       Перед upstream flush — NarrowPass на 14b сжимает каждый
       ForkContext в 5 строк (question / options / picker pick /
-      реason). Это снижает upstream-токены в разы; на 14b почти
-      бесплатно. Опт-аут через `upstream_summarise=false` для
-      случаев когда нужен full context.
+      реason). Снижает upstream-токены в разы. Отложено: до
+      первого случая с ≥5 forks за один /go это token-оптимизация
+      без видимого эффекта; добавим когда найдётся реальный
+      use case. Конфиг `upstream_summarise` уже зарезервирован.
 
 - [ ] Full resume сессии.
       STATE.json расширение: phase (generating/reviewing/applying/

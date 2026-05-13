@@ -77,6 +77,7 @@ _SLASH_COMMANDS: list[tuple[str, str]] = [
     ("/recall", "browse stored notes; with text — search them"),
     ("/go", "run plan: next task / full plan / manual retry loop — picks mode via card"),
     ("/commit-msg", "draft an imperative commit message from the staged or unstaged diff"),
+    ("/escalate", "flush pending forks through the upstream model (when configured)"),
     (
         "/learn",
         "generate a recipe markdown (.code-scalpel/recipes/<name>.md); /learn skill <name> for a skill",
@@ -783,6 +784,46 @@ class ScalpelApp(App[None]):
             output.print_status(f"Suggested commit message:\n\n{result.text}")
             footer.status = ""
 
+    def _do_escalate(self) -> None:
+        """`/escalate` — drain the upstream-pending queue right now.
+
+        Builder may have been racing through tasks on temporary
+        picker answers; this fires the upstream model on every
+        pending fork so we can spot disagreements before the user
+        forgets the context. No-ops when no upstream is configured
+        or nothing is pending.
+        """
+        output = self.query_one(OutputLog)
+        if self.runtime is None or self.runtime.upstream_queue is None:
+            output.print_status("No upstream profile configured — /escalate is a no-op.")
+            return
+        if self.runtime.upstream_queue.is_empty():
+            output.print_status("Nothing to escalate — upstream queue is empty.")
+            return
+        pending = self.runtime.upstream_queue.pending_count()
+
+        async def _flush() -> None:
+            footer = self.query_one(StatusFooter)
+            assert self.runtime is not None
+            output.print_status(f"● Escalating {pending} fork(s) to upstream…")
+            footer.status = "◌ escalating…"
+            try:
+                summary = await self.runtime.flush_upstream()
+            except Exception as e:
+                output.print_error(f"Upstream flush error: {e}")
+                footer.status = "● error"
+                return
+            output.print_turn_summary(f"⤷ Upstream: {summary.render_summary_line()}")
+            for outcome in summary.overrides:
+                output.print_status(
+                    f"  override: {outcome.fork.fingerprint} → "
+                    f"upstream chose {outcome.upstream_resolution.chosen} "
+                    f"({len(outcome.commits_touched)} commit(s) touched)"
+                )
+            footer.status = ""
+
+        self.run_worker(_flush(), exclusive=False, group="escalate")
+
     async def _do_compact(self) -> None:
         output = self.query_one(OutputLog)
         footer = self.query_one(StatusFooter)
@@ -1045,6 +1086,9 @@ class ScalpelApp(App[None]):
                 self._mode_index = self._AGENT_MODES.index(mode)
                 self.query_one(ModeInput).set_mode(mode)
                 self._update_footer()
+            return
+        if cmd == "/escalate":
+            self._do_escalate()
             return
         output.print_status(f"Unknown command: {cmd}")
 
@@ -1527,6 +1571,25 @@ class ScalpelApp(App[None]):
                 f"⤷ Run finished: {done} done, {failed} failed, "
                 f"{skipped} skipped · stopped: {reason} · {duration:.1f}s"
             )
+            # Upstream forks queued during /go — auto-flush at end of
+            # run when configured. Manual mode skips; user fires
+            # `/escalate` themselves. The flush errors are surfaced
+            # but don't crash the TUI (queue stays drained either way
+            # — fork outcomes are best-effort, builder already
+            # committed on the picker's answer).
+            if (
+                self.runtime is not None
+                and self.runtime.upstream_queue is not None
+                and self.config.agent.upstream_flush_on == "go-end"
+                and not self.runtime.upstream_queue.is_empty()
+            ):
+                pending = self.runtime.upstream_queue.pending_count()
+                output.print_status(f"● Flushing {pending} upstream fork(s)…")
+                try:
+                    summary = await self.runtime.flush_upstream()
+                    output.print_turn_summary(f"⤷ Upstream: {summary.render_summary_line()}")
+                except Exception as e:
+                    output.print_error(f"Upstream flush error: {e}")
             footer.status = ""
 
     def _render_attempt(self, attempt: PatchAttempt) -> str:
