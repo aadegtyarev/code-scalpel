@@ -5,57 +5,59 @@
 `mini_cli_with_bug` — todo-list CLI на typer, JSON-хранилище в
 домашней директории. В core.py есть **один реальный баг**: метод
 `TodoStore.mark_done` мутирует item в памяти, но не вызывает
-`_write(items)` — изменения теряются после рестарта процесса.
-Существующий тест `tests/test_core.py::test_mark_done_flips_flag`
-ловит это: `fresh[0].done is True` падает потому что disk-state
-не обновился.
+`_write(items)` — изменения теряются. Существующий тест
+`tests/test_core.py::test_mark_done_flips_flag` падает с понятным
+AssertionError.
 
 ## User role
 
-Я (Claude) играю роль юзера согласно
-`memory/user_tone_of_voice.md` — junior-разработчик, у которого
-тест падает, не понимает почему. На запросы агента отвечаю
-короткими репликами: «pytest вот так выводит», «недавно правил
-core.py», «не знаю, разбирайся». Не подсказываю где конкретно
-баг — пусть scalpel сам найдёт.
+Я (Claude) играю роль юзера согласно `memory/user_tone_of_voice.md`
+— junior-разработчик, у которого тест падает.
 
-## Цель
+## Workflow по mode'ам
 
-scalpel должен:
-1. понять что тест падает (запустить pytest)
-2. прочитать упавший тест
-3. прочитать core.py
-4. найти что `mark_done` не вызывает `_write`
-5. добавить вызов
-6. убедиться что pytest проходит
-7. закоммитить
+**Turn 1 — `--mode ask`** (диалог-диагностика, без правок):
+
+> «pytest валится. помоги понять что у меня там с этим тестом
+> mark_done — какие гипотезы по содержанию core.py?»
+
+Что я ОЖИДАЮ: scalpel в ask режиме читает core.py, читает тест,
+формулирует **гипотезу** («mark_done мутирует но не сохраняет»).
+**НЕ патчит**.
+
+**Turn 2 — `--mode code`** (реальный фикс через iterative loop):
+
+> «понятно. поправь и закоммить, чтобы тесты прошли»
+
+Что я ОЖИДАЮ: `code_with_retry` → SR-patch / write_file → run_tests
+→ retry до 3 раз. На выходе pytest exit 0 + commit landed.
+
+**Опционально Turn 3 — `--mode review`** (проверка):
+
+> «проверь что изменения адекватные»
+
+Independent skeptic-review без правок.
+
+## Что НЕ делать
+
+- В turn 1 (ask) — не просить «поправь». Только диагноз.
+- В turn 2 (code) — не объяснять что делать, дать команду «фикси».
+- Не подсказывать где конкретно баг в core.py — пусть scalpel
+  сам найдёт через read_file.
 
 ## Success criteria (mechchecker → verdict.json)
 
 | Критерий | Описание |
 |---|---|
 | `tests_pass` | `python -m pytest` exit 0 после прогона |
-| `commits_landed_ge_1` | хотя бы один git-коммит landed во время прогона |
-| `no_uncommitted_changes` | `git status --porcelain` пусто после прогона |
-| `fix_in_mark_done` | grep `_write\\(items\\)` в `core.py` mark_done-блоке возвращает совпадение |
-
-## Что НЕ говорить (как юзер)
-
-- Не упоминать `mark_done` напрямую первыми репликами
-- Не указывать на «забыли вызвать _write»
-- Не давать конкретный fix-патч
-
-Если scalpel топчется > 5 turn'ов без прогресса (не запустил
-pytest, не прочитал core.py) — мягко подтолкнуть: «начни с
-pytest, я не понимаю что говорит ошибка».
+| `commits_landed_ge_1` | хотя бы один git-коммит landed |
+| `no_uncommitted_changes` | `git status --porcelain` пусто |
+| `fix_in_mark_done` | grep `_write\\(items\\)` в `core.py` mark_done-блоке |
 
 ## Зачем этот кейс
 
-Тонкий, реалистичный баг — «забыли сохранить мутацию». Реальная
-ситуация, в которой 14b должна:
-- разобраться с pytest output
-- сопоставить трассу с кодом
-- предложить и применить осмысленный фикс
-
-Не требует доменных знаний (todo CRUD — банальщина), упор на
-**инженерную аккуратность**.
+Контроль для измерения **разницы** между чистым ask (probe #1)
+и правильным ask→code workflow. Если #1 показал «builder
+поломал структуру через write_file», то здесь `code_with_retry`
+должен починить за 1-2 retry через SR-patch (не overwrite
+файла целиком).

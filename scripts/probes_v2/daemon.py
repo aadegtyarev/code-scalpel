@@ -115,28 +115,37 @@ class ProbeDaemon:
         )
         self.runtime = runtime
 
-    async def handle_step(self, text: str) -> dict[str, Any]:
+    async def handle_step(self, text: str, mode: str) -> dict[str, Any]:
+        """Один turn диалога в указанном mode.
+
+        Mode-routing:
+          - `ask` / `plan` / `review` → `agent.ask` со mode-аддендумом.
+            Это объяснительный/обсуждающий режим — модель отвечает
+            текстом, опционально дёргает tools, не патчит автоматом.
+          - `code` → `agent.code_with_retry(mode="code", force_loop=True)`.
+            Iterative patch loop с retry, плюс post-write валидация.
+            Реальный «делать»-режим.
+        """
         if self.runtime is None:
             self._init_runtime()
         assert self.runtime is not None
         self.user_turns += 1
-        # Запишем user-turn в chat.jsonl до запроса — чтобы порядок
-        # был правильным когда мы grep'ом читаем.
         append_jsonl(
             self.paths.chat_jsonl,
-            {"ts": utc_now(), "role": "user", "content": text, "turn": self.user_turns},
+            {
+                "ts": utc_now(),
+                "role": "user",
+                "content": text,
+                "turn": self.user_turns,
+                "mode": mode,
+            },
         )
         append_jsonl(
             self.paths.timing_jsonl,
-            {"ts": utc_now(), "event": "step.start", "turn": self.user_turns},
+            {"ts": utc_now(), "event": "step.start", "turn": self.user_turns, "mode": mode},
         )
-        # Channel-unification (глава 17 девлога): пропускаем реплику
-        # через `Session.prepare_turn` так же как это делает TUI —
-        # иначе qwen на одинаковом тексте через probe и через TUI
-        # ведёт себя по-разному. `runtime.ask` делает prepare_turn,
-        # но не принимает `on_tool_executed`; повторяем шаг вручную
-        # с hook'ом. Backlog: расширить `runtime.ask/stream` чтобы
-        # принимали hook нативно — тогда runner упростится.
+        # Channel-unification: prepare_turn в демоне вручную — глава
+        # 17 девлога. См. PROTOCOL.md «Текущие ограничения runner'а».
         task = self.runtime.session.prepare_turn(text)
         tool_events: list[ToolExecuted] = []
 
@@ -145,7 +154,15 @@ class ProbeDaemon:
             tool_events.append(ToolExecuted(call=call, result=result))
 
         try:
-            step_result = await self.runtime.agent.ask(task, on_tool_executed=_hook)
+            if mode == "code":
+                step_result = await self.runtime.agent.code_with_retry(
+                    task,
+                    mode="code",
+                    on_tool_executed=_hook,
+                    force_loop=True,
+                )
+            else:
+                step_result = await self.runtime.agent.ask(task, mode=mode, on_tool_executed=_hook)
         except Exception as e:  # noqa: BLE001 — клиенту нужен любой fail с reason'ом
             append_jsonl(
                 self.paths.timing_jsonl,
@@ -160,6 +177,49 @@ class ProbeDaemon:
             "ok": True,
             "reply": step_result.reply,
             "tool_calls": len(tool_events),
+        }
+
+    async def handle_go(self) -> dict[str, Any]:
+        """Запускает `agent.run_plan` на TASKS.md в workdir. Это
+        отдельная команда (не turn): scalpel сам идёт по плану в
+        code mode с iterative patch loop, мы не пишем реплики."""
+        if self.runtime is None:
+            self._init_runtime()
+        assert self.runtime is not None
+        append_jsonl(self.paths.timing_jsonl, {"ts": utc_now(), "event": "go.start"})
+        append_jsonl(
+            self.paths.chat_jsonl,
+            {"ts": utc_now(), "role": "user", "content": "/go", "turn": None, "mode": "code"},
+        )
+
+        def _hook(call: ToolCall, result: ToolResult) -> None:
+            self._on_tool_executed(call, result)
+
+        try:
+            result = await self.runtime.agent.run_plan(
+                on_tool_executed=_hook,
+                fork_resolver=self.runtime.fork_resolver,
+            )
+        except Exception as e:  # noqa: BLE001
+            append_jsonl(
+                self.paths.timing_jsonl,
+                {"ts": utc_now(), "event": "go.error", "error": repr(e)},
+            )
+            return {"ok": False, "error": str(e)}
+        append_jsonl(
+            self.paths.timing_jsonl,
+            {
+                "ts": utc_now(),
+                "event": "go.end",
+                "stopped_reason": result.stopped_reason,
+                "tasks_completed": result.tasks_completed,
+            },
+        )
+        return {
+            "ok": True,
+            "stopped_reason": result.stopped_reason,
+            "tasks_completed": result.tasks_completed,
+            "outcomes": [{"task_id": o.task.id, "status": o.status} for o in result.outcomes],
         }
 
     def handle_note(self, text: str) -> dict[str, Any]:
@@ -204,7 +264,12 @@ class ProbeDaemon:
             text = payload.get("text", "")
             if not isinstance(text, str) or not text.strip():
                 return {"ok": False, "error": "missing or empty text"}
-            return await self.handle_step(text)
+            mode = payload.get("mode", "ask")
+            if mode not in {"ask", "plan", "code", "review"}:
+                return {"ok": False, "error": f"bad mode: {mode}"}
+            return await self.handle_step(text, mode)
+        if op == "go":
+            return await self.handle_go()
         if op == "note":
             text = payload.get("text", "")
             if not isinstance(text, str) or not text.strip():
