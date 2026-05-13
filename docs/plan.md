@@ -2628,7 +2628,7 @@ Rust language skill / Kubernetes component skill — по запросу.
     в backlog: mode debug со структурой «гипотеза → проверка
     → правка», bisect_test инструмент, RAG из кодстайл-guide.
 
-### v0.8 — narrow passes
+### ~~v0.8 — narrow passes~~ ✓ закрыта 2026-05-13
 
 ```text
 Тезис: 5 узких turn'ов с разными ролями надёжнее одного жирного.
@@ -2636,43 +2636,44 @@ Rust language skill / Kubernetes component skill — по запросу.
 если повышают качество. Annotation pass из v0.7 — первый пример
 паттерна; v0.8 делает паттерн first-class и тиражирует.
 
-- [ ] Каркас pipeline узких проходов в agent.py.
-      Класс `NarrowPass` с полями: name, system_prompt, temperature,
-      tool_whitelist, output_schema (опционально strict JSON).
-      Реестр в agent.py; annotation pass переезжает на новый каркас
-      как первый citizen. Один публичный entry-point
-      `run_narrow_pass(name, context)` который роутится в реестр.
+- [x] Каркас pipeline узких проходов (2026-05-13). Модуль
+      `code_scalpel/narrow_pass.py` — frozen dataclass `NarrowPass`
+      (name, system_prompt, temperature) и `PassResult` (text +
+      tokens). `StepAgent.run_narrow_pass(spec, user_message)` —
+      one-shot LLM call с override температуры. No tool loop, no
+      history threading; session-aware (токены в Session). Промпты
+      живут в `code_scalpel/prompts/*.md` рядом с остальными.
 
-- [ ] Per-step review (бывший K3).
-      После каждой задачи /go или явной команды `/review` —
-      отдельный turn:
-      • temperature 0.5 (выше builder'овых 0.1) — ревьюер генерит
-        разнообразные гипотезы про баги, а не lock-in на первой;
-      • system prompt «ты skeptic reviewer; не пиши код, не пиши
-        ok пока не назвал 2 потенциальных риска»;
-      • tool whitelist: read_file / grep / project_map; никаких
-        write_file. Ревьюер находит, не лечит.
-      Если найдена критичная проблема — отдельный builder turn
-      с её исправлением. Авто-вызов после каждой задачи /go
-      (использует _REVIEW_MODE_ADDENDUM из v0.6).
+- [x] Per-step review (бывший K3) (2026-05-13).
+      `prompts/per_step_review.md` — skeptic prompt, требует ≥2
+      рисков перед `accept`, теги [bug]/[risk]/[design]/[nit].
+      `StepAgent.per_step_review(task, step_result)` — temperature
+      0.5 (override через `AgentConfig.review_temperature`),
+      рендерит diff из attempts[-1]. run_plan вызывает на каждую
+      done задачу при `per_step_review=True`. Surface через
+      синтетический `per_step_review` tool card.
 
-- [ ] Test sanity pass.
-      После генерации теста — отдельный turn: «этот тест проверяет
-      behaviour или это `assert True`? Что вернёт тест если функцию
-      полностью удалить?». Если тест мутирующе-пустой — failed task,
-      возврат в builder с пометкой «тест обязан ломаться без
-      правильной реализации».
+- [x] Test sanity pass (2026-05-13).
+      `prompts/test_sanity.md` — judge prompt с JSON output
+      `{verdict, reason}`. Verdict: meaningful / trivial / unclear.
+      `StepAgent.judge_test_sanity(test_path)` — temperature 0.0
+      (стабильное суждение, не творчество). run_plan вызывает на
+      каждую done задачу с modified test files при
+      `test_sanity_pass=True`. Surface как `test_sanity` tool card.
+      Failed-on-trivial — strict mode landing после probe data.
 
-- [ ] Commit message pass.
-      Builder закоммитил → отдельный turn: «вот diff (cap 4k),
-      summary под 72 chars + body 3-5 строк „почему не что“».
-      Используется как `git commit -m` перед merge в /go;
-      опционально вызывается из явного `/commit`.
+- [x] Commit message pass (2026-05-13).
+      `prompts/commit_message.md` — imperative summary + why-body,
+      без conv-commit префиксов, без эмодзи, без co-author trailer.
+      `StepAgent.improve_commit_message(diff)` — temperature 0.2,
+      cap 4k chars с маркером усечения. Slash `/commit-msg`:
+      берёт staged diff (fallback unstaged), печатает suggestion
+      как status block для копи-паста в `git commit -m`. Авто-amend
+      в /go — следующий шаг после калибровки.
 
-- [ ] Метрика в статье — глава 21.
-      На probe-наборе сравнить pass rate до/после внедрения
-      per-step review + test sanity. Без цифр статья не убеждает,
-      это главное оружие проекта против «14b слабая».
+- [ ] Метрика в статье — глава 21. Probe-набор pass rate до/после
+      per_step_review + test_sanity. Это уже задача автора, не код;
+      переносится из чек-листа в backlog.
 ```
 
 ### v0.9 — machine checks
