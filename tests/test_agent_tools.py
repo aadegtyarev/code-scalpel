@@ -539,6 +539,40 @@ async def test_shell_exec_runs_command_in_yolo(tmp_path: Path) -> None:
 
 
 @pytest.mark.asyncio
+async def test_shell_exec_mkdir_is_noop(tmp_path: Path) -> None:
+    """v0.9 loose end B: `mkdir <dir>` before a write_file is wasted
+    (write_file creates parents). Recognized and short-circuited to
+    a successful no-op with an instructive message — no shell hit."""
+    from tests.mocks import MockShellRunner
+
+    runner = MockShellRunner()
+    call = ToolCall(name="shell_exec", body='{"command": "mkdir mypkg"}')
+
+    result = await execute(call, tmp_path, runner=runner, trust="yolo")
+
+    assert result.ok is True
+    assert "no-op" in result.output
+    assert "mkdir mypkg" in result.output
+    assert runner.shell_calls == []  # didn't actually run
+
+
+@pytest.mark.asyncio
+async def test_shell_exec_mkdir_with_chain_passes_through(tmp_path: Path) -> None:
+    """A compound command — `mkdir x && do_thing` — escapes the no-op
+    guard. We only strip the bare single-dir form, not user intent."""
+    from code_scalpel.tools.shell import ShellResult
+    from tests.mocks import MockShellRunner
+
+    runner = MockShellRunner([ShellResult("", 0)])
+    call = ToolCall(name="shell_exec", body='{"command": "mkdir x && echo ok"}')
+
+    result = await execute(call, tmp_path, runner=runner, trust="yolo")
+
+    assert result.ok is True
+    assert runner.shell_calls == ["mkdir x && echo ok"]
+
+
+@pytest.mark.asyncio
 async def test_shell_exec_refuses_in_skeptic_without_callback(tmp_path: Path) -> None:
     """skeptic + no confirm callback → refused. Probes / bench can't
     pop a UI; refusal points the user at how to wire one."""
@@ -690,6 +724,21 @@ async def test_write_file_creates_parent_dirs(tmp_path: Path) -> None:
     result = await execute(call, tmp_path)
     assert result.ok is True
     assert (tmp_path / "a/b/c.py").read_text() == "x\n"
+
+
+@pytest.mark.asyncio
+async def test_write_file_rejects_empty_content(tmp_path: Path) -> None:
+    """v0.9 loose end C: write_file content="" was clobbering existing
+    files with nothing. Now explicit reject with a how-to-do-this-right
+    hint pointing at `content="\\n"` or `shell_exec touch`."""
+    (tmp_path / "existing.py").write_text("don't lose me\n")
+    call = ToolCall(name="write_file", body='{"path": "existing.py", "content": ""}')
+    result = await execute(call, tmp_path)
+    assert result.ok is False
+    assert "empty content" in result.output
+    assert "touch" in result.output
+    # File is untouched.
+    assert (tmp_path / "existing.py").read_text() == "don't lose me\n"
 
 
 @pytest.mark.asyncio

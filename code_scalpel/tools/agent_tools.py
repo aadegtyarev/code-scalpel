@@ -700,6 +700,21 @@ def _tool_write_file(call: ToolCall, cwd: Path) -> ToolResult:
         return ToolResult(call, output="error: missing file path", ok=False)
     if not isinstance(content, str):
         return ToolResult(call, output="error: content must be a string", ok=False)
+    # v0.9 loose end C: 14b sometimes calls write_file twice with the
+    # same path and content="", clobbering whatever the previous turn
+    # produced. Refuse the empty case explicitly — if you really want
+    # an empty file, the model can use `content="\n"` or shell_exec
+    # touch. The error nudges the model to pick the right tool.
+    if content == "":
+        return ToolResult(
+            call,
+            output=(
+                'error: empty content. write_file rejects content="" to avoid '
+                'overwriting existing files with nothing. Use content="\\n" for '
+                "a deliberately blank file, or shell_exec `touch <path>`."
+            ),
+            ok=False,
+        )
     if path_str.startswith("/") or ".." in Path(path_str).parts:
         return ToolResult(
             call, output=f"error: path must be inside the project: {path_str}", ok=False
@@ -968,6 +983,12 @@ async def _tool_run_tests(call: ToolCall, cwd: Path, runner: ShellRunner) -> Too
 
 _MAX_SHELL_OUTPUT = 4000
 
+# Match `mkdir <path>` or `mkdir -p <path>` with NO further chaining
+# (`&&`, `;`, `|`, redirects). The model's pattern is exactly this —
+# one mkdir then a separate write_file — and we want to keep the gate
+# narrow so legitimate compound mkdir invocations still pass.
+_MKDIR_NOOP_RE = re.compile(r"^mkdir(?:\s+-p)?\s+(?P<path>[^\s|&;<>]+)\s*$")
+
 
 async def _run_argv_unchecked(argv: list[str], cwd: Path, timeout: int) -> ShellResult:
     """Run an argv directly via asyncio, bypassing AsyncShellRunner's
@@ -1028,6 +1049,28 @@ async def _tool_shell_exec(
     command = str(decoded.get("command", decoded.get("_raw", ""))).strip()
     if not command:
         return ToolResult(call, output="error: empty command", ok=False)
+
+    # v0.9 loose end B: 14b habitually prefixes a write_file with
+    # `mkdir <dir>` even though write_file creates parents itself.
+    # In sandbox the mkdir fails (exit 1, no -p) — and even when it
+    # succeeds it wastes a turn and triggers a useless confirmation
+    # in skeptic mode. Recognize the simple single-dir case and
+    # treat it as a no-op with an honest warning. Compound commands
+    # (`mkdir x && do_thing`, pipes, redirects) fall through to the
+    # real shell so we don't strip user intent.
+    mkdir_match = _MKDIR_NOOP_RE.match(command)
+    if mkdir_match:
+        target = mkdir_match.group("path")
+        return ToolResult(
+            call,
+            output=(
+                f"no-op: skipped `mkdir {target}` — write_file creates parent "
+                "directories itself. If you actually need an empty directory "
+                f"on disk, use `mkdir -p {target}` (it stays no-op when the "
+                "dir exists), or just call write_file with a path inside it."
+            ),
+            ok=True,
+        )
 
     # `trust` is typed as `str` at the public boundary; the policy module
     # is typed strictly. cast at the boundary; unknown values get
