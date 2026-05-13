@@ -1,0 +1,6 @@
+{"ts": "2026-05-13T14:42:57Z", "event": "step.start", "turn": 1}
+{"ts": "2026-05-13T14:43:23Z", "event": "step.end", "turn": 1}
+{"ts": "2026-05-13T14:44:13Z", "event": "step.start", "turn": 2}
+{"ts": "2026-05-13T14:44:54Z", "event": "step.end", "turn": 2}
+{"ts": "2026-05-13T14:46:13Z", "event": "step.start", "turn": 3}
+{"ts": "2026-05-13T14:46:57Z", "event": "step.end", "turn": 3}
