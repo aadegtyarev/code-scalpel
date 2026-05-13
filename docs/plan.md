@@ -2720,7 +2720,7 @@ Rust language skill / Kubernetes component skill — по запросу.
       теперь это видно пользователю.
 ```
 
-### v0.10 — fork basics
+### ~~v0.10 — fork basics~~ ✓ закрыта 2026-05-13
 
 ```text
 Тезис: на архитектурной развилке решение делегируется лучше
@@ -2747,53 +2747,28 @@ Rust language skill / Kubernetes component skill — по запросу.
 остаётся только для headless (probe / bench / scripted /go где
 TUI нет физически — fall back или halt).
 
-✓ Каркас Fork API (2026-05-13). `code_scalpel/fork.py`: frozen
-  `ForkOption`/`ForkResolution`, `ForkError`, `HumanResolver`
-  Callable type, `LocalMetaForker`. Tolerant brace-counting JSON
-  parser. ⚠ JSON-формат для LocalMeta пересматривается под
-  «текст-формат» (см. probe pass ниже) — на 14b stricter JSON
-  через промпт хрупкий, перепишем в `Pick: …` плоский текст
-  после probe-калибровки.
-
-ВАЖНО: формат вывода резолвера определяется probe-калибровкой
-ДО кодинга (узкий проход «generic_fix_not_prompt»):
-  1. fork_local_meta — стабилен ли «Pick: X / Why: Y» текст
-     на 14b? Сравнить с JSON и (если LM Studio поддерживает)
-     с `response_format=json_schema` structured output.
-  2. fork_reviewer — умеет ли 14b сказать `override` или всегда
-     rubber-stamp'ит `confirm`? Если всегда соглашается —
-     ReviewedAuto бесполезен; перепишем промпт или поменяем
-     температуру до того как код v0.11 будет написан.
-  3. clarify pass — реально углубляет варианты или просто
-     перефразирует? Без углубления `?` кнопка вырождается.
-
-- [ ] Probe-пасс перед кодингом резолверов и detect_forks.
-      `scripts/probe_forks.py` запускает три промпта на 14b
-      (LM Studio) с фиксированными test-кейсами; печатает diff
-      между JSON / Pick-текст / structured-output. Промпты
-      фиксируются ПОСЛЕ probe, не ДО.
-
-- [ ] HumanForker через ChoiceCard — диалог, не одиночный prompt.
-      ChoiceCard несёт три класса кнопок:
-        [A] [B] [C] ...    — собственно варианты;
-        [?: explain]       — расширить (NarrowPass «expand
-                             options»), карточка перерисовывается
-                             с extended summaries; бесконечный
-                             clarify, юзер сам решает когда хватит;
-        [⚡: auto]         — делегировать в LocalMetaForker
-                             (без reviewer'а пока — он в v0.11).
-      Trust-aware таймер (Ctrl+L переключатель уже есть):
-        • skeptic — ∞, юзер обязан ответить;
-        • optimist — 120s countdown, по таймауту → ⚡ Auto;
-        • yolo — сразу ⚡ Auto, КРОМЕ `critical=True` forks где
-                 60s ChoiceCard с countdown, потом ⚡ Auto.
-
-- [ ] `fork_human_fallback: local_meta | error` для headless
-      (probe / bench / /go в фоне без TUI). Default — `local_meta`
-      (мягкий путь). Логируется в stderr — silent fallback скрыл бы
-      что fork сработал.
-
-- [ ] Конфиги:
+- [x] Каркас Fork API (2026-05-13). `code_scalpel/fork.py`: frozen
+      `ForkOption`/`ForkResolution`, `ForkError`, `ChoiceUIHook` /
+      `ChoiceCardOption` types, `HumanForker` / `LocalMetaForker`.
+- [x] Probe pass (2026-05-13). `scripts/probe_forks.py` сравнил
+      три формата (JSON-via-prompt / Pick-Why text / structured
+      output). Победил structured (быстрее, sampler-enforced
+      валидность); переписали LocalMetaForker под
+      `response_format=json_schema`.
+- [x] HumanForker через ChoiceCard (2026-05-13). Трёхрядный диалог
+      [a/b/c…] [?] [⚡]: clarify через `prompts/fork_clarify.md`
+      NarrowPass на t=0.3 (бесконечно по `?`), `⚡` делегирует в
+      LocalMetaForker. Trust-aware таймер: skeptic ∞ / optimist
+      120s / yolo+critical 60s. v0.10c-2 завернул в
+      `asyncio.wait_for`, TimeoutError → fall-through в Auto.
+- [x] `fork_human_fallback: local_meta | error` для headless.
+      Логируется в stderr.
+- [x] Runtime.fork() (2026-05-13). `runtime.fork(question, options,
+      context, *, critical)` — публичная точка которую /plan и /go
+      будут звать в v0.11. TUI прокидывает свой `_fork_ui_hook`
+      (mount ChoiceCard, await ChoiceDecision, asyncio.wait_for
+      timeout); probe/bench без хука → fallback policy.
+- [x] Все конфиги:
         fork_human_fallback: local_meta | error       (default local_meta)
         fork_human_timeout_optimist: 120              (sec)
         fork_human_timeout_yolo_critical: 60          (sec)
