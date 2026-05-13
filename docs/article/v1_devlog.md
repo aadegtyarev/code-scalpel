@@ -2352,6 +2352,33 @@ Legacy v0.9 — **рекорды удержаны** (9/9 + ✓1att + 3/3 как 
 Это нормальный полу-шаг после landing'а v0.8: capabilities те
 же, но **легче и стабильнее**.
 
+**v0.10.0** (Fork API) — **первый явный регресс live-серии**:
+- reached_level: **L3** (откат с L3+)
+- 4 LLM requests, 78s, 4 tool calls, **0 write_file**
+- Plan-mode выдал T001 «Проанализировать существующую структуру»
+  — non-actionable как на v0.7
+- annotate_plan добавил `Skills: python`, но **не переписал**
+  Goal/Files в action-oriented форму как на v0.8/v0.9
+- run_plan: write_file=0 → T001 skipped → stop
+
+Самое интересное наблюдение — **plan-mode non-determinism**. Та
+же реплика, тот же системник в основе, но annotate_plan не
+гарантирует action-orientation. Чтобы план был воспроизводимо
+исполнимым, нужен ещё один guard — AST-check TASKS.md (есть ли
+real-file Files?).
+
+Legacy v0.10:
+- probe.py: 9/9 = (стабильно)
+- probe_code.py: ✓ 1att = (стабильно)
+- probe_recipes.py: 3/3 → **2/3** ↓ (регресс)
+- probe_forks.py: **4/4** NEW (новая capability работает)
+
+Картина «крупной фичи без regression-guard'ов»: fork-инфраструктура
+landed красиво на узком тесте, но смежные оси (live plan, recipes)
+подзаросли. Это normal trade-off большого релиза, но **аргумент
+для статьи**: если бы был probe-suite встроен в CI, регресс на
+recipe-axis отловили бы до merge.
+
 Будут добавлены остальные тэги.
 
 (Эта глава дописывается **по ходу серии**.)
