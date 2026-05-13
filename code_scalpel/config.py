@@ -128,6 +128,14 @@ class AgentConfig(BaseModel):
     # `assert x is not None` cases that look meaningful structurally.
     # Off by default to preserve legacy /go.
     empty_test_detect: bool = False
+    # Run project's own ruff/mypy on each touched file after a /go task
+    # lands. Surfaces findings as a chat card; doesn't fail the task
+    # yet (strict-mode lands after we calibrate false-positives on real
+    # projects). Skipped silently when the linter isn't on PATH.
+    lint_pass: bool = False
+    # Per-linter timeout (seconds). A stuck mypy on a huge project must
+    # not freeze /go between tasks.
+    lint_pass_timeout: int = 15
 
 
 class ModeTemperatures(BaseModel):
