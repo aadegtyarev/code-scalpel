@@ -41,4 +41,4 @@ capabilities-матрице:
 
 | run-id | date | scenario | project | commit | verdict | turns | tokens | one-liner |
 |---|---|---|---|---|---|---|---|---|
-| `a_diag_plan-mini_cli-9d9ba4f-20260513-162209` | 2026-05-13 | a_diag_plan | mini_cli | [`9d9ba4f`](https://github.com/aadegtyarev/code-scalpel/commit/9d9ba4fc452fd168d8af7f9946b662c4a6a3f216) ⚠️dirty | error | 2 | 24k | _(нет one-liner)_ |
+| _(пока пусто — historical-серия ещё не запущена)_ | | | | | | | | |
