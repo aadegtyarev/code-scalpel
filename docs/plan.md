@@ -3003,23 +3003,6 @@ ruff config — получает его. Снимает класс ошибок 
       рефактор средний; пока render показывает «(no edits)»
       для write_file-only attempt'ов, но данные есть на руках.
 
-- [ ] LM Studio swap orchestration для upstream-делегирования.
-      Сейчас `UpstreamProfile` + `UpstreamPendingQueue` + 
-      `Runtime.flush_upstream` создают inrastructure для batch'а,
-      но **сами модель не свапают**. Когда мы передаём
-      `--upstream-model gemma-...` — мы предполагаем что она уже
-      `state: loaded` в LM Studio. На single-GPU машине это
-      физически невозможно одновременно с baseline qwen-14b
-      (VRAM не вмещает). Нужно: перед `flush_upstream`
-      дёрнуть LM Studio REST `POST /v1/models/<id>/load` (или
-      эквивалент), дождаться `state: loaded`, выполнить запрос,
-      опционально вернуть baseline-модель. Probe-suite v2 #3
-      наглядно показал что без этого upstream-функционал на
-      локалке не работает — gemma была не загружена, runner не
-      проверял (только теперь начал — fail-fast если upstream
-      не в `/v1/models`). См. evaluation
-      docs/article/probe-runs/c_fix_bug-mini_cli_with_bug-00916ae-*.
-
 - [ ] Built-in task-manager виджет в TUI по образцу Claude Code.
       Компактный список мелких пунктов (subject + activeForm для
       спиннера) — отличный от полноценного TASKS.md/PlanCard:
@@ -3035,17 +3018,6 @@ ruff config — получает его. Снимает класс ошибок 
       Уточним сценарий когда возьмёмся. Цель — повторить UX из
       Claude Code (вертикальный список с галочкой/спиннером,
       обновляется live).
-
-- [ ] Расширить `Runtime.ask` / `Runtime.stream` параметром
-      `on_tool_executed`. Сейчас `runtime.ask` делает
-      `Session.prepare_turn` + `agent.ask` без hook'а, поэтому
-      caller'ам которым нужен hook (probe-suite v2 runner —
-      пишет каждый tool call в `tools.jsonl` в real-time)
-      приходится повторять `prepare_turn` вручную и звать
-      `agent.ask` напрямую. Это нарушает «один entry point
-      на все каналы» из главы 17 девлога — пробивает дырку
-      ради хука. Правильно — расширить runtime API так чтобы
-      probe не уходил в обход.
 
 - [ ] i18n кодбазы: всё на английский.
       Цель — международная аудитория. Сейчас bilingual: docstring'и

@@ -271,6 +271,55 @@ docs/article/probe-runs/<run-id>/
 - по результату: `grep "user_gave_up" INDEX.md`
 - по содержимому one-liner: `grep "retry" INDEX.md`
 
+## Текущие ограничения runner'а
+
+Здесь — ровно про **probe-инструментарий**, не про продукт. Когда
+закрываем пункт — удаляем его отсюда. В `docs/plan.md` это
+**не** идёт.
+
+- [ ] **Mode-переключение в probe-сессии**.
+      Сейчас `daemon.handle_step()` хардкодит `runtime.agent.ask(...)`
+      → все turn'ы идут в `ask` mode. Реальный workflow scalpel'а:
+      «обсудили (ask/plan) → `/plan` → TASKS.md → `/go` → run_plan
+      в code mode с retry». Probe этого **не моделирует**, поэтому
+      пилоты #1–#3 мерят ask-режим, а не продукт целиком.
+      Нужно:
+        - `probe step --mode {ask|plan|code|review}` — выбор режима
+          для конкретного turn'а;
+        - `probe go <run-id>` — отдельная команда, дёргает
+          `runtime.agent.run_plan()` (то есть автоматический
+          patch-loop в code mode на сгенерированном TASKS.md).
+      Автопереключение режимов в TUI (Ctrl+T) появилось недавно —
+      probe пока не использует, переключаем вручную через `--mode`.
+
+- [ ] **Mechcheckers в коде finalize**.
+      Сейчас `verdict.json` после `probe finalize` несёт только
+      `ended_reason` + пустой `criteria{}`. Сценарные критерии
+      (`tests_pass`, `tasks_md_present` etc) описаны в `scenarios/*.md`
+      словами, но в коде не проверяются. Нужно: парсер scenario.md
+      или маппинг `scenario → checker[]` в `scripts/probes_v2/mechcheckers.py`,
+      и `finalize` запускает соответствующие checker'ы → пишет
+      результаты в `verdict.json.criteria`.
+
+- [ ] **Channel-unification через `Session.prepare_turn` повторяется в демоне**.
+      `daemon.handle_step` сам вызывает `self.runtime.session.prepare_turn(text)`
+      перед `agent.ask(task, on_tool_executed=...)` — потому что
+      `runtime.ask()` делает prepare_turn, но **не принимает**
+      `on_tool_executed`. Нарушение «один entry point», обсуждённое
+      в главе 17 девлога. Лечение — на стороне продукта (расширить
+      `Runtime.ask/stream` параметром), но это **просьба от probe**,
+      не общая нужда. Записано здесь как ограничение probe, не в
+      plan.md как фича.
+
+- [ ] **Swap-сценарий: c_fix_bug не активирует upstream**.
+      Probe pilot #3b показал: swap-инфраструктура работает (PR #79),
+      но на `c_fix_bug` форки не возникают — builder-уровневая
+      задача (read + patch + test) не требует архитектурных решений.
+      Для **измерения swap'а** нужны сценарии с реальными forks:
+      `b_spec_plan` (выбор стека) или `d_new_feature` (как лучше
+      добавить функционал — несколько подходов). Добавить их в
+      `scenarios/` отдельным PR'ом после `--mode` пилота.
+
 ## История по тэгам (адаптация runner'а — часть исследования)
 
 Pilot работает только на main — runner импортирует современный
