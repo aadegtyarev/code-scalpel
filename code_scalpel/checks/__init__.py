@@ -13,5 +13,6 @@ to ask for it.
 from __future__ import annotations
 
 from code_scalpel.checks.empty_tests import EmptyTest, detect_empty_tests
+from code_scalpel.checks.lint_pass import LintReport, lint_paths
 
-__all__ = ["EmptyTest", "detect_empty_tests"]
+__all__ = ["EmptyTest", "LintReport", "detect_empty_tests", "lint_paths"]

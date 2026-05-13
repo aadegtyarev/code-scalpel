@@ -58,6 +58,27 @@ def _changes_include_tests(edits: list[Edit]) -> bool:
     return False
 
 
+def _py_paths_from_step_result(step_result: StepResult, cwd: Path) -> list[Path]:
+    """Every `.py` path touched by the last attempt — test files included.
+
+    Used by lint_pass; ruff/mypy don't care whether it's prod code or
+    a test file. Returns cwd-absolute Paths so the linters see the
+    project layout the user sees.
+    """
+    if not step_result.attempts:
+        return []
+    last = step_result.attempts[-1]
+    out: list[Path] = []
+    seen: set[str] = set()
+    for edit in last.edits:
+        path = edit.path
+        if not path.endswith(".py") or path in seen:
+            continue
+        seen.add(path)
+        out.append(cwd / path)
+    return out
+
+
 def _test_paths_from_step_result(step_result: StepResult, cwd: Path) -> list[Path]:
     """Pick test-like .py paths out of a StepResult's last attempt.
 
@@ -1065,6 +1086,31 @@ class StepAgent:
                                     call,
                                     ToolResult(call, output="\n".join(lines), ok=False),
                                 )
+
+            # Lint pass — run ruff/mypy on every changed .py file
+            # after the task lands. Surface findings as a chat card.
+            # No failed-task escalation yet; the prompt would need to
+            # consume these for autofix in v0.9.b. Skipped silently
+            # when neither linter is on PATH.
+            if outcome.status == "done" and self._config.agent.lint_pass:
+                from code_scalpel.checks import lint_paths
+
+                py_paths = _py_paths_from_step_result(step_result, self._cwd)
+                if py_paths:
+                    with suppress(Exception):
+                        reports = await lint_paths(
+                            py_paths,
+                            self._cwd,
+                            timeout=self._config.agent.lint_pass_timeout,
+                        )
+                        for r in reports:
+                            if r.findings and on_tool_executed is not None:
+                                call = ToolCall(name="lint_pass", body=str(r.path))
+                                with suppress(Exception):
+                                    on_tool_executed(
+                                        call,
+                                        ToolResult(call, output=r.findings, ok=False),
+                                    )
 
             if outcome.status == "done":
                 live_tasks[idx] = Task(id=task.id, title=task.title, body=task.body, done=True)
