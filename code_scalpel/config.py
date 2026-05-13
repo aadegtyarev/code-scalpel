@@ -170,6 +170,13 @@ class AgentConfig(BaseModel):
     # so the script knows it can't proceed. Logged to stderr — a
     # silent fall-through would hide that a human-fork even fired.
     fork_human_fallback: Literal["local_meta", "error"] = "local_meta"
+    # ReviewedAuto vs raw LocalMeta on the Auto path.
+    #   True  — picker + skeptic reviewer, with override + discuss
+    #           anchoring (default; the v0.11 reliability bet).
+    #   False — raw LocalMeta only. Faster (1 LLM call instead of 2),
+    #           no override safety net. Use when you've checked the
+    #           probe results and don't need the reviewer pass.
+    fork_auto_reviewed: bool = True
 
 
 class ModeTemperatures(BaseModel):

@@ -267,6 +267,12 @@ class HumanForker:
         options: tuple[ForkOption, ...],
         context: str,
     ) -> ForkResolution:
+        """Auto-pipeline entry. Default = ReviewedAuto (v0.11 bet);
+        opt-out via `fork_auto_reviewed=False` for callers that
+        prefer the single-pass LocalMeta path (faster, no reviewer
+        safety net)."""
+        if self._config.fork_auto_reviewed:
+            return await ReviewedAutoForker(self._agent).resolve(question, options, context)
         return await LocalMetaForker(self._agent).resolve(question, options, context)
 
     async def _handle_headless(
@@ -417,6 +423,156 @@ class LocalMetaForker:
         return _parse_resolver_reply(result.text, options)
 
 
+_REVIEWER_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "verdict": {"type": "string", "enum": ["confirm", "override", "discuss"]},
+        "alternative": {"type": "string"},
+        "reasoning": {"type": "string"},
+    },
+    "required": ["verdict", "alternative", "reasoning"],
+    "additionalProperties": False,
+}
+
+
+@dataclass(frozen=True)
+class _ReviewVerdict:
+    """Internal record of the reviewer's call. Verdict is a closed
+    enum (confirm / override / discuss); alternative is required only
+    on override and validated against the option set before we trust
+    it."""
+
+    verdict: str
+    alternative: str
+    reasoning: str
+
+
+class ReviewedAutoForker:
+    """Two-pass resolver: picker + skeptic reviewer + anchor.
+
+    The 14b builder isn't good at solo architectural judgement. Two
+    passes through the same model with different roles get
+    materially closer to GPT-4-level review at local cost:
+
+    1. **Picker** (LocalMetaForker, t=0.0). Sampler-enforced
+       `{chosen, reasoning}`. Stable, deterministic per seed.
+    2. **Reviewer** (NarrowPass, t=0.3, separate prompt).
+       Sampler-enforced `{verdict, alternative, reasoning}`.
+       Three verdicts:
+         • `confirm`         → return picker's choice.
+         • `override <name>` → return the named alternative.
+         • `discuss`         → anchor to picker (stable t=0.0).
+
+    Anti-loop is structural — no recursion, no review-of-review.
+    The hard cap `fork_review_max_overrides=1` is built into the
+    two-pass shape, not enforced by a counter.
+
+    Probe (scripts/probe_fork_reviewer.py) calibrated the reviewer
+    on qwen2.5-coder-14b: 0/3 rubber-stamp on override-cases,
+    3/3 alternative-name accuracy. Confidence to ship it as the
+    default Auto path.
+    """
+
+    def __init__(self, agent: StepAgent) -> None:
+        self._agent = agent
+        self._picker = LocalMetaForker(agent)
+
+    async def resolve(
+        self,
+        question: str,
+        options: tuple[ForkOption, ...],
+        context: str,
+    ) -> ForkResolution:
+        if not options:
+            raise ForkError("no options to choose from")
+        # Step 1 — picker. Failure here bubbles; we don't fall back
+        # to anything because the reviewer needs a picker output to
+        # have an opinion on.
+        picker_choice = await self._picker.resolve(question, options, context)
+        # Step 2 — reviewer. If reviewer fails (malformed reply,
+        # rare on structured output but possible) we anchor to the
+        # picker. Reviewer that crashes shouldn't crash the whole
+        # fork.
+        try:
+            verdict = await self._review(question, options, context, picker_choice)
+        except ForkError:
+            return picker_choice
+        if verdict.verdict == "confirm":
+            return picker_choice
+        if verdict.verdict == "override":
+            return ForkResolution(
+                chosen=verdict.alternative,
+                reasoning=f"reviewer overrode picker: {verdict.reasoning}",
+            )
+        # discuss → anchor to picker (t=0.0 is the stable answer).
+        # The caller (HumanForker on optimist/yolo-critical timeout
+        # paths) gets a deterministic outcome; an interactive caller
+        # would have routed to the human instead of falling into the
+        # auto pipeline.
+        return ForkResolution(
+            chosen=picker_choice.chosen,
+            reasoning=f"reviewer flagged discuss; anchored to picker: {verdict.reasoning}",
+        )
+
+    async def _review(
+        self,
+        question: str,
+        options: tuple[ForkOption, ...],
+        context: str,
+        picker_choice: ForkResolution,
+    ) -> _ReviewVerdict:
+        options_block = "\n".join(f"- {o.name}: {o.summary}" for o in options)
+        user_message = (
+            f"Question:\n{question}\n\n"
+            f"Options:\n{options_block}\n\n"
+            f"Context:\n{context}\n\n"
+            f"Picker's choice: {picker_choice.chosen}\n"
+            f"Picker's reasoning: {picker_choice.reasoning}\n"
+        )
+        pass_spec = NarrowPass(
+            name="fork_reviewer",
+            system_prompt=_prompts.FORK_REVIEWER,
+            # 0.3 — probe showed temperature doesn't affect verdicts
+            # (5/6 right at every temp), but 0.3 sits between picker's
+            # 0.0 and the default 0.5 so picker and reviewer don't
+            # collapse onto the same answer when the model is on the
+            # fence.
+            temperature=0.3,
+            output_schema=_REVIEWER_SCHEMA,
+        )
+        result = await self._agent.run_narrow_pass(pass_spec, user_message)
+        payload = _extract_json_object(result.text)
+        if payload is None:
+            raise ForkError(f"reviewer returned non-JSON: {result.text[:200]!r}")
+        try:
+            data = json.loads(payload)
+        except json.JSONDecodeError as e:
+            raise ForkError(f"reviewer returned invalid JSON: {e}") from e
+        verdict = str(data.get("verdict", "")).strip()
+        alternative = str(data.get("alternative", "")).strip()
+        reasoning = str(data.get("reasoning", "")).strip()
+        if verdict not in ("confirm", "override", "discuss"):
+            raise ForkError(f"reviewer returned unknown verdict: {verdict!r}")
+        if verdict == "override":
+            valid = {o.name for o in options}
+            if alternative not in valid:
+                # Reviewer named an option that doesn't exist. Treat
+                # as discuss — the picker's choice is the safer
+                # anchor than a hallucinated alternative.
+                return _ReviewVerdict(
+                    verdict="discuss",
+                    alternative="",
+                    reasoning=(
+                        f"reviewer suggested unknown option {alternative!r}; demoted to discuss"
+                    ),
+                )
+        return _ReviewVerdict(
+            verdict=verdict,
+            alternative=alternative,
+            reasoning=reasoning,
+        )
+
+
 def _parse_resolver_reply(text: str, options: tuple[ForkOption, ...]) -> ForkResolution:
     """Tolerant JSON parse — model sometimes wraps in ```json … ```
     or leaks a stray sentence before the brace. We extract the first
@@ -472,9 +628,13 @@ def _extract_json_object(text: str) -> str | None:
 
 
 __all__ = [
+    "ChoiceCardOption",
+    "ChoiceUIHook",
     "ForkError",
     "ForkOption",
     "ForkResolution",
+    "HumanForker",
     "HumanResolver",
     "LocalMetaForker",
+    "ReviewedAutoForker",
 ]
