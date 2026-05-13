@@ -36,6 +36,7 @@ from typing import Literal
 
 from textual.app import ComposeResult
 from textual.reactive import reactive
+from textual.timer import Timer
 from textual.widget import Widget
 from textual.widgets import Static
 
@@ -164,7 +165,7 @@ class OperationCard(Widget):
         super().__init__()
         self._card_id = card_id
         self._title = title
-        self._tick_handle = None
+        self._tick_handle: Timer | None = None
         # Mutable state stored separately from reactive so we can
         # mutate fields in-place without triggering full recompose.
         # The watcher rebinds when we explicitly call _refresh().
