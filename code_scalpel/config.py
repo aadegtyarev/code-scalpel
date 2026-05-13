@@ -151,7 +151,25 @@ class AgentConfig(BaseModel):
     #                 unattended runs.
     #   upstream    — defer to a separately-configured stronger model
     #                 (future; needs `upstream` profile in `profiles`).
-    fork_resolver: Literal["human", "local_meta", "upstream"] = "human"
+    # Fork delegation behaviour follows `trust` (Ctrl+L). One axis,
+    # one mental model — same logic shell_exec / patch-apply already
+    # ride on:
+    #   skeptic  — ChoiceCard always, no timeout, user answers.
+    #   optimist — ChoiceCard with `fork_human_timeout_optimist` sec
+    #              countdown; on timeout the local model picks in
+    #              architect mode (LocalMetaForker).
+    #   yolo     — LocalMetaForker immediately. EXCEPT forks marked
+    #              `critical=True` — those still show a ChoiceCard
+    #              with `fork_human_timeout_yolo_critical` sec.
+    fork_human_timeout_optimist: int = 120
+    fork_human_timeout_yolo_critical: int = 60
+    # Headless fallback: when there's no TUI to render a ChoiceCard
+    # (probe / bench / scripted /go) but trust would normally ask
+    # the human, what's the policy? `local_meta` keeps the run
+    # moving with the architect-mode model; `error` halts the fork
+    # so the script knows it can't proceed. Logged to stderr — a
+    # silent fall-through would hide that a human-fork even fired.
+    fork_human_fallback: Literal["local_meta", "error"] = "local_meta"
 
 
 class ModeTemperatures(BaseModel):
