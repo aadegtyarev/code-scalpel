@@ -226,10 +226,16 @@ class HumanForker:
         *,
         ui_hook: ChoiceUIHook | None,
         config: AgentConfig,
+        upstream_queue: object | None = None,
     ) -> None:
         self._agent = agent
         self._ui_hook = ui_hook
         self._config = config
+        # Typed as object to avoid an import cycle (UpstreamPendingQueue
+        # is in upstream_queue.py which doesn't depend on fork.py
+        # directly, but Runtime owns both). Duck-typed against
+        # `enqueue(PendingFork)` / `is_empty()`.
+        self._upstream_queue = upstream_queue
 
     async def resolve(
         self,
@@ -301,10 +307,51 @@ class HumanForker:
         """Auto-pipeline entry. Default = ReviewedAuto (v0.11 bet);
         opt-out via `fork_auto_reviewed=False` for callers that
         prefer the single-pass LocalMeta path (faster, no reviewer
-        safety net)."""
+        safety net).
+
+        v0.12: when a Runtime-level upstream_queue is attached, the
+        local resolution is treated as a **temporary** answer the
+        builder uses to keep moving. The same fork is enqueued so
+        the eventual `flush_upstream()` can compare upstream's
+        answer against this one and surface overrides."""
         if self._config.fork_auto_reviewed:
-            return await ReviewedAutoForker(self._agent).resolve(question, options, context)
-        return await LocalMetaForker(self._agent).resolve(question, options, context)
+            resolution = await ReviewedAutoForker(self._agent).resolve(question, options, context)
+        else:
+            resolution = await LocalMetaForker(self._agent).resolve(question, options, context)
+        if self._upstream_queue is not None:
+            self._enqueue_for_upstream(question, options, context, resolution)
+        return resolution
+
+    def _enqueue_for_upstream(
+        self,
+        question: str,
+        options: tuple[ForkOption, ...],
+        context: str,
+        picker_resolution: ForkResolution,
+    ) -> None:
+        """Hand the fork to the pending queue. Best-effort — queue
+        exceptions are suppressed so a wired-but-broken queue can't
+        block the live builder turn."""
+        # fork_id is a short hash of the question — stable enough
+        # for the override commit-collection bookkeeping, and short
+        # enough to read in summary lines.
+        import hashlib
+        from contextlib import suppress
+
+        from code_scalpel.upstream_queue import PendingFork
+
+        fork_id = hashlib.sha256(question.encode()).hexdigest()[:8]
+        pending = PendingFork(
+            fork_id=fork_id,
+            question=question,
+            options=options,
+            context=context,
+            picker_resolution=picker_resolution,
+        )
+        if self._upstream_queue is None:
+            return
+        with suppress(Exception):
+            self._upstream_queue.enqueue(pending)  # type: ignore[attr-defined]
 
     async def _handle_headless(
         self,

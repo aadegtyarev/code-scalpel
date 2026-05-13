@@ -580,6 +580,7 @@ class StepAgent:
         memory: MemoryStore | None = None,
         confirm_shell_exec: ConfirmShellExec | None = None,
         session: Session | None = None,
+        upstream_queue: object | None = None,
     ) -> None:
         self._llm = llm
         self._cwd = cwd
@@ -627,6 +628,12 @@ class StepAgent:
         # decides what stack knowledge it needs and pays the token cost
         # only for what's loaded.
         self._loaded_skills: set[str] = set()
+        # Optional v0.12 upstream batching queue (duck-typed to dodge
+        # the circular import with `runtime`). When set, `run_plan`
+        # calls `record_commit(sha)` after each task that lands a
+        # commit, so the queue can later attribute commits to
+        # forks-in-flight during /escalate flush.
+        self._upstream_queue = upstream_queue
 
     @property
     def history(self) -> list[dict[str, Any]]:
@@ -1159,6 +1166,15 @@ class StepAgent:
                             step_result=step_result,
                             status="failed",
                         )
+                    elif self._upstream_queue is not None:
+                        # Task committed AND we have upstream forks in
+                        # flight — attribute this commit to every
+                        # pending fork so /review-overrides can show
+                        # which commits to inspect if upstream later
+                        # disagrees. Defensive suppress: queue
+                        # bookkeeping must never break /go.
+                        with suppress(Exception):
+                            self._upstream_queue.record_commit(head_after)  # type: ignore[attr-defined]
 
             outcomes.append(outcome)
             if on_task_end is not None:
