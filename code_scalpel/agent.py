@@ -479,24 +479,28 @@ _MUTATING_TOOLS = frozenset({"shell_exec"})
 def _classify_outcome(task: Task, step_result: StepResult) -> TaskOutcome:
     """Decide done / failed / skipped from a `code_with_retry` return.
 
-    - No attempts AND no edits AND no mutating tool calls → model
-      answered in plain text without touching the workspace. Mark
-      "skipped".
-    - No attempts AND no edits BUT successful shell_exec calls → model
-      used shell commands to create/modify files instead of
-      SEARCH/REPLACE blocks. Trust that and mark "done".
-    - Attempts present, last one passed tests → "done".
-    - Attempts present, last one did not pass → "failed". The workspace
-      was rolled back by code_with_retry itself; we keep going.
+    SEARCH/REPLACE path (attempts present):
+      - Last attempt passed tests → "done".
+      - Otherwise → "failed".
+
+    Shell-exec path (no SEARCH/REPLACE blocks emitted):
+      - Any shell_exec calls ran AND all succeeded → "done" (model used
+        shell commands to create/modify files instead of patches).
+      - Any shell_exec calls ran BUT at least one failed → "failed"
+        (model attempted something and it broke).
+      - No mutating tool calls at all → "skipped" (model answered in
+        plain text without touching the workspace).
     """
     attempts = step_result.attempts
     if not attempts:
-        has_exec = any(
-            r.call.name in _MUTATING_TOOLS and r.result.ok
-            for r in step_result.tool_results
-        )
-        status = "done" if has_exec else "skipped"
-        return TaskOutcome(task=task, step_result=step_result, status=status)
+        shell_calls = [
+            r for r in step_result.tool_results if r.call.name in _MUTATING_TOOLS
+        ]
+        if not shell_calls:
+            return TaskOutcome(task=task, step_result=step_result, status="skipped")
+        if all(r.result.ok for r in shell_calls):
+            return TaskOutcome(task=task, step_result=step_result, status="done")
+        return TaskOutcome(task=task, step_result=step_result, status="failed")
     if attempts[-1].tests_passed:
         return TaskOutcome(task=task, step_result=step_result, status="done")
     return TaskOutcome(task=task, step_result=step_result, status="failed")
