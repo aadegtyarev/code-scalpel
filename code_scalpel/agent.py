@@ -145,6 +145,7 @@ _SYSTEM_PROMPT = _prompts.SYSTEM
 _CODE_MODE_ADDENDUM = "\n\n" + _prompts.MODE_CODE
 _REVIEW_MODE_ADDENDUM = "\n\n" + _prompts.MODE_REVIEW
 _PLAN_MODE_ADDENDUM = "\n\n" + _prompts.MODE_PLAN
+_DEBUG_MODE_ADDENDUM = "\n\n" + _prompts.MODE_DEBUG
 
 
 @dataclass(frozen=True)
@@ -2183,6 +2184,8 @@ class StepAgent:
             system += _REVIEW_MODE_ADDENDUM
         elif mode == "code":
             system += _CODE_MODE_ADDENDUM
+        elif mode == "debug":
+            system += _DEBUG_MODE_ADDENDUM
         # Loaded-skills block goes after mode addenda so per-stack rules
         # win against generic mode guidance when they overlap (e.g. test
         # command preference). Always emitted — the model can load_skill

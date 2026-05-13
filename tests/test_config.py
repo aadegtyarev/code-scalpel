@@ -139,7 +139,10 @@ def test_inference_kwargs_per_mode_temperature() -> None:
     assert profile.inference_kwargs("plan")["temperature"] == 0.6
     assert profile.inference_kwargs("code")["temperature"] == 0.3
     assert profile.inference_kwargs("review")["temperature"] == 0.3
-    assert profile.inference_kwargs("debug")["temperature"] == 0.7
+    # v0.12: debug mode arrived as a real mode; old 0.7 was unused.
+    # 0.3 sits between picker (0.0) and reviewer (0.5) — hypothesis
+    # generation wants some diversity, not creativity.
+    assert profile.inference_kwargs("debug")["temperature"] == 0.3
 
 
 def test_inference_kwargs_unknown_mode_falls_back_to_ask() -> None:
@@ -179,7 +182,7 @@ def test_temperature_explicit_per_mode_via_dict() -> None:
     assert profile.inference_kwargs("ask")["temperature"] == 0.0
     assert profile.inference_kwargs("code")["temperature"] == 0.5
     # Unspecified modes keep their defaults.
-    assert profile.inference_kwargs("debug")["temperature"] == 0.7  # default
+    assert profile.inference_kwargs("debug")["temperature"] == 0.3  # default
     assert profile.inference_kwargs("plan")["temperature"] == 0.6  # default
 
 

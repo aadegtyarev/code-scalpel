@@ -539,6 +539,84 @@ async def test_shell_exec_runs_command_in_yolo(tmp_path: Path) -> None:
 
 
 @pytest.mark.asyncio
+async def test_run_python_yolo_passes_snippet_to_shell(tmp_path: Path) -> None:
+    """run_python is a thin wrapper over shell_exec — same trust,
+    same sandbox, same policy. yolo level routes a snippet straight
+    through `<interpreter> -c <quoted>`."""
+    from code_scalpel.tools.shell import ShellResult
+    from tests.mocks import MockShellRunner
+
+    runner = MockShellRunner([ShellResult("hello\n", 0)])
+    call = ToolCall(name="run_python", body='{"snippet": "print(\\"hello\\")"}')
+
+    result = await execute(call, tmp_path, runner=runner, trust="yolo")
+
+    assert result.ok is True
+    assert "hello" in result.output
+    # One shell call landed. Interpreter name varies (python3 likely),
+    # snippet survives intact through shlex.quote.
+    assert len(runner.shell_calls) == 1
+    cmd = runner.shell_calls[0]
+    assert " -c " in cmd
+    assert "print" in cmd
+
+
+@pytest.mark.asyncio
+async def test_run_python_prefers_venv_interpreter(tmp_path: Path) -> None:
+    """When `.venv/bin/python` exists, use it. Otherwise fall back to
+    `python3`. The probe for venv was the v0.7 loose end A failure
+    mode — we want the wrapper to do the right thing for projects
+    with venvs."""
+    from code_scalpel.tools.shell import ShellResult
+    from tests.mocks import MockShellRunner
+
+    (tmp_path / ".venv" / "bin").mkdir(parents=True)
+    (tmp_path / ".venv" / "bin" / "python").write_text("#!/bin/sh\necho fake\n")
+    (tmp_path / ".venv" / "bin" / "python").chmod(0o755)
+
+    runner = MockShellRunner([ShellResult("ok\n", 0)])
+    call = ToolCall(name="run_python", body='{"snippet": "pass"}')
+
+    result = await execute(call, tmp_path, runner=runner, trust="yolo")
+
+    assert result.ok is True
+    assert ".venv/bin/python" in runner.shell_calls[0]
+
+
+@pytest.mark.asyncio
+async def test_run_python_empty_snippet_rejected(tmp_path: Path) -> None:
+    """Empty snippet has nothing to evaluate. Reject explicitly
+    rather than spawn an interpreter for a no-op."""
+    from tests.mocks import MockShellRunner
+
+    runner = MockShellRunner()
+    call = ToolCall(name="run_python", body='{"snippet": ""}')
+
+    result = await execute(call, tmp_path, runner=runner, trust="yolo")
+
+    assert result.ok is False
+    assert "empty snippet" in result.output
+    assert runner.shell_calls == []
+
+
+@pytest.mark.asyncio
+async def test_run_python_skeptic_requires_confirm(tmp_path: Path) -> None:
+    """Same trust policy as shell_exec: skeptic without a confirm
+    handler refuses. Probe / bench / scripted runs that didn't
+    register one know the wrapper inherits the safety rails."""
+    from tests.mocks import MockShellRunner
+
+    runner = MockShellRunner()
+    call = ToolCall(name="run_python", body='{"snippet": "print(1)"}')
+
+    result = await execute(call, tmp_path, runner=runner, trust="skeptic")
+
+    assert result.ok is False
+    assert "refused" in result.output
+    assert runner.shell_calls == []
+
+
+@pytest.mark.asyncio
 async def test_shell_exec_mkdir_is_noop(tmp_path: Path) -> None:
     """v0.9 loose end B: `mkdir <dir>` before a write_file is wasted
     (write_file creates parents). Recognized and short-circuited to
