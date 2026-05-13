@@ -1,0 +1,55 @@
+# probe_code.py
+# exit_code=0
+# duration_sec=43.39
+
+## stdout
+
+========================================================================
+LIVE CODE PROBE — code_with_retry on a sandbox project
+target: qwen2.5-coder-14b @ http://localhost:1234
+========================================================================
+
+Sandbox: /tmp/tmpw53_5x28
+Initial calc.py:
+    def add(a, b):
+        # BUG: should be addition, not subtraction
+        return a - b
+    
+    
+    def multiply(a, b):
+        return a * b
+
+Task: fix the bug in calc.add so all tests pass
+
+
+Attempts: 3
+
+  Attempt 1: ✗ apply failed
+    apply error: SEARCH block did not match calc.py. Source has 6 lines.
+    edits: calc.py, calc.py, calc.py
+
+  Attempt 2: ✗ apply failed
+    apply error: SEARCH block did not match calc.py. Source has 6 lines.
+    edits: calc.py, calc.py, calc.py
+
+  Attempt 3: ✗ apply failed
+    apply error: SEARCH block did not match calc.py. Source has 6 lines.
+    edits: calc.py, calc.py, calc.py
+
+Final calc.py on disk:
+    def add(a, b):
+        # BUG: should be addition, not subtraction
+        return a - b
+    
+    
+    def multiply(a, b):
+        return a * b
+
+========================================================================
+RESULT: ✗ tests still red — rollback ran
+========================================================================
+
+
+## stderr
+
+

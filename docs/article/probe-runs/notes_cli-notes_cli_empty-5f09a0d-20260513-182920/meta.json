@@ -1,0 +1,25 @@
+{
+  "run_id": "notes_cli-notes_cli_empty-5f09a0d-20260513-182920",
+  "scenario": "notes_cli",
+  "project": "notes_cli_empty",
+  "version_tag": "main_5f09a0d",
+  "git_sha": "5f09a0d1749c193196b583054ad5c41176af1cdd",
+  "git_dirty": true,
+  "git_commit_url": "https://github.com/aadegtyarev/code-scalpel/commit/5f09a0d1749c193196b583054ad5c41176af1cdd",
+  "git_checkout_cmd": "git checkout 5f09a0d1749c193196b583054ad5c41176af1cdd",
+  "model_name_expected": "qwen/qwen2.5-coder-14b",
+  "model_name_actual": "qwen/qwen2.5-coder-14b",
+  "model_base_url": "http://localhost:1234/v1",
+  "upstream_model": null,
+  "started_at": "2026-05-13T18:29:20Z",
+  "ended_at": "2026-05-13T18:32:57Z",
+  "ended_reason": "user_gave_up",
+  "user_role": "claude-acting-as-user-per-tone-of-voice.md",
+  "command": "probe start notes_cli notes_cli_empty",
+  "adaptations": {
+    "runtime_kwargs_missing": "Runtime.__init__() got an unexpected keyword argument 'upstream_profile'",
+    "ask.on_tool_executed_missing": "`ask(on_tool_executed=...)` не поддерживается: StepAgent.ask() got an unexpected keyword argument 'on_tool_executed'",
+    "runtime.fork_resolver_missing": "Runtime has no `fork_resolver` attribute on this tag",
+    "run_plan.on_tool_executed_missing": "`run_plan(on_tool_executed=...)` не поддерживается: StepAgent.run_plan() got an unexpected keyword argument 'on_tool_executed'"
+  }
+}
