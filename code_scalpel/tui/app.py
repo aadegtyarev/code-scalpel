@@ -1704,7 +1704,15 @@ class ScalpelApp(App[None]):
         await self.mount(card, before=self.query_one(ModeInput))
         self.call_after_refresh(card.focus)
         try:
-            return await fut
+            # `timeout=None` → wait forever (skeptic trust). A real
+            # number caps the wait; on TimeoutError we return None,
+            # which HumanForker treats as «fall through to Auto».
+            if timeout is None:
+                return await fut
+            try:
+                return await asyncio.wait_for(fut, timeout=float(timeout))
+            except TimeoutError:
+                return None
         finally:
             self._pending_fork_futures.pop(cid, None)
             self.run_worker(self._remove_choice_card(cid), exclusive=False)
