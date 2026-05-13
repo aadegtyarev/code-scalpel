@@ -19,6 +19,7 @@ from code_scalpel.fork import (
     ForkResolution,
     UpstreamProfile,
 )
+from code_scalpel.llm.lmstudio_swap import set_test_transport
 from code_scalpel.runtime import Runtime
 from code_scalpel.upstream_queue import (
     FlushSummary,
@@ -26,6 +27,30 @@ from code_scalpel.upstream_queue import (
     UpstreamPendingQueue,
 )
 from tests.mocks import MockLLMAdapter
+
+
+@pytest.fixture(autouse=True)
+def _no_real_swap() -> object:
+    """flush_upstream обёрнут в swap_to, который дёргает реальную
+    LM Studio через httpx. В юнит-тестах подменяем transport на
+    no-op mock: на любой /models, /models/load, /models/unload
+    отвечаем 200 c пустыми данными — swap_to при этом
+    проваливается через цикл без падений."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        path = request.url.path
+        if path.endswith("/models") and request.method == "GET":
+            return httpx.Response(200, json={"models": []})
+        if path.endswith("/models/load"):
+            return httpx.Response(200, json={"instance_id": "stub", "status": "loaded"})
+        if path.endswith("/models/unload"):
+            return httpx.Response(200, json={"instance_id": "stub"})
+        return httpx.Response(404, json={"error": "not mocked"})
+
+    set_test_transport(httpx.MockTransport(handler))
+    yield None
+    set_test_transport(None)
+
 
 # ── Queue mechanics ──────────────────────────────────────────────
 

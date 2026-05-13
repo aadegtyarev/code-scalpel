@@ -55,7 +55,7 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 # upstream-победитель в свапе). Auto/local-model запрещены —
 # нужен явный id для reproducibility.
 PINNED_BASE_MODEL = "qwen/qwen2.5-coder-14b"
-PINNED_UPSTREAM_MODEL_DEFAULT = "gemma-4-26b-a4b-it-assistant"
+PINNED_UPSTREAM_MODEL_DEFAULT = "google/gemma-4-26b-a4b"
 
 
 @app.command()
@@ -153,6 +153,18 @@ def start(
             err=True,
         )
         raise typer.Exit(1)
+
+    # Reset LM Studio к чистому baseline-состоянию: если baseline
+    # не загружена (например, прошлый probe оставил gemma) —
+    # выгружаем всё и грузим baseline. Probe-прогоны должны
+    # начинаться с одинакового state, иначе swap-orchestration
+    # будет сравнивать с разной точкой отсчёта.
+    if PINNED_BASE_MODEL not in all_loaded:
+        typer.echo(
+            f"● Baseline `{PINNED_BASE_MODEL}` не загружена — выставляю чистый state…",
+            err=True,
+        )
+        _reset_to_baseline(base_url, all_loaded)
 
     upstream_cmd_part = f" --upstream-model={upstream_model}" if upstream_model else ""
     meta = {
@@ -385,6 +397,38 @@ def _append_to_index(meta: dict[str, object], verdict: dict[str, object], paths:
     placeholder = "| _(пока пусто — первый прогон ещё не сделан)_ | | | | | | | | |"
     text = text.replace(placeholder, row.rstrip("\n")) if placeholder in text else text + row
     index.write_text(text)
+
+
+def _reset_to_baseline(base_url: str, currently_loaded: list[str]) -> None:
+    """Выгружает всё что загружено в LM Studio и грузит
+    PINNED_BASE_MODEL. Используется когда probe стартует, а
+    baseline в memory'е нет (после прошлого swap-прогона)."""
+    for iid in currently_loaded:
+        try:
+            urllib.request.urlopen(
+                urllib.request.Request(
+                    f"{base_url.rstrip('/v1')}/api/v1/models/unload",
+                    data=json.dumps({"instance_id": iid}).encode(),
+                    headers={"Content-Type": "application/json"},
+                    method="POST",
+                ),
+                timeout=30,
+            ).read()
+        except urllib.error.URLError as e:
+            typer.echo(f"warning: unload {iid} failed: {e}", err=True)
+    try:
+        urllib.request.urlopen(
+            urllib.request.Request(
+                f"{base_url.rstrip('/v1')}/api/v1/models/load",
+                data=json.dumps({"model": PINNED_BASE_MODEL}).encode(),
+                headers={"Content-Type": "application/json"},
+                method="POST",
+            ),
+            timeout=180,
+        ).read()
+    except urllib.error.URLError as e:
+        typer.echo(f"error: failed to load baseline `{PINNED_BASE_MODEL}`: {e}", err=True)
+        raise typer.Exit(1) from None
 
 
 def _init_workdir_git(workdir: Path) -> None:
