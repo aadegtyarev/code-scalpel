@@ -348,54 +348,86 @@ Workflow для типового probe-сценария:
       добавить функционал — несколько подходов). Добавить их в
       `scenarios/` отдельным PR'ом после `--mode` пилота.
 
-## Historical: level-based прогрессия задач
+## Historical: единый plan→go workflow
 
-**Принцип:** одна задача-нарратив на все версии, но **scope
-действия растёт** с capabilities. На v0.3 — план словами в reply.
-На v0.7 — план + чтение проекта. На v0.10 — план + fork. На
-v0.12 — план + fork + upstream override. Каждый тэг получает
-**верхний достижимый level** — то что версия физически
-может сделать.
+**Главная мысль:** на всех версиях v0.3+ есть полный пайплайн
+`plan mode → TASKS.md → run_plan + code_with_retry`. Меняются
+**инструменты** доступные модели (write_file с v0.7, forks с
+v0.10, upstream с v0.12), но **последовательность команд
+юзера одна и та же**. Probe это и моделирует.
 
-**Базовая задача-нарратив** (одна на всю серию):
-**«спроектируй python-CLI для заметок: команды add / list /
-search / delete. JSON-storage. pytest. Расскажи как построить.»**
-Дальше — с расширением action-scope:
+**Канонический workflow** (повторяет TUI: `/mode plan` → задача
+→ `/loop on` → `/go`):
 
-| Level | Что просим **сверх** предыдущего | Capability | Версии |
-|---|---|---|---|
-| **L1** | только план в reply, словами | reply связный | v0.3, v0.4 |
-| **L2** | + код через SR-блоки в reply (main.py / core.py) | code_with_retry / SR-edits | v0.5 |
-| **L3** | + создать файлы прямо в проекте | write_file | v0.6, v0.7 |
-| **L4** | + TASKS.md в нашем DSL | plan mode + annotate | v0.8, v0.9 |
-| **L5** | + автоматическое /go выполнение | run_plan + machine guards | v0.8, v0.9 (вместе с L4) |
-| **L6** | + fork «стек: SQLite vs flat JSON?» с обоснованием | Fork API | v0.10, v0.11 |
-| **L7** | + сложный fork «multi-user vs single-user storage?» в upstream gemma | upstream + swap | v0.12+ / main |
+1. `probe step --mode plan` с базовой задачей → модель пишет
+   TASKS.md в DSL, `agent._maybe_save_plan` сохраняет автоматом
+   когда видит `## T001:` regex
+2. **Inspect**: TASKS.md есть на диске? Если нет — корректирующий
+   plan-turn с явной просьбой формата (это не подсказка про
+   содержание, это про DSL — что и есть жанр plan mode'а)
+3. `probe go <run-id>` → `agent.run_plan()` ходит по TASKS.md, на
+   каждой task `code_with_retry(mode="code", force_loop=True)`
+4. `probe finalize` — собираем артефакты и mechcheckers
 
-**Правила:**
-- Задача переформулируется когда добавляется scope, но **тезис не
-  меняется**: всё та же заметочница.
-- На каждой версии — **верхний** level. Не «v0.3 не справился с
-  L3» (это очевидно); а «v0.3 на L1: справился / не справился /
-  частично».
-- 1-2 версии **до** capability landing'а гонять предыдущий level
-  чтобы зафиксировать «здесь ещё нет».
-- Реплики юзера соответствуют **mode'у** turn'а (см. секцию
-  «Семантика mode'ов»).
+Подробный сценарий + reference replies — `scenarios/notes_cli.md`.
+Пошаговая операционка — `HISTORICAL_PLAYBOOK.md`.
 
-**Параллельная ось — legacy probe pack:**
+**Базовая задача** (одна на все версии):
 
-На каждой версии гоняем готовые `scripts/probe_*.py` — точечные
-метрики без шума живого диалога:
+> «хочу собрать python-CLI для заметок: команды add, list, search,
+> delete. json-storage, pytest. спроектируй и реализуй с тестами.
+> если есть архитектурные вопросы — задай.»
+
+**Levels (отметки прогресса):** `verdict.json.reached_level`
+пишет максимальный достигнутый:
+
+| Level | Достигнуто |
+|---|---|
+| **L0** | модель не ответила / инфра упала |
+| **L1** | связный план в reply, **но не в DSL** (TASKS.md не сохранился) |
+| **L2** | TASKS.md в нашем DSL — `_maybe_save_plan` сработал |
+| **L3** | `/go` запустился, run_plan хотя бы 1 task взял в работу |
+| **L4** | ≥1 task **done** (tests passed + commit landed) |
+| **L5** | весь план: `run_plan.stopped_reason="all_done"`, pytest зелёный |
+| **L6** | (v0.10+) fork сгенерировался и разрешён в процессе |
+| **L7** | (v0.12+) fork ушёл в upstream, override/confirm |
+
+## Capabilities matrix по версиям (зафиксировано)
+
+| Тэг | tools | mode_addenda | iter_loop | slash | Что важно |
+|---|---|---|---|---|---|
+| v0.3.0 | 9 | 2 | False | `/run` | базовый MVP |
+| v0.5.0 | 10 | 2 | False | `/run` | + retrieve tool |
+| v0.6.0 | 10 | 4 | False | **`/go`** | rename |
+| v0.7.0 | **15** | 6 | False | `/go` | **write_file**, project_map, bwrap |
+| v0.8.0 | 15 | 6 | False | `/go` | narrow passes, annotate_plan |
+| v0.9.0 | 15 | 6 | False | `/go` | machine guards |
+| v0.10.0 | 15 | 6 | False | `/go` | Fork API |
+| v0.11.0 | 15 | 6 | False | `/go` | ReviewedAuto |
+| v0.12.0 | **16** | 6 | False | `/go`+`/escalate` | upstream, swap |
+
+**`iterative_patch_loop = False` на всех версиях по default.** В
+probe мы передаём `force_loop=True` через `code_with_retry`
+kwargs. На v0.3-v0.4 этого параметра нет → compat-shim в
+`daemon._compat_call` его отбросит → retry-loop не сработает.
+Фиксируем как наблюдение в `meta.json.adaptations`, **не лечим**.
+
+## Параллельная ось — legacy probe pack
+
+На каждой версии **дополнительно** гоняем готовые
+`scripts/probe_*.py` — точечные метрики без шума живого диалога:
+
 - `probe.py` — basic /ask, отвечает ли модель
-- `probe_code.py` — 24-test patch pass rate (главное!)
-- `probe_forks.py` — fork resolution 12/12 (v0.10+)
-- `probe_fork_reviewer.py` — reviewer 5/6 × 3 темп (v0.11+)
+- `probe_code.py` — patch pass rate (один-два узких кейса)
+- `probe_recipes.py` — с v0.5
+- `probe_forks.py` — fork resolution (v0.10+)
+- `probe_fork_reviewer.py` — reviewer (v0.11+)
 - `probe_e2e_forks.py` — e2e /go стек (v0.11+)
 
-Артефакты: `docs/article/probe-runs/legacy/<tag>/{probe}.txt`.
-Это даёт **числовой timeline** для графиков статьи — pass rate
-× версия. Live-probe даёт **нарратив** к этим числам.
+Гонит `scripts/probes_v2/legacy_pack.py`. Артефакты —
+`docs/article/probe-runs/legacy/<tag>/`. Это даёт **числовой
+timeline** для графиков статьи 5. Live-probe даёт **нарратив**
+к этим числам.
 
 ## История по тэгам (один runner, идентичные условия)
 
