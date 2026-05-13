@@ -29,7 +29,6 @@ from code_scalpel.config import (
 )
 from code_scalpel.diagrams import extract_mermaid_blocks
 from code_scalpel.jobs import JobRegistry
-from code_scalpel.llm.adapter import ChatResponse
 from code_scalpel.memory import MemoryStore
 from code_scalpel.patch.edit_block import Edit, apply_edits, edits_to_diff, extract_edits
 from code_scalpel.runtime import Runtime
@@ -1072,20 +1071,10 @@ class ScalpelApp(App[None]):
             # the provider didn't emit one — older LM Studio builds, etc. The
             # heuristic was lying about completion=0 whenever a turn ended on
             # a tool-call round with no follow-up text.
-            if usage is not None:
-                prompt_tokens = usage.prompt_tokens
-                completion_tokens = usage.completion_tokens
-            else:
-                prompt_tokens = len(task) // 4 + 1000
-                completion_tokens = len(full) // 4
-            self.session.record(
-                ChatResponse(
-                    content=full,
-                    prompt_tokens=prompt_tokens,
-                    completion_tokens=completion_tokens,
-                    cost=None,
-                )
-            )
+            # Provider didn't emit final usage → char-count heuristic.
+            # Only used for the turn-summary UI; session bookkeeping
+            # happens inside StepAgent.stream_ask (single source of truth).
+            completion_tokens = usage.completion_tokens if usage is not None else len(full) // 4
             self._update_ctx()
 
             # Inline turn summary — replaces the old crowded footer. Mounted
@@ -1484,30 +1473,17 @@ class ScalpelApp(App[None]):
         return "\n".join(parts)
 
     def _record_loop_usage(self, task: str, reply: str, duration: float, attempts: int) -> None:
-        """Session bookkeeping for the /loop path.
+        """Render the turn-summary line for the /loop path.
 
-        Prefers the real usage payload stashed by `_run_first_attempt_streamed`
-        (`stream_ask` aggregates provider numbers across rounds). Falls back to
-        the char-count heuristic only when the streaming path didn't run or
-        the provider didn't include a usage chunk."""
+        Session bookkeeping moved to StepAgent (single source of truth for
+        every entry point — TUI, probe, /go). This method only owns the
+        per-turn summary widget and the footer context indicator update.
+        """
         usage = self._last_stream_usage
         # One-shot — clear so the next /loop call doesn't reuse stale numbers
         # if its stream fails before the UsageReport arrives.
         self._last_stream_usage = None
-        if usage is not None:
-            prompt_tokens = usage.prompt_tokens
-            completion_tokens = usage.completion_tokens
-        else:
-            prompt_tokens = len(task) // 4 + 1000
-            completion_tokens = len(reply) // 4
-        self.session.record(
-            ChatResponse(
-                content=reply,
-                prompt_tokens=prompt_tokens,
-                completion_tokens=completion_tokens,
-                cost=None,
-            )
-        )
+        completion_tokens = usage.completion_tokens if usage is not None else len(reply) // 4
         self._update_ctx()
         summary = _format_turn_summary(
             tool_calls=attempts,

@@ -19,6 +19,7 @@ from code_scalpel.context_compress import (
 
 if TYPE_CHECKING:
     from code_scalpel.memory import MemoryStore
+    from code_scalpel.session import Session
 from code_scalpel import prompts as _prompts
 from code_scalpel.llm.adapter import ChatResponse, LLMAdapter, NativeToolCall
 from code_scalpel.patch.edit_block import Edit, apply_edits, extract_edits
@@ -456,10 +457,17 @@ class StepAgent:
         shell_runner: ShellRunner | None = None,
         memory: MemoryStore | None = None,
         confirm_shell_exec: ConfirmShellExec | None = None,
+        session: Session | None = None,
     ) -> None:
         self._llm = llm
         self._cwd = cwd
         self._config = config
+        # Optional Session for usage accounting. When set, every LLM round
+        # the agent makes — main stream, annotate_plan, _compact — feeds
+        # tokens into it. Without this hook /go silently bypasses session
+        # bookkeeping (it doesn't go through TUI's ask path), so the exit
+        # summary shows zeros after a full run.
+        self._session = session
         # Optional shell runner override — used by tests and by callers that
         # want to point pytest at a sandbox. When None, agent_tools.execute
         # constructs the default AsyncShellRunner per tool call.
@@ -1128,6 +1136,8 @@ class StepAgent:
             response = await self._llm.chat(messages, **profile.inference_kwargs("ask"))
         except Exception:
             return plan_text
+        if self._session is not None:
+            self._session.record(response)
         reply = (response.content or "").strip()
         if not reply:
             return plan_text
@@ -1428,6 +1438,8 @@ class StepAgent:
         profile = self._config.current_profile
         # Compact is a summarization task — use ask-mode (low) temperature.
         response = await self._llm.chat(msgs, **profile.inference_kwargs("ask"))
+        if self._session is not None:
+            self._session.record(response)
         summary = response.content.strip()
         self._history = [
             {
@@ -1505,6 +1517,19 @@ class StepAgent:
             prompt_tokens=prompt_total,
             completion_tokens=completion_total,
         )
+        # Feed Session here too so /go (which bypasses the TUI's ask path
+        # entirely) doesn't end with a zero-token exit summary. The TUI's
+        # streaming path used to call session.record manually after each
+        # turn; that call now lives here, single source of truth.
+        if self._session is not None:
+            self._session.record(
+                ChatResponse(
+                    content="",
+                    prompt_tokens=prompt_total,
+                    completion_tokens=completion_total,
+                    cost=None,
+                )
+            )
 
     async def _run_tool_loop(
         self,

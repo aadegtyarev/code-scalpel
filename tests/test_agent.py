@@ -145,6 +145,36 @@ async def test_ask_records_response_stats(project: Path) -> None:
 
 
 @pytest.mark.asyncio
+async def test_stream_ask_writes_into_session(project: Path) -> None:
+    """Regression for v0.7 bug G: /go bypassed TUI's manual session.record
+    and the exit summary stayed at zero after a full plan. Now StepAgent
+    owns session bookkeeping for every entry point — TUI, probe, /go."""
+    from code_scalpel.session import Session
+
+    session = Session()
+    llm = MockLLMAdapter(["hello"])
+    agent = StepAgent(llm=llm, cwd=project, config=_CONFIG, session=session)
+
+    await agent.ask("hi")
+
+    assert session.requests == 1
+    assert session.total_completion_tokens > 0
+    assert session.total_prompt_tokens > 0
+
+
+@pytest.mark.asyncio
+async def test_stream_ask_without_session_does_not_crash(project: Path) -> None:
+    """Session is optional — agent constructed without it (probe, bench,
+    legacy tests) must not blow up on the new bookkeeping path."""
+    llm = MockLLMAdapter(["hello"])
+    agent = StepAgent(llm=llm, cwd=project, config=_CONFIG)
+
+    result = await agent.ask("hi")
+
+    assert result.reply == "hello"
+
+
+@pytest.mark.asyncio
 async def test_project_map_tool_walks_subdirs(tmp_path: Path) -> None:
     """project_map() (no path) returns a tree across nested
     directories. This is the model's main orientation entry point

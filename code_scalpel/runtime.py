@@ -67,6 +67,7 @@ class Runtime:
             config=config,
             memory=self.memory,
             confirm_shell_exec=confirm_shell_exec,
+            session=self.session,
         )
 
     async def stream(
