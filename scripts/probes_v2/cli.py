@@ -110,6 +110,13 @@ def start(
         shutil.rmtree(workdir)
     shutil.copytree(fixture_path, workdir)
 
+    # scalpel ожидает что cwd — git-репо (commits_landed мехчекер,
+    # auto_git в config). Инициализируем чистый репо со стартовым
+    # commit'ом — fixture получает свежий git, всё что добавит
+    # модель будет «после» init-коммита и легко считается через
+    # `git rev-list HEAD ^<init-sha>`.
+    _init_workdir_git(workdir)
+
     # Tar.gz «начального» состояния — для сценариев которые
     # стартуют с пустой папки tar просто пустой. Берём fixture,
     # не workdir — они идентичны на этом этапе, и tar.gz fixture'ы
@@ -360,6 +367,33 @@ def _append_to_index(meta: dict[str, object], verdict: dict[str, object], paths:
     placeholder = "| _(пока пусто — первый прогон ещё не сделан)_ | | | | | | | | |"
     text = text.replace(placeholder, row.rstrip("\n")) if placeholder in text else text + row
     index.write_text(text)
+
+
+def _init_workdir_git(workdir: Path) -> None:
+    """Свежий git-репо внутри workdir со стартовым коммитом
+    «probe-fixture initial state». user.name / user.email
+    локально (не глобально) — чтобы probe не подтягивал
+    личные данные пользователя из ~/.gitconfig."""
+    env = {"GIT_TERMINAL_PROMPT": "0"}
+    subprocess.run(
+        ["git", "init", "-q"], cwd=workdir, check=True, env={**__import__("os").environ, **env}
+    )
+    subprocess.run(
+        ["git", "config", "user.email", "probe@code-scalpel.local"],
+        cwd=workdir,
+        check=True,
+    )
+    subprocess.run(
+        ["git", "config", "user.name", "code-scalpel probe"],
+        cwd=workdir,
+        check=True,
+    )
+    subprocess.run(["git", "add", "."], cwd=workdir, check=True)
+    subprocess.run(
+        ["git", "commit", "-q", "-m", "probe-fixture initial state"],
+        cwd=workdir,
+        check=True,
+    )
 
 
 def _detect_lmstudio_model(base_url: str) -> str:
