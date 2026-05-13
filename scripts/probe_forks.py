@@ -165,11 +165,7 @@ SCHEMA: dict[str, Any] = {
 
 def _user_message(case: ForkCase) -> str:
     options_block = "\n".join(f"- {name}: {summary}" for name, summary in case.options)
-    return (
-        f"Question:\n{case.question}\n\n"
-        f"Options:\n{options_block}\n\n"
-        f"Context:\n{case.context}\n"
-    )
+    return f"Question:\n{case.question}\n\nOptions:\n{options_block}\n\nContext:\n{case.context}\n"
 
 
 async def call_llm(
@@ -285,14 +281,10 @@ async def run_one(
 ) -> CaseResult:
     user = _user_message(case)
     if fmt == "json":
-        text, tokens, dt = await call_llm(
-            client, system=PROMPT_JSON, user=user, structured=False
-        )
+        text, tokens, dt = await call_llm(client, system=PROMPT_JSON, user=user, structured=False)
         parsed = parse_json_loose(text)
     elif fmt == "text":
-        text, tokens, dt = await call_llm(
-            client, system=PROMPT_TEXT, user=user, structured=False
-        )
+        text, tokens, dt = await call_llm(client, system=PROMPT_TEXT, user=user, structured=False)
         parsed = parse_text(text)
     elif fmt == "structured":
         text, tokens, dt = await call_llm(

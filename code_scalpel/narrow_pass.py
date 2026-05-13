@@ -18,7 +18,8 @@ the whole point: every fresh turn carries only its own ask.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from typing import Any
 
 
 @dataclass(frozen=True)
@@ -31,11 +32,19 @@ class NarrowPass:
     when given a paragraph of vague guidance. `temperature` overrides
     the per-mode default; reviewers tend to want it higher, sanity
     checks lower.
+
+    `output_schema` — optional JSON Schema for sampler-enforced
+    structured output (LM Studio / OpenAI / OpenRouter all support
+    `response_format=json_schema`). When set, the model is guaranteed
+    to emit valid JSON conforming to the schema, no prompt-begging.
+    Probe (scripts/probe_forks.py) showed structured output on 14b
+    is faster than JSON-via-prompt and equally token-efficient.
     """
 
     name: str
     system_prompt: str
     temperature: float = 0.0
+    output_schema: dict[str, Any] | None = field(default=None)
 
 
 @dataclass(frozen=True)

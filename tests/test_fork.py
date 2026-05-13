@@ -97,7 +97,8 @@ def project(tmp_path: Path) -> Path:
 @pytest.mark.asyncio
 async def test_local_meta_forker_resolves(project: Path) -> None:
     """End-to-end: agent + LocalMetaForker pick the option the
-    mock LLM returns, at temperature 0.0."""
+    mock LLM returns, at temperature 0.0, with sampler-enforced
+    structured output (`response_format=json_schema`)."""
     llm = MockLLMAdapter(['{"chosen": "asyncpg", "reasoning": "non-blocking I/O"}'])
     agent = StepAgent(llm=llm, cwd=project, config=_CONFIG)
     forker = LocalMetaForker(agent)
@@ -114,6 +115,15 @@ async def test_local_meta_forker_resolves(project: Path) -> None:
     assert res.chosen == "asyncpg"
     assert "I/O" in res.reasoning
     assert llm.kwargs_calls[0]["temperature"] == 0.0
+    # Structured output schema must be threaded through — that's what
+    # probe_forks.py showed is the most reliable format on 14b. Drop
+    # this assert and the resolver silently regresses to JSON-via-
+    # prompt, which loses ~30% latency and gains parse-error risk.
+    rf = llm.kwargs_calls[0].get("response_format")
+    assert rf is not None
+    assert rf["type"] == "json_schema"
+    assert rf["json_schema"]["name"] == "fork_local_meta"
+    assert rf["json_schema"]["strict"] is True
 
 
 @pytest.mark.asyncio

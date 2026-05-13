@@ -1611,6 +1611,20 @@ class StepAgent:
         # builder's deterministic sampling for hypothesis-generation
         # roles like reviewer.
         kwargs["temperature"] = pass_spec.temperature
+        # Sampler-enforced structured output when the pass declares a
+        # schema — LM Studio / OpenAI / OpenRouter all honour the same
+        # `response_format=json_schema` shape. Probe (probe_forks.py)
+        # showed this is faster than JSON-via-prompt on 14b and removes
+        # the parser-error class entirely.
+        if pass_spec.output_schema is not None:
+            kwargs["response_format"] = {
+                "type": "json_schema",
+                "json_schema": {
+                    "name": pass_spec.name,
+                    "strict": True,
+                    "schema": pass_spec.output_schema,
+                },
+            }
         response = await self._llm.chat(messages, **kwargs)
         if self._session is not None:
             self._session.record(response)
