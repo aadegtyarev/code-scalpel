@@ -3003,6 +3003,33 @@ ruff config — получает его. Снимает класс ошибок 
       рефактор средний; пока render показывает «(no edits)»
       для write_file-only attempt'ов, но данные есть на руках.
 
+- [ ] Built-in task-manager виджет в TUI по образцу Claude Code.
+      Компактный список мелких пунктов (subject + activeForm для
+      спиннера) — отличный от полноценного TASKS.md/PlanCard:
+      план — про задачи проекта (Files/Tests/Acceptance), а
+      task-manager — про **текущую сессию агента**, мелкие
+      шаги. Возможные варианты:
+        a) расширить StepAgent: завести in-memory задачи,
+           показывать в правой панели TUI с зачёркиванием
+           done и спиннером on in_progress;
+        b) сделать как tool `task_create/update/list` — модель
+           ведёт сама когда видит multi-step работу;
+        c) гибрид — slash + tool.
+      Уточним сценарий когда возьмёмся. Цель — повторить UX из
+      Claude Code (вертикальный список с галочкой/спиннером,
+      обновляется live).
+
+- [ ] Расширить `Runtime.ask` / `Runtime.stream` параметром
+      `on_tool_executed`. Сейчас `runtime.ask` делает
+      `Session.prepare_turn` + `agent.ask` без hook'а, поэтому
+      caller'ам которым нужен hook (probe-suite v2 runner —
+      пишет каждый tool call в `tools.jsonl` в real-time)
+      приходится повторять `prepare_turn` вручную и звать
+      `agent.ask` напрямую. Это нарушает «один entry point
+      на все каналы» из главы 17 девлога — пробивает дырку
+      ради хука. Правильно — расширить runtime API так чтобы
+      probe не уходил в обход.
+
 - [ ] i18n кодбазы: всё на английский.
       Цель — международная аудитория. Сейчас bilingual: docstring'и
       по-английски, inline-комментарии часто по-русски, plan.md
