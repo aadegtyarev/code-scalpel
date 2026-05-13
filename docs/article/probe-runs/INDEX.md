@@ -24,16 +24,21 @@ grep "retry" INDEX.md         # все где упоминается retry в on
 | `tokens` | суммарно prompt+completion, тысячами (`12k`) |
 | `one-liner` | одна фраза из evaluation.md `One-liner` секции |
 
+## Стратегия historical-серии
+
+**От старого к новому**, baseline = v0.3.0. Сравниваем всегда
+**новые прогоны со старыми**, не наоборот.
+
+**Общая ось:** `a_diag_plan` (планирование) на **всех** версиях
+начиная с v0.3 — это даёт чистую кривую «как меняется качество
+планирования от MVP к main». Другие сценарии добавляются по
+capabilities-матрице:
+- v0.5+ → + `c_fix_bug` (с появлением code_with_retry)
+- v0.6+ → + `d_new_feature` (с появлением write_file)
+- v0.10+ → + swap-тесты (с появлением Fork API)
+
 ## Таблица прогонов
 
 | run-id | date | scenario | project | commit | verdict | turns | tokens | one-liner |
 |---|---|---|---|---|---|---|---|---|
-| `c_fix_bug-mini_cli_with_bug-ad51ab8-20260513-144155` | 2026-05-13 | c_fix_bug | mini_cli_with_bug | [`ad51ab8`](https://github.com/aadegtyarev/code-scalpel/commit/ad51ab87bca083ea087ace2c64499c6a1bd4ef7f) | user_gave_up | 3 | 144k | _(нет one-liner)_ |
-
-Дополнительные срезы по версиям / capabilities-матрица —
-появятся когда соберём 5+ прогонов (см. `scripts/probes_v2/PROTOCOL.md`,
-секция «История»).
-| `a_diag_plan-mini_cli-bca504e-20260513-145240` | 2026-05-13 | a_diag_plan | mini_cli | [`bca504e`](https://github.com/aadegtyarev/code-scalpel/commit/bca504e014603de1bb8f0ac9e6b48fd5d6b99ca5) ⚠️dirty | task_solved | 3 | 26k | _(нет one-liner)_ |
-| `c_fix_bug-mini_cli_with_bug-00916ae-20260513-145908` | 2026-05-13 | c_fix_bug | mini_cli_with_bug | [`00916ae`](https://github.com/aadegtyarev/code-scalpel/commit/00916ae070210a4466cbe5be61ab05e76e35e0e6) ⚠️dirty | error | 1 | 31k | _(нет one-liner)_ |
-| `c_fix_bug-mini_cli_with_bug-450cf87-20260513-153012` | 2026-05-13 | c_fix_bug | mini_cli_with_bug | [`450cf87`](https://github.com/aadegtyarev/code-scalpel/commit/450cf876293e7f56af433cea78c1d780c92b4cba) | user_gave_up | 2 | 87k | _(нет one-liner)_ |
-| `c_fix_bug-mini_cli_with_bug-a392a2e-20260513-160019` | 2026-05-13 | c_fix_bug | mini_cli_with_bug | [`a392a2e`](https://github.com/aadegtyarev/code-scalpel/commit/a392a2ec8c1d641bbd112679bb34a79ea6e8aa2f) | user_gave_up | 2 | 205k | _(нет one-liner)_ |
+| `a_diag_plan-mini_cli-9d9ba4f-20260513-162209` | 2026-05-13 | a_diag_plan | mini_cli | [`9d9ba4f`](https://github.com/aadegtyarev/code-scalpel/commit/9d9ba4fc452fd168d8af7f9946b662c4a6a3f216) ⚠️dirty | error | 2 | 24k | _(нет one-liner)_ |
