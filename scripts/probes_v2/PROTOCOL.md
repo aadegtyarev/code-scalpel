@@ -20,6 +20,21 @@
 | Fixture | полный `tar.gz` в каждом прогоне |
 | Реестр | `docs/article/probe-runs/INDEX.md`, обновляется после каждого finalize |
 
+## Иерархия метрик
+
+**Первичная**: **задача решена?** — binary, по `verdict.json.criteria`
+(pytest exit 0 / TASKS.md валиден / новый тест проходит — зависит
+от сценария). Если решена ровно нигде — сильный сигнал, числа
+вторичны.
+
+**Вторичная** (когда первичная = true): трудозатраты —
+`user_turns`, `agent_llm_requests`, `prompt+completion_tokens`,
+`prompt_tokens_peak`, `retries`, `tool_calls_total/by_name`,
+`wall_time_sec` из `metrics.json`.
+
+Если задача не решена — те же числа лежат рядом, но читаются
+как диагностика «куда ушло время», не как мера эффективности.
+
 ## CLI команды runner'а
 
 Всё через `scripts/probes_v2/cli.py`. Реализация — отдельный PR.
