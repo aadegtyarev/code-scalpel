@@ -1,0 +1,63 @@
+{
+  "tag": "v0.11.0",
+  "ran_at": "2026-05-13T20:14:29Z",
+  "probes": [
+    {
+      "name": "probe.py",
+      "status": "ok",
+      "exit_code": 0,
+      "duration_sec": 195.48,
+      "pass_rate_guess": [
+        9,
+        9
+      ],
+      "stdout_path": "docs/article/probe-runs/legacy/v0.11.0/probe.py.txt"
+    },
+    {
+      "name": "probe_code.py",
+      "status": "ok",
+      "exit_code": 0,
+      "duration_sec": 15.16,
+      "pass_rate_guess": null,
+      "stdout_path": "docs/article/probe-runs/legacy/v0.11.0/probe_code.py.txt"
+    },
+    {
+      "name": "probe_recipes.py",
+      "status": "ok",
+      "exit_code": 0,
+      "duration_sec": 105.31,
+      "pass_rate_guess": [
+        3,
+        3
+      ],
+      "stdout_path": "docs/article/probe-runs/legacy/v0.11.0/probe_recipes.py.txt"
+    },
+    {
+      "name": "probe_forks.py",
+      "status": "ok",
+      "exit_code": 0,
+      "duration_sec": 25.68,
+      "pass_rate_guess": [
+        4,
+        4
+      ],
+      "stdout_path": "docs/article/probe-runs/legacy/v0.11.0/probe_forks.py.txt"
+    },
+    {
+      "name": "probe_fork_reviewer.py",
+      "status": "ok",
+      "exit_code": 0,
+      "duration_sec": 33.73,
+      "pass_rate_guess": [
+        3,
+        3
+      ],
+      "stdout_path": "docs/article/probe-runs/legacy/v0.11.0/probe_fork_reviewer.py.txt"
+    },
+    {
+      "name": "probe_e2e_forks.py",
+      "status": "skipped",
+      "reason": "not_found_at_this_tag"
+    }
+  ]
+}

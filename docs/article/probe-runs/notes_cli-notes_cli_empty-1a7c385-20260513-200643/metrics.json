@@ -1,0 +1,16 @@
+{
+  "user_turns": 1,
+  "agent_llm_requests": 4,
+  "prompt_tokens_total": 19914,
+  "completion_tokens_total": 2046,
+  "prompt_tokens_peak": 6544,
+  "tool_calls_total": 4,
+  "tool_calls_by_name": {
+    "annotate_plan": 2,
+    "auto_load_skill": 1,
+    "project_map": 1
+  },
+  "retries": 0,
+  "commits_landed": 0,
+  "wall_time_sec": 80.66
+}

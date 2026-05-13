@@ -2379,6 +2379,29 @@ landed красиво на узком тесте, но смежные оси (li
 для статьи**: если бы был probe-suite встроен в CI, регресс на
 recipe-axis отловили бы до merge.
 
+**v0.11.0** (ReviewedAuto fork) — **частичное recovery**:
+- reached_level: **L3** (как v0.10, регресс persists)
+- Live идентичен v0.10: 4 LLM requests, 80s, 0 write_file
+- Legacy: **probe_recipes recovery 2/3 → 3/3** (как v0.8/v0.9)
+- Новый axis: **probe_fork_reviewer 3/3** NEW
+
+Live-регресс **точно повторился** на v0.11 — это **не флуктуация
+temperature**, а системное свойство v0.10+ цепочки. Recovery
+probe_recipes подтверждает: причина live-регресса **другая** чем
+причина recipes-регресса. Recipes починили целево, live требует
+отдельной работы над plan-mode (annotate_plan слабее переписывает
+«анализ» задачи в action-форму).
+
+| Метрика | v0.10 | v0.11 |
+|---|---|---|
+| live reached_level | L3 | L3 = |
+| live write_file | 0 | 0 = |
+| probe_recipes | 2/3 | **3/3** ↑ |
+| probe_fork_reviewer | — | **3/3** NEW |
+
+Это усиливает аргумент для CI-probes: видно где **локально**
+починили (recipes), а где **системно** просел (live plan).
+
 Будут добавлены остальные тэги.
 
 (Эта глава дописывается **по ходу серии**.)

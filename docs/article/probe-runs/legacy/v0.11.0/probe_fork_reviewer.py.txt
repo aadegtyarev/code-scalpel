@@ -1,0 +1,42 @@
+# probe_fork_reviewer.py
+# exit_code=0
+# duration_sec=33.73
+
+## stdout
+
+Model: qwen/qwen2.5-coder-14b
+Cases: 6 × 3 temperatures = 18 calls
+
+── Temperature 0.0 ──
+  confirm_asyncpg_for_asyncio                ✓ expected=confirm  got=confirm  2.1s/45tok
+  confirm_pytest_for_greenfield              ✓ expected=confirm  got=confirm  1.6s/52tok
+  override_async_into_sync_context           ✓ expected=override got=override alt='psycopg2' match=✓ 1.5s/50tok
+  override_cloud_under_offline_constraint    ✓ expected=override got=override alt='sqlite' match=✓ 2.0s/73tok
+  override_framework_for_no_framework        ✓ expected=override got=override alt='none' match=✓ 2.1s/63tok
+  discuss_sync_http_client                   ✗ expected=discuss  got=confirm  1.9s/69tok
+
+── Temperature 0.3 ──
+  confirm_asyncpg_for_asyncio                ✓ expected=confirm  got=confirm  1.7s/57tok
+  confirm_pytest_for_greenfield              ✓ expected=confirm  got=confirm  1.7s/53tok
+  override_async_into_sync_context           ✓ expected=override got=override alt='psycopg2' match=✓ 1.5s/50tok
+  override_cloud_under_offline_constraint    ✓ expected=override got=override alt='sqlite' match=✓ 1.6s/56tok
+  override_framework_for_no_framework        ✓ expected=override got=override alt='none' match=✓ 2.2s/63tok
+  discuss_sync_http_client                   ✗ expected=discuss  got=confirm  1.7s/60tok
+
+── Temperature 0.5 ──
+  confirm_asyncpg_for_asyncio                ✓ expected=confirm  got=confirm  1.4s/47tok
+  confirm_pytest_for_greenfield              ✓ expected=confirm  got=confirm  1.5s/49tok
+  override_async_into_sync_context           ✓ expected=override got=override alt='psycopg2' match=✓ 1.7s/54tok
+  override_cloud_under_offline_constraint    ✓ expected=override got=override alt='sqlite' match=✓ 2.4s/82tok
+  override_framework_for_no_framework        ✓ expected=override got=override alt='none' match=✓ 2.5s/72tok
+  discuss_sync_http_client                   ✗ expected=discuss  got=confirm  1.5s/51tok
+
+=== SUMMARY ===
+  t=0.0: correct 5/6  rubber-stamp on overrides 0/3  alt-name correct 3/3
+  t=0.3: correct 5/6  rubber-stamp on overrides 0/3  alt-name correct 3/3
+  t=0.5: correct 5/6  rubber-stamp on overrides 0/3  alt-name correct 3/3
+
+
+## stderr
+
+
