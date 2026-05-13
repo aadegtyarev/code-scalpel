@@ -2246,6 +2246,22 @@ qwen-14b — **+2 уровня прогресса за одно правильн
 Stable baseline-frame {v0.3-v0.6} в live (все L3). Перелом
 ожидаем на v0.7 (write_file + project_map + bwrap landed).
 
+**v0.7.0** (write_file + annotate_plan landed) — **первый прорыв
+в tools**:
+- reached_level: **L3** (тот же что baseline, но качественно иначе)
+- **tool_calls: 0 → 3** (annotate_plan ×2 + project_map ×1)
+- LLM requests: 10 → 4 (run_plan остановился на T001)
+- stopped_reason: all_done → **task_not_done** (run_plan честнее
+  классифицирует skipped после фикса «surface tool calls»)
+- files на диске: всё ещё 0 (write_file в API есть, но модель
+  его не дёргает на задаче «создать файл»)
+
+Это **первая точка прогресса** в серии после ровного baseline'а
+{v0.3-v0.6}. План-цепочка обогатилась: модель **сама** дёрнула
+project_map чтобы прочитать проект, annotate_plan автоматически
+обогатил TASKS.md деталями. Но звено «писать через write_file»
+ещё не закрыто — это для следующих версий.
+
 Будут добавлены остальные тэги.
 
 (Эта глава дописывается **по ходу серии**, по одному prograph'у

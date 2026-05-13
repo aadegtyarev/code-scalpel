@@ -1,0 +1,56 @@
+# probe.py
+# exit_code=0
+# duration_sec=188.32
+
+## stdout
+
+========================================================================
+LIVE PROBE — типовые сценарии использования
+target: qwen2.5-coder-14b @ http://localhost:1234
+========================================================================
+
+[overview] High-level architecture description — map alone enough
+  ✗ none of ('code-scalpel', 'tui', 'агент') in T1: 'Конечно, начну с вызова `project_map()` для получения общей картины файлов и их '
+     T1: Конечно, начну с вызова `project_map()` для получения общей картины файлов и их структуры в проекте. Это…
+
+[flow] Trace the flow — needs imports + reasoning across files
+  ✓ 'модул' found in T1
+     T1: Обработка запроса пользователя до вызова модели языка (LLM) проходит через следующие ключевые модули: 1.…
+
+[classifier-usage] 'Is classifier.py used in main flow?' — needs grep, NOT in agent.py imports
+  ✓ 'не используется' found in T1
+     T1: Чтобы проверить, используется ли `classifier.py` где-то в основном потоке агента, мне нужно сначала увидеть,…
+
+[misattribution-repro] 2026-05-11 bug: compact vs mark_compacted — model must pick the real one
+  ✓ 'сжима' found in T1
+     T1: Ищу, где контекст сжимается. Сначала посмотрю общую структуру проекта. Из списка файлов я вижу, что есть файл…
+
+[short-followup] Sonet bug: long T1, short T2 clarification — model must NOT repeat T1
+  ✓ no consecutive-turn repeats
+     T1: Чтобы добавить в проект работу с антропическими моделями, вам нужно выполнить несколько шагов. Вот общий план…
+     T2: Конечно, вот пример шестистошкольного стихотворения (сонаетта): ``` Встречаю тебя у леса в глубокой пустоте,…
+
+[ask-nonexistent] Method that doesn't exist — must admit, not invent
+  ✓ 'не' found in T1
+     T1: Ищу функцию `quick_sort` в проекте. Кажется, функция `quick_sort` не найдена в проекте. Попробуем поискать…
+
+[show-method-body] Show body of a real method — must read_file, not guess
+  ✓ 'mark_compacted' found in T1
+     T1: Извините, но я не могу найти файл `session.py` в вашем проекте. Пожалуйста, убедитесь, что вы указали…
+
+[task-engages-with-project] 'найди место чтобы ...' must trigger tool calls and engage with real files
+  ✓ 'footer' found in T1
+     T1: Файл `code_scalpel/tui/widgets/footer.py` содержит 87 строк. Давайте посмотрим, что в нем: Файл…
+
+[plan-mode] Plan mode: produce TASKS.md structure
+  ✓ '## T001' found in T1
+     T1: ## T001: Определение маршрута для /history Goal: Добавить маршрут `/history` в приложение для отображения…
+
+========================================================================
+RESULT: 8/9 passed
+========================================================================
+
+
+## stderr
+
+
