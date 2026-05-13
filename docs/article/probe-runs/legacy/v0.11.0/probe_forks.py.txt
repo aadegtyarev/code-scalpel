@@ -1,0 +1,38 @@
+# probe_forks.py
+# exit_code=0
+# duration_sec=25.68
+
+## stdout
+
+Model: qwen/qwen2.5-coder-14b
+Cases: 4 × 3 formats = 12 calls
+
+=== asyncio_db_driver ===
+  json        ✓ chose='asyncpg'      valid=True expected=True lines=1 1.7s/42tok
+  text        ✓ chose='asyncpg'      valid=True expected=True lines=3 2.8s/86tok
+  structured  ✓ chose='asyncpg'      valid=True expected=True lines=1 2.2s/57tok
+
+=== cli_test_runner ===
+  json        ✓ chose='pytest'       valid=True expected=True lines=1 1.4s/46tok
+  text        ✓ chose='pytest'       valid=True expected=True lines=3 2.7s/89tok
+  structured  ✓ chose='pytest'       valid=True expected=True lines=1 2.2s/51tok
+
+=== sync_http_client ===
+  json        ✓ chose='requests'     valid=True expected=True lines=1 1.2s/40tok
+  text        ✓ chose='requests'     valid=True expected=True lines=3 2.5s/83tok
+  structured  ✓ chose='requests'     valid=True expected=True lines=1 1.8s/45tok
+
+=== constrained_choice ===
+  json        ✓ chose='none'         valid=True expected=True lines=1 1.7s/56tok
+  text        ✓ chose='none'         valid=True expected=True lines=3 2.4s/73tok
+  structured  ✓ chose='none'         valid=True expected=True lines=1 2.0s/48tok
+
+=== SUMMARY ===
+  json        parse 4/4  valid 4/4  matched-expected 4/4  avg 1.5s / 46tok
+  text        parse 4/4  valid 4/4  matched-expected 4/4  avg 2.6s / 83tok
+  structured  parse 4/4  valid 4/4  matched-expected 4/4  avg 2.0s / 50tok
+
+
+## stderr
+
+
