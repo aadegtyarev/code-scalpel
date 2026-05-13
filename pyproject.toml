@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "code-scalpel"
-version = "0.12.0"
+version = "0.12.5.dev0"
 description = "TUI coding agent for precise work with code through weak local LLMs"
 license = "AGPL-3.0-or-later"
 authors = [{ name = "Alexander Degtyarev" }]
