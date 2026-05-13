@@ -2327,6 +2327,31 @@ Legacy v0.8 — **рекорды по всем осям**:
 oriented задачи), `auto_load_skill` (Skills загружаются перед
 task'ом), narrow_pass framework как общая инфраструктура.
 
+**v0.9.0** (machine guards: mkdir/empty-content/lint pass/
+AST empty-test/AST import-graph) — **закрепление прорыва
+v0.8, оптимизация цены**:
+- reached_level: **L3+** (= v0.8)
+- 17 LLM requests (vs 25 на v0.8, **-32%**)
+- 111k total tokens (vs 202k, **-45%**)
+- 13 tool calls (vs 20, **-35%**)
+- 144s wall (vs 388s, **-63%** — в 2.6× быстрее)
+- 4 write_file (vs 11) → fail-fast после первой проблемы
+
+Гипотеза «machine guards могут сдвинуть L4 через auto-commit»
+**не сбылась**: machine guards проверяют файлы (empty/lint/
+imports), но не дёргают `git commit`. Модель всё ещё должна
+делать commit сама и всё ещё забывает.
+
+Что получили вместо L4: **дешевле и информативнее**. Modeль
+сгенерировала cli.py с багом (`click.group()` без `@`-декоратора)
++ test_storage.py импортит несуществующий storage.py → guard
+поймал на первом же task'е → T001 failed, T002 skipped. 144
+секунды vs 388.
+
+Legacy v0.9 — **рекорды удержаны** (9/9 + ✓1att + 3/3 как v0.8).
+Это нормальный полу-шаг после landing'а v0.8: capabilities те
+же, но **легче и стабильнее**.
+
 Будут добавлены остальные тэги.
 
 (Эта глава дописывается **по ходу серии**.)
