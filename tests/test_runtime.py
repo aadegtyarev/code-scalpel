@@ -87,3 +87,50 @@ async def test_memory_off_does_not_materialise_db(project: Path) -> None:
     assert not (project / ".code-scalpel" / "memory.db").exists()
     await runtime.ask("anything")
     assert not (project / ".code-scalpel" / "memory.db").exists()
+
+
+@pytest.mark.asyncio
+async def test_runtime_exposes_fork_resolver(project: Path) -> None:
+    """Runtime.fork is the public seam /plan and /go will reach for
+    in v0.11. Headless Runtime (no ui_hook) falls back per
+    `fork_human_fallback` — default `local_meta`."""
+    from code_scalpel.fork import ForkOption
+
+    llm = MockLLMAdapter(['{"chosen": "a", "reasoning": "ok"}'])
+    runtime = Runtime(cwd=project, config=_CONFIG, llm=llm, with_memory=False)
+
+    res = await runtime.fork(
+        "Which option?",
+        (ForkOption("a", "first"), ForkOption("b", "second")),
+        "no context",
+    )
+
+    assert res.chosen == "a"
+
+
+@pytest.mark.asyncio
+async def test_runtime_fork_uses_provided_ui_hook(project: Path) -> None:
+    """When a ui_hook is wired in (the TUI path), HumanForker calls
+    it instead of falling through to local_meta."""
+    from code_scalpel.fork import ForkOption
+
+    llm = MockLLMAdapter(["unused"])
+
+    async def fake_hook(_title, _options, _timeout):  # type: ignore[no-untyped-def]
+        return "a"  # user picks first option
+
+    runtime = Runtime(
+        cwd=project,
+        config=_CONFIG,
+        llm=llm,
+        with_memory=False,
+        fork_ui_hook=fake_hook,
+    )
+
+    res = await runtime.fork(
+        "any?",
+        (ForkOption("a", "x"), ForkOption("b", "y")),
+        "ctx",
+    )
+
+    assert res.chosen == "a"
