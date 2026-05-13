@@ -48,6 +48,21 @@ _TESTS_FAILED_PROMPT = (
     "test(s). Don't revert the original change unless that's truly the only "
     "way forward."
 )
+_MISSING_FILES_PROMPT = (
+    "The following file(s) do not exist yet: {paths}\n\n"
+    "Create each one using a SEARCH/REPLACE block with an **empty SEARCH section** "
+    "(that means: no lines between <<<<<<< SEARCH and =======). Example:\n\n"
+    "requirements.txt\n"
+    "```\n"
+    "<<<<<<< SEARCH\n"
+    "=======\n"
+    "requests\n"
+    "prettytable\n"
+    ">>>>>>> REPLACE\n"
+    "```\n\n"
+    "Proceed with the task now."
+)
+
 _NEEDS_TESTS_PROMPT = (
     "Your previous patch applied cleanly and the existing tests pass, but it "
     "changed production code without touching any test file. Produce a "
@@ -476,6 +491,28 @@ def _build_task_prompt(task: Task) -> str:
 _MUTATING_TOOLS = frozenset({"shell_exec"})
 
 
+def _missing_file_paths(tool_results: tuple[ToolExecuted, ...]) -> list[str]:
+    """Return file paths from failed read_file calls where the file was not found.
+
+    Used to detect the pattern: model tries to read a file that doesn't
+    exist yet → we re-prompt it to create the file instead of giving up.
+    """
+    paths: list[str] = []
+    for r in tool_results:
+        if r.call.name != "read_file" or r.result.ok:
+            continue
+        if "not found" not in r.result.output.lower():
+            continue
+        try:
+            args = json.loads(r.call.body)
+            path = args.get("path", "")
+            if path:
+                paths.append(path)
+        except (json.JSONDecodeError, KeyError, AttributeError):
+            pass
+    return paths
+
+
 def _classify_outcome(task: Task, step_result: StepResult) -> TaskOutcome:
     """Decide done / failed / skipped from a `code_with_retry` return.
 
@@ -634,6 +671,7 @@ class StepAgent:
         *,
         mode: str = "code",
         on_tool_executed: Callable[[ToolCall, ToolResult], None] | None = None,
+        force_loop: bool = False,
     ) -> StepResult:
         """Iterative patch loop: ask the model, apply, run tests, retry on failure.
 
@@ -653,7 +691,7 @@ class StepAgent:
         this method falls back to a single ``ask`` call so callers can switch
         on the method unconditionally without surprising existing users.
         """
-        if not self._config.agent.iterative_patch_loop:
+        if not (self._config.agent.iterative_patch_loop or force_loop):
             return await self.ask(task, mode=mode, on_tool_executed=on_tool_executed)
 
         max_retries = max(0, self._config.agent.max_debug_attempts)
@@ -685,8 +723,15 @@ class StepAgent:
             result = await self.ask(prompt, mode=mode, on_tool_executed=on_tool_executed)
             last_result = result
             if not result.edits:
-                # Plain text — model decided no patch is needed (or asked a
-                # clarifying question). Return as-is; nothing to retry on.
+                # Check for failed read_file calls on non-existent files.
+                # Model tried to read a file that doesn't exist yet — tell it
+                # to create those files and retry (once).
+                if i < max_retries:
+                    missing = _missing_file_paths(result.tool_results)
+                    if missing:
+                        prompt = _MISSING_FILES_PROMPT.format(paths=", ".join(missing))
+                        continue
+                # Plain text or gave up — nothing to retry on.
                 return result
 
             _snapshot_targets(result.edits)
@@ -832,7 +877,10 @@ class StepAgent:
             prompt = _build_task_prompt(task)
             try:
                 step_result = await self.code_with_retry(
-                    prompt, mode="code", on_tool_executed=on_tool_executed
+                    prompt,
+                    mode="code",
+                    on_tool_executed=on_tool_executed,
+                    force_loop=True,
                 )
             except Exception:
                 # Surface to the caller — cancellation propagates,
