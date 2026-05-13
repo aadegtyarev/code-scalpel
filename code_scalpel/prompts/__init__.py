@@ -32,6 +32,7 @@ ANNOTATE_SKILLS = _load("annotate_skills.md")
 PER_STEP_REVIEW = _load("per_step_review.md")
 COMMIT_MESSAGE = _load("commit_message.md")
 TEST_SANITY = _load("test_sanity.md")
+FORK_LOCAL_META = _load("fork_local_meta.md")
 
 APPLY_FAILED = _load("retry/apply_failed.md")
 TESTS_FAILED = _load("retry/tests_failed.md")
@@ -46,6 +47,7 @@ __all__ = [
     "APPLY_FAILED",
     "COMMIT_MESSAGE",
     "FORCE_ANSWER",
+    "FORK_LOCAL_META",
     "MISSING_FILES",
     "MODE_CODE",
     "MODE_PLAN",

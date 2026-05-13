@@ -143,6 +143,15 @@ class AgentConfig(BaseModel):
     # Off by default. Strict-mode (turn into failed task) lands after
     # probe-set calibration.
     import_graph_check: bool = False
+    # Who resolves architectural forks (v0.10).
+    #   human       — render ChoiceCard, wait for the user (default
+    #                 for interactive sessions).
+    #   local_meta  — re-use the local LLM with an architect prompt
+    #                 at temperature 0. /go-friendly fallback for
+    #                 unattended runs.
+    #   upstream    — defer to a separately-configured stronger model
+    #                 (future; needs `upstream` profile in `profiles`).
+    fork_resolver: Literal["human", "local_meta", "upstream"] = "human"
 
 
 class ModeTemperatures(BaseModel):
