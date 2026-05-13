@@ -2294,6 +2294,39 @@ one successful write_file call»**.
 **TASKS.md содержит задачи которые не требуют write_file** — и
 все они автоматически skipped.
 
+**v0.8.0** (narrow_pass framework + annotate_plan auto +
+auto_load_skill) — **главный watershed серии**:
+- reached_level: **L3+** (близко к L4)
+- **20 tool calls** (vs 3 на v0.7): 11 write_file + 5 shell_exec
+  + 2 annotate_plan + auto_load_skill
+- **8 файлов на диске**: pyproject.toml, setup.py, requirements.txt,
+  notes_cli/{__init__.py, cli.py}, tests/{__init__.py, test_cli.py}
+  с реальным argparse-кодом
+- 25 LLM requests, 202k total tokens (max в серии)
+- 0 commits → 2/7 task'ов **failed** (не skipped — это прогресс)
+- stopped_reason: **max_failures**
+
+Что закрыл v0.8: **рассогласование plan↔code mode из v0.7**.
+`annotate_plan` теперь переписывает TASKS.md действенно — T001
+стал «Определение структуры проекта» с реальными файлами в
+Files (vs v0.7 «проанализировать с Files: project_map()»).
+Модель **поняла** что писать и **сделала это**.
+
+L4 не достигнут только потому что модель **не делает финальный
+`git commit`** — `mode_code.md` явно просит это, но 14b забывает
+последний шаг. Гипотеза: нужен auto-commit hook (возможно v0.9
+machine guards).
+
+Legacy v0.8 — **рекорды по всем осям**:
+- probe.py: **9/9** (впервые в серии)
+- probe_code.py: ✓ 1att (стабильно)
+- probe_recipes.py: **3/3** (впервые)
+
+То есть v0.8 — **первая точка качественного прогресса** во всех
+осях одновременно. Главные landings: `annotate_plan` (action-
+oriented задачи), `auto_load_skill` (Skills загружаются перед
+task'ом), narrow_pass framework как общая инфраструктура.
+
 Будут добавлены остальные тэги.
 
 (Эта глава дописывается **по ходу серии**.)

@@ -1,0 +1,9 @@
+[build-system]
+requires = ['setuptools', 'wheel']
+
+[project]
+name = 'notes-cli'
+version = '0.1.0'
+description = 'CLI для заметок'
+authors = [{'name': 'Your Name'}]
+license.text = 'MIT'

@@ -1,0 +1,23 @@
+{
+  "run_id": "notes_cli-notes_cli_empty-d6e9c37-20260513-192850",
+  "scenario": "notes_cli",
+  "project": "notes_cli_empty",
+  "version_tag": "main_d6e9c37",
+  "git_sha": "d6e9c377be14ae8c72eeffd4c199cd25b7cdfe21",
+  "git_dirty": true,
+  "git_commit_url": "https://github.com/aadegtyarev/code-scalpel/commit/d6e9c377be14ae8c72eeffd4c199cd25b7cdfe21",
+  "git_checkout_cmd": "git checkout d6e9c377be14ae8c72eeffd4c199cd25b7cdfe21",
+  "model_name_expected": "qwen/qwen2.5-coder-14b",
+  "model_name_actual": "qwen/qwen2.5-coder-14b",
+  "model_base_url": "http://localhost:1234/v1",
+  "upstream_model": null,
+  "started_at": "2026-05-13T19:28:50Z",
+  "ended_at": "2026-05-13T19:32:47Z",
+  "ended_reason": "user_gave_up",
+  "user_role": "claude-acting-as-user-per-tone-of-voice.md",
+  "command": "probe start notes_cli notes_cli_empty",
+  "adaptations": {
+    "runtime_kwargs_missing": "Runtime.__init__() got an unexpected keyword argument 'upstream_profile'",
+    "runtime.fork_resolver_missing": "Runtime has no `fork_resolver` attribute on this tag"
+  }
+}

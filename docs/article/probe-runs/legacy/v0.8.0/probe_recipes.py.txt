@@ -1,0 +1,67 @@
+# probe_recipes.py
+# exit_code=0
+# duration_sec=108.69
+
+## stdout
+
+========================================================================
+RECIPE PROBE — lazy / eager / multidir + regression
+target: qwen2.5-coder-14b @ http://localhost:1234
+========================================================================
+
+────────────────────────────────────────────────────────────────────────
+  RECIPE PROBES (новые фичи)
+────────────────────────────────────────────────────────────────────────
+
+[eager_always_surfaces]
+  ✓ marker found ✓
+     reply: 'Похоже, что вы уже загрузили специфическую конвенцию для запуска тестов в этом проекте. Тесты всегда выполняются с…'
+
+[lazy_surfaces_on_keyword_match]
+  ✓ marker found ✓
+     reply: 'Для организации кеширования в Redis с учетом обязательного префикса `SCALPELPROBE42` для всех ключей, выполните…'
+
+[lazy_suppressed_on_no_match]
+  ✓ marker absent ✓
+     reply: 'Для того чтобы написать unit-тест с использованием pytest, вам нужно выполнить следующие шаги: 1. Убедитесь, что у вас…'
+
+[lazy_case_insensitive_match]
+  ✓ marker found ✓
+     reply: 'Чтобы подключиться к Redis с префиксом ключей `SCALPELPROBE42:`, вам нужно выполнить следующие шаги: 1. **Установите…'
+
+[eager_and_lazy_both_surface]
+  ✓ eager=✓ lazy=✓
+     reply: 'Для настройки Redis-кеша нужно убедиться, что все ключи кэша используют префикс `SCALPELPROBE42_LAZY:`. Это можно…'
+
+[multidir_user_recipe_visible]
+  ✗ user marker MISSING ✗
+     reply: 'Чтобы запустить тесты, используйте команду `run_tests`. Если вы хотите указать дополнительные аргументы для pytest,…'
+
+[multidir_project_wins_over_user]
+  ✓ project=✓ user-leak=✗ (no leak)
+     reply: 'Этот проект использует Python версии 3.11, как указано в теге SCALPELPROBE42_PROJECT.'
+
+────────────────────────────────────────────────────────────────────────
+  REGRESSION (существующие сценарии)
+────────────────────────────────────────────────────────────────────────
+
+[regression_overview]
+  ✓ architecture terms found ✓
+     reply: 'Конечно, начну с вызова `project_map()` для получения общей картины файлов и их структуры в проекте. Это поможет мне…'
+
+[regression_nonexistent_symbol]
+  ✓ correctly denied ✓
+     reply: 'Ищу функцию `quick_sort` в проекте. Кажется, функция `quick_sort` не найдена в проекте. Попробуем поискать похожие…'
+
+[regression_recipes_dont_break_real_project]
+  ✓ relevant terms found ✓
+     reply: 'Ответ на ваш вопрос: 1. **Получение запроса**: Ожидаем входной запрос от пользователя. 2. **Анализ запроса**: Понимаем,…'
+
+========================================================================
+RESULT: 9/10 passed  (recipes: 6/7  regression: 3/3)
+========================================================================
+
+
+## stderr
+
+
