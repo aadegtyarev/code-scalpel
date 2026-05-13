@@ -1087,6 +1087,31 @@ class StepAgent:
                                     ToolResult(call, output="\n".join(lines), ok=False),
                                 )
 
+            # Import-graph check — every `from <in-project module>
+            # import <name>` in touched files must resolve to an
+            # actual export. 14b habit: invent a function name that
+            # plausibly belongs in module X but isn't there. The
+            # check catches it before pytest's collection blow-up.
+            if outcome.status == "done" and self._config.agent.import_graph_check:
+                from code_scalpel.checks import check_imports
+
+                py_paths = _py_paths_from_step_result(step_result, self._cwd)
+                for py_path in py_paths:
+                    with suppress(Exception):
+                        issues = check_imports(py_path, self._cwd)
+                        if issues and on_tool_executed is not None:
+                            lines = [f"Unresolved imports in {py_path.name}:"]
+                            lines.extend(
+                                f"  - line {i.line}: from {i.module} import {i.name} ({i.reason})"
+                                for i in issues
+                            )
+                            call = ToolCall(name="import_graph", body=str(py_path))
+                            with suppress(Exception):
+                                on_tool_executed(
+                                    call,
+                                    ToolResult(call, output="\n".join(lines), ok=False),
+                                )
+
             # Lint pass — run ruff/mypy on every changed .py file
             # after the task lands. Surface findings as a chat card.
             # No failed-task escalation yet; the prompt would need to
