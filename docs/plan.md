@@ -2862,11 +2862,60 @@ picker+reviewer с защитой от зацикливания.
            summary, ставим phase, переоткрываем open forks.
       Resume = вырожденный fork с двумя опциями.
 
-- [ ] Конфиги:
+- [ ] Конфиги upstream/resume:
         upstream_profile: <profile-name>  (имя из profiles:)
         upstream_batching: true            (queue vs sync)
         upstream_summarise: true           (pre-pass или нет)
         upstream_flush_on: "/go-end" | "n=5" | "manual"
+
+──── Debug — failure investigation (двухуровневый) ────
+
+Тезис: builder и debugger — разные mindset'ы. На 14b особенно.
+Делаем по аналогии с reviewer (v0.8): auto-pass на failure-event
++ отдельный mode для ручного «у меня упало, разберись». Они
+ортогональны.
+
+- [ ] `run_python` tool (общий для обоих контекстов).
+      Snippet eval в sandbox: `.venv/bin/python -c '<snippet>'`,
+      fallback на `python3 -c` если venv нет. Использует тот же
+      sandbox-wrapper что shell_exec. Зачем: debugger проверяет
+      гипотезу без write_file. «Я думаю проблема в импорте» →
+      run_python('import x; x.y') → ImportError доказал.
+
+- [ ] mode_debug (manual). `/mode debug` или Ctrl+T до него.
+      `prompts/mode_debug.md` — addendum к system.md:
+        «ты дебаггер, не пиши код пока не подтвердил гипотезу.
+        Шаги: orient → hypothesis → verify (read_file/run_python)
+        → fix only after verified.»
+      Регистрация в `_AGENT_MODES`. Toolset полный (write_file
+      разрешён — юзер сам решает когда применить). Temperature
+      0.3 (поменять `ModeTemperatures.debug` 0.7 → 0.3 — diversity
+      для гипотез, но не творчество).
+
+- [ ] debug_pass (auto, в code_with_retry).
+      `prompts/debug_pass.md` — система: «дай гипотезу + evidence
+      + suggested_fix». Structured output:
+      `{hypothesis, evidence, suggested_fix}`.
+      Temperature 0.1. Tool whitelist: read_file, grep,
+      project_map, run_python. БЕЗ write_file (debugger не лечит).
+      Триггер: failed run_tests внутри code_with_retry, перед
+      builder retry. Builder получает structured fix-hint вместо
+      raw test_output.
+
+- [ ] Anti-loop debug_pass:
+        a. `debug_pass_max_attempts=2` — не более 2 debug→retry
+           циклов на задачу.
+        b. Hypothesis loop: одинаковый hypothesis между attempts →
+           стоп.
+        c. test_output loop: одинаковый test_output между attempts →
+           стоп (semantic anti-loop, дополняет существующий
+           args-based).
+
+- [ ] Конфиги debug:
+        debug_pass: bool = False           (opt-in)
+        debug_pass_max_attempts: int = 2
+        debug_pass_temperature: float = 0.1
+        # mode_debug рулится через ModeTemperatures.debug (=0.3)
 ```
 
 ### v0.13 — knowledge layer
@@ -3006,6 +3055,67 @@ ruff config — получает его. Снимает класс ошибок 
       (sqlite в `.code-scalpel/stats.db`), Textual modal с
       keyboard navigation (tabs / r cycle / ctrl+s copy). Зависимости
       пока не покупаем — это далёкое quality-of-life, не reliability.
+
+- [ ] PassSpec unification — слить manual modes и auto passes
+      на один rail (большая правка, оплачивает себя сильно).
+      Сейчас два параллельных мира:
+        • Manual modes (code/plan/review): `_<MODE>_ADDENDUM`
+          строки + `inference_kwargs(mode)` + `_initial_messages`.
+        • Auto passes (per_step_review, test_sanity, etc.):
+          `NarrowPass` dataclass + `run_narrow_pass`.
+      Цена сейчас: каждый новый pass/mode дублирует boilerplate
+      (где брать temperature / output_schema / tool whitelist).
+      `annotate_plan` вообще ни на одних рельсах — отдельный
+      `await self._llm.chat(...)` в agent.py.
+      Унификация: `@dataclass(frozen=True) PassSpec(name,
+      system_prompt, sample, tool_whitelist, output_schema)`.
+      Реестр в одном месте; два executor'а (single-turn без tools
+      ≈ run_narrow_pass; interactive с tool loop ≈ stream_ask).
+      Aliases: `code` → PassSpec_code, `auto:per_step_review` →
+      PassSpec_per_step_review, и т.д. Каждый новый pass = одна
+      запись в реестре, без boilerplate.
+
+- [ ] SampleSpec — все sample-time params, не только temperature.
+      Сейчас в `inference_kwargs(mode)` передаётся ТОЛЬКО
+      temperature; top_p / min_p / penalties / max_tokens
+      берутся из defaults LM Studio (на разных load'ах разные).
+      Расширить до `SampleSpec(temperature, top_p, min_p, top_k,
+      frequency_penalty, presence_penalty, max_tokens, seed,
+      stop)`. Вшить в PassSpec.
+      Рекомендации per role (на основе анализа):
+        • builder/code: temp 0.3, top_p 0.9, min_p 0.05,
+          penalties 0 (НЕ включать — ломает code idioms).
+        • picker/detector/sanity (structured): temp 0.0, top_p
+          0.7, min_p 0.1, response_format=schema.
+        • reviewer/clarify: temp 0.3-0.5, top_p 0.95, min_p 0.05.
+        • debugger: temp 0.1, top_p 0.9, min_p 0.05.
+      Зависит от PassSpec unification — там и должно лежать.
+
+- [ ] Autocalibrate mode — `code-scalpel calibrate` / `/calibrate`.
+      Юзер запустил → ~10 минут пробегов → config заполнен под
+      ЕГО модель и квантизацию.
+      Этап 1 (prior): считать рекомендованные generation params
+      из model card. Источники: HuggingFace Hub API → GGUF
+      metadata → LM Studio `/v1/models` info → семейный fallback
+      (`qwen-coder-*` → known good). Юзер может задать руками.
+      Этап 2 (per-role sweep): для каждого PassSpec в реестре
+      golden test set + sweep temperature/top_p вокруг prior →
+      metric (accuracy / pass_rate / structural_validity) →
+      pick best → write to config.
+      Этап 3 (effective context probe): controlled needle-in-
+      haystack — вшить факт в начало long-context, проверить
+      retrieval в конце. Найти cliff point quality drop. Adjust
+      `compact_threshold` под effective context, не нативный
+      (lost-in-the-middle — реальное окно часто меньше rated).
+      Зависит от PassSpec + SampleSpec unification.
+
+- [ ] Research-grade probe sample params (можно сделать раньше
+      unification). `scripts/probe_sample_params.py` — на existing
+      passes (без integration в код) измерить как меняется
+      качество при варьировании top_p/min_p. Если разницы нет —
+      SampleSpec даёт мало, оставим temperature. Если есть —
+      обоснование для v0.13 unification. Полчаса работы, гарантия
+      против over-engineering.
 
 - [ ] Prompt-cache awareness: разделить «каналы» turn-типов.
       Сейчас все NarrowPass'ы (builder / per_step_review / test_sanity /
