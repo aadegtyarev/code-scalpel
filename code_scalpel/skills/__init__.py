@@ -59,6 +59,15 @@ def active_skills(root: Path) -> tuple[Skill, ...]:
     return _registry.active(root)
 
 
+def all_skills() -> tuple[Skill, ...]:
+    """Every registered skill, regardless of project detection.
+
+    Used by the agent to build the catalog block (always visible in the
+    system prompt) so the model knows which skills it can `load_skill`.
+    """
+    return _registry.all()
+
+
 def default_skill(root: Path) -> Skill | None:
     """First active skill for `root`, or None if nothing detects."""
     return _registry.default(root)
@@ -81,6 +90,7 @@ __all__ = [
     "SkillRegistry",
     "SqliteSkill",
     "active_skills",
+    "all_skills",
     "default_runnable_skill",
     "default_skill",
     "get_skill",

@@ -662,3 +662,146 @@ async def test_shell_exec_truncates_huge_output(tmp_path: Path) -> None:
     assert "truncated" in result.output
     # 4000-char cap + framing
     assert len(result.output) < 4500
+
+
+# ── write_file: overwrite / replace lines / insert ───────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_write_file_creates_new_file(tmp_path: Path) -> None:
+    call = ToolCall(name="write_file", body='{"path": "new.py", "content": "x = 1\\n"}')
+    result = await execute(call, tmp_path)
+    assert result.ok is True
+    assert (tmp_path / "new.py").read_text() == "x = 1\n"
+
+
+@pytest.mark.asyncio
+async def test_write_file_overwrites_existing(tmp_path: Path) -> None:
+    (tmp_path / "f.py").write_text("old\n")
+    call = ToolCall(name="write_file", body='{"path": "f.py", "content": "new\\n"}')
+    result = await execute(call, tmp_path)
+    assert result.ok is True
+    assert (tmp_path / "f.py").read_text() == "new\n"
+
+
+@pytest.mark.asyncio
+async def test_write_file_creates_parent_dirs(tmp_path: Path) -> None:
+    call = ToolCall(name="write_file", body='{"path": "a/b/c.py", "content": "x\\n"}')
+    result = await execute(call, tmp_path)
+    assert result.ok is True
+    assert (tmp_path / "a/b/c.py").read_text() == "x\n"
+
+
+@pytest.mark.asyncio
+async def test_write_file_rejects_absolute_path(tmp_path: Path) -> None:
+    call = ToolCall(name="write_file", body='{"path": "/etc/x", "content": "bad"}')
+    result = await execute(call, tmp_path)
+    assert result.ok is False
+    assert "inside the project" in result.output
+
+
+@pytest.mark.asyncio
+async def test_write_file_rejects_parent_escape(tmp_path: Path) -> None:
+    call = ToolCall(name="write_file", body='{"path": "../out", "content": "bad"}')
+    result = await execute(call, tmp_path)
+    assert result.ok is False
+
+
+@pytest.mark.asyncio
+async def test_write_file_replace_lines(tmp_path: Path) -> None:
+    (tmp_path / "f.py").write_text("a\nb\nc\nd\ne\n")
+    call = ToolCall(
+        name="write_file",
+        body='{"path": "f.py", "content": "B\\nC\\n", "start_line": 2, "end_line": 3}',
+    )
+    result = await execute(call, tmp_path)
+    assert result.ok is True
+    assert (tmp_path / "f.py").read_text() == "a\nB\nC\nd\ne\n"
+
+
+@pytest.mark.asyncio
+async def test_write_file_replace_lines_missing_end(tmp_path: Path) -> None:
+    (tmp_path / "f.py").write_text("a\nb\n")
+    call = ToolCall(
+        name="write_file",
+        body='{"path": "f.py", "content": "X\\n", "start_line": 1}',
+    )
+    result = await execute(call, tmp_path)
+    assert result.ok is False
+
+
+@pytest.mark.asyncio
+async def test_write_file_replace_lines_on_missing_file(tmp_path: Path) -> None:
+    call = ToolCall(
+        name="write_file",
+        body='{"path": "gone.py", "content": "X\\n", "start_line": 1, "end_line": 2}',
+    )
+    result = await execute(call, tmp_path)
+    assert result.ok is False
+    assert "not found" in result.output
+
+
+@pytest.mark.asyncio
+async def test_write_file_insert_after(tmp_path: Path) -> None:
+    (tmp_path / "f.py").write_text("a\nc\n")
+    call = ToolCall(
+        name="write_file",
+        body='{"path": "f.py", "content": "b\\n", "insert_after_line": 1}',
+    )
+    result = await execute(call, tmp_path)
+    assert result.ok is True
+    assert (tmp_path / "f.py").read_text() == "a\nb\nc\n"
+
+
+@pytest.mark.asyncio
+async def test_write_file_insert_at_top(tmp_path: Path) -> None:
+    """`insert_after_line=0` means prepend."""
+    (tmp_path / "f.py").write_text("a\nb\n")
+    call = ToolCall(
+        name="write_file",
+        body='{"path": "f.py", "content": "z\\n", "insert_after_line": 0}',
+    )
+    result = await execute(call, tmp_path)
+    assert result.ok is True
+    assert (tmp_path / "f.py").read_text() == "z\na\nb\n"
+
+
+@pytest.mark.asyncio
+async def test_write_file_insert_and_replace_rejected_together(tmp_path: Path) -> None:
+    (tmp_path / "f.py").write_text("a\nb\n")
+    call = ToolCall(
+        name="write_file",
+        body=(
+            '{"path": "f.py", "content": "X\\n", '
+            '"start_line": 1, "end_line": 1, "insert_after_line": 1}'
+        ),
+    )
+    result = await execute(call, tmp_path)
+    assert result.ok is False
+
+
+@pytest.mark.asyncio
+async def test_write_file_replace_clamps_end_to_eof(tmp_path: Path) -> None:
+    """end_line past EOF still works — clamped to last line."""
+    (tmp_path / "f.py").write_text("a\nb\n")
+    call = ToolCall(
+        name="write_file",
+        body='{"path": "f.py", "content": "Z\\n", "start_line": 2, "end_line": 99}',
+    )
+    result = await execute(call, tmp_path)
+    assert result.ok is True
+    assert (tmp_path / "f.py").read_text() == "a\nZ\n"
+
+
+@pytest.mark.asyncio
+async def test_write_file_content_without_trailing_newline_appends_one(tmp_path: Path) -> None:
+    """Insert/replace modes — `content` without a trailing \\n still
+    produces a well-formed file. Overwrite mode preserves the raw content."""
+    (tmp_path / "f.py").write_text("a\nb\n")
+    call = ToolCall(
+        name="write_file",
+        body='{"path": "f.py", "content": "X", "insert_after_line": 1}',
+    )
+    result = await execute(call, tmp_path)
+    assert result.ok is True
+    assert (tmp_path / "f.py").read_text() == "a\nX\nb\n"

@@ -29,7 +29,7 @@ from typing import Any
 
 from code_scalpel.tools.files import list_files, read_file
 from code_scalpel.tools.search import ripgrep
-from code_scalpel.tools.shell import AsyncShellRunner, ShellRunner
+from code_scalpel.tools.shell import AsyncShellRunner, ShellResult, ShellRunner
 
 # Awaitable callback the dispatch invokes when a shell command needs
 # the user's blessing before running (skeptic trust level). Returns
@@ -98,6 +98,65 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
                     },
                 },
                 "required": ["path"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "write_file",
+            "description": (
+                "Write to a file. Three modes — pick by which args you pass:\n"
+                "• overwrite/create: `path` + `content`. Replaces the whole "
+                "file (creates if missing). Use for new files and small "
+                "rewrites.\n"
+                "• replace lines: `path` + `content` + `start_line` + "
+                "`end_line` (1-based, inclusive). Replaces only those lines. "
+                "Use for surgical edits in large files.\n"
+                "• insert: `path` + `content` + `insert_after_line` (1-based; "
+                "use 0 to prepend). Inserts the content after that line.\n"
+                "Always pass the literal content — newlines preserved. Use "
+                "this instead of shell_exec for any file write."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "path": {
+                        "type": "string",
+                        "description": "Relative path from the project root.",
+                    },
+                    "content": {
+                        "type": "string",
+                        "description": (
+                            "File content as a single string. In overwrite "
+                            "mode: the whole file. In replace/insert mode: "
+                            "just the chunk to put in."
+                        ),
+                    },
+                    "start_line": {
+                        "type": "integer",
+                        "description": (
+                            "Replace mode: 1-based first line to replace "
+                            "(inclusive). Requires `end_line`."
+                        ),
+                    },
+                    "end_line": {
+                        "type": "integer",
+                        "description": (
+                            "Replace mode: 1-based last line to replace "
+                            "(inclusive). Requires `start_line`."
+                        ),
+                    },
+                    "insert_after_line": {
+                        "type": "integer",
+                        "description": (
+                            "Insert mode: 1-based line number to insert AFTER. "
+                            "Use 0 to prepend at the top. Mutually exclusive "
+                            "with start_line/end_line."
+                        ),
+                    },
+                },
+                "required": ["path", "content"],
             },
         },
     },
@@ -276,6 +335,57 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
 ]
 
 
+# Skills loading — lazy injection of stack-specific knowledge.
+# Catalog of available skills is always in the system prompt; the model
+# calls these to add (or remove) detailed test/lint/format guidance to
+# its context for the current turn. Dispatched in `Agent._execute_native`
+# (needs agent state — not stateless like the file/grep tools above).
+LOAD_SKILL_SCHEMA: dict[str, Any] = {
+    "type": "function",
+    "function": {
+        "name": "load_skill",
+        "description": (
+            "Load a skill to get stack-specific guidance — exact test/lint/"
+            "format commands and project rules. Call early on a coding task "
+            "once you know the stack (e.g. saw pyproject.toml → load_skill("
+            "'python')). See the 'Available skills' catalog in the system "
+            "prompt for valid names."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "name": {
+                    "type": "string",
+                    "description": "Skill name from the catalog, e.g. 'python', 'go', 'js'.",
+                }
+            },
+            "required": ["name"],
+        },
+    },
+}
+
+UNLOAD_SKILL_SCHEMA: dict[str, Any] = {
+    "type": "function",
+    "function": {
+        "name": "unload_skill",
+        "description": (
+            "Unload a previously loaded skill when it's no longer relevant "
+            "for the current task. Frees context for unrelated work."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "name": {
+                    "type": "string",
+                    "description": "Skill name to unload.",
+                }
+            },
+            "required": ["name"],
+        },
+    },
+}
+
+
 # Optional — gated on `agent.trust`. Agent includes this in the tool list
 # only when trust is `optimist` or `yolo` (skeptic awaits the confirmation
 # UI). See `code_scalpel/policy.py` for the level semantics.
@@ -350,6 +460,7 @@ async def execute(
     trust: str = "skeptic",
     shell_exec_timeout: int = 30,
     confirm_shell_exec: ConfirmShellExec | None = None,
+    sandbox: str = "off",
 ) -> ToolResult:
     """Dispatch a tool call by name. Returns a ToolResult — never raises.
 
@@ -365,6 +476,8 @@ async def execute(
     user's machine."""
     if call.name == "read_file":
         return _tool_read_file(call, cwd, max_lines=max_lines)
+    if call.name == "write_file":
+        return _tool_write_file(call, cwd)
     # `project_map` is the unified entry — empty path → tree, path → file
     # outline. Legacy `list_files` and `map_file` names stay routed for
     # one cycle of backwards compatibility (some early bench fixtures /
@@ -393,6 +506,7 @@ async def execute(
             trust=trust,
             timeout=shell_exec_timeout,
             confirm=confirm_shell_exec,
+            sandbox=sandbox,
         )
     return ToolResult(
         call=call,
@@ -573,6 +687,132 @@ def _tool_retrieve(call: ToolCall, cwd: Path) -> ToolResult:
     return ToolResult(call, output="\n".join(lines), ok=True)
 
 
+def _tool_write_file(call: ToolCall, cwd: Path) -> ToolResult:
+    """Three modes: overwrite (default), replace lines, insert at line.
+
+    Dispatch by which args are present — same shape as `read_file`. Path
+    validation gates mirror `_tool_read_file`; the resolved parent must
+    live under `cwd` (symlink-escape gate)."""
+    args = _decode_args(call.body)
+    path_str = str(args.get("path", "")).strip()
+    content = args.get("content", "")
+    if not path_str:
+        return ToolResult(call, output="error: missing file path", ok=False)
+    if not isinstance(content, str):
+        return ToolResult(call, output="error: content must be a string", ok=False)
+    if path_str.startswith("/") or ".." in Path(path_str).parts:
+        return ToolResult(
+            call, output=f"error: path must be inside the project: {path_str}", ok=False
+        )
+    target = cwd / path_str
+    try:
+        parent = target.parent.resolve()
+        if not parent.is_relative_to(cwd.resolve()):
+            return ToolResult(
+                call, output=f"error: path must be inside the project: {path_str}", ok=False
+            )
+    except (OSError, ValueError):
+        return ToolResult(call, output=f"error: invalid path: {path_str}", ok=False)
+
+    # Coerce numeric args; tolerate string ints (some models stringify).
+    def _coerce_int(name: str) -> int | None:
+        raw = args.get(name)
+        if raw is None:
+            return None
+        try:
+            return int(raw)
+        except (TypeError, ValueError):
+            return None
+
+    start_line = _coerce_int("start_line")
+    end_line = _coerce_int("end_line")
+    insert_after = _coerce_int("insert_after_line")
+
+    # Mode resolution — explicit checks so we can return clear errors.
+    mode_replace = start_line is not None or end_line is not None
+    mode_insert = insert_after is not None
+    if mode_replace and mode_insert:
+        return ToolResult(
+            call,
+            output="error: cannot use insert_after_line together with start_line/end_line",
+            ok=False,
+        )
+    if mode_replace and (start_line is None or end_line is None):
+        return ToolResult(
+            call, output="error: replace mode needs both start_line and end_line", ok=False
+        )
+
+    final_content: str
+    summary: str
+    if mode_replace:
+        if not target.is_file():
+            return ToolResult(
+                call, output=f"error: file not found: {path_str} (replace mode)", ok=False
+            )
+        # mypy/lint: start_line/end_line are non-None inside this branch.
+        assert start_line is not None and end_line is not None
+        if start_line < 1 or end_line < start_line:
+            return ToolResult(
+                call,
+                output=f"error: invalid line range start={start_line} end={end_line}",
+                ok=False,
+            )
+        original = target.read_text()
+        lines = original.splitlines(keepends=True)
+        if start_line > len(lines):
+            return ToolResult(
+                call,
+                output=f"error: start_line {start_line} > file length {len(lines)}",
+                ok=False,
+            )
+        clamped_end = min(end_line, len(lines))
+        new_chunk = content if content.endswith("\n") else content + "\n"
+        final_content = "".join(lines[: start_line - 1]) + new_chunk + "".join(lines[clamped_end:])
+        summary = f"replaced lines {start_line}-{clamped_end} in {path_str}"
+    elif mode_insert:
+        assert insert_after is not None
+        if insert_after < 0:
+            return ToolResult(
+                call,
+                output=f"error: insert_after_line must be >= 0 (got {insert_after})",
+                ok=False,
+            )
+        if target.is_file():
+            original = target.read_text()
+            lines = original.splitlines(keepends=True)
+        else:
+            # Insert into a new file is just "create with this content";
+            # insert_after must be 0 to make sense in that case.
+            if insert_after != 0:
+                return ToolResult(
+                    call,
+                    output=f"error: file not found: {path_str} (insert_after={insert_after})",
+                    ok=False,
+                )
+            lines = []
+        chunk = content if content.endswith("\n") else content + "\n"
+        anchor = min(insert_after, len(lines))
+        final_content = "".join(lines[:anchor]) + chunk + "".join(lines[anchor:])
+        summary = f"inserted at line {anchor + 1} of {path_str}"
+    else:
+        final_content = content
+        summary = f"wrote {path_str}"
+
+    try:
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(final_content)
+    except OSError as e:
+        return ToolResult(call, output=f"error: {e}", ok=False)
+    line_count = final_content.count("\n") + (
+        0 if final_content.endswith("\n") or not final_content else 1
+    )
+    return ToolResult(
+        call,
+        output=f"{summary} ({line_count} lines, {len(final_content)} chars total)",
+        ok=True,
+    )
+
+
 def _tool_project_map(call: ToolCall, cwd: Path) -> ToolResult:
     """args: {path?: str}. Two modes:
       - no path → tree: `path [N L]` per row (whole project)
@@ -729,6 +969,33 @@ async def _tool_run_tests(call: ToolCall, cwd: Path, runner: ShellRunner) -> Too
 _MAX_SHELL_OUTPUT = 4000
 
 
+async def _run_argv_unchecked(argv: list[str], cwd: Path, timeout: int) -> ShellResult:
+    """Run an argv directly via asyncio, bypassing AsyncShellRunner's
+    whitelist. Used for the `bwrap` wrapping path: bwrap itself isn't on
+    the default whitelist, and growing it would let the model invoke
+    bwrap directly (with whatever bind args it wants). Keeping the bypass
+    local to this function preserves the whitelist's value for the
+    rest of the tool surface."""
+    import asyncio
+
+    proc = await asyncio.create_subprocess_exec(
+        *argv,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.STDOUT,
+        cwd=str(cwd),
+    )
+    try:
+        stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=timeout)
+    except TimeoutError:
+        proc.kill()
+        await proc.communicate()
+        raise
+    return ShellResult(
+        stdout=stdout.decode(errors="replace"),
+        returncode=proc.returncode if proc.returncode is not None else 0,
+    )
+
+
 async def _tool_shell_exec(
     call: ToolCall,
     cwd: Path,
@@ -737,6 +1004,7 @@ async def _tool_shell_exec(
     trust: str,
     timeout: int,
     confirm: ConfirmShellExec | None = None,
+    sandbox: str = "auto",
 ) -> ToolResult:
     """args: `{command: str}` — arbitrary shell command (pipes, redirects,
     quoting all work, no `bash -c` wrapping needed).
@@ -783,8 +1051,39 @@ async def _tool_shell_exec(
         if not approved:
             return ToolResult(call, output="refused: user rejected the command", ok=False)
 
+    # Sandbox dispatch — wrap with bwrap when available + enabled. We use
+    # `runner.run` (argv form) for the wrapped path because bwrap takes its
+    # OWN argv and then invokes `/bin/sh -c <command>` internally. Plain
+    # `run_shell` would double-wrap with another `sh -c`.
+    from code_scalpel.tools.sandbox import bwrap_available, wrap_command_with_bwrap
+
+    use_sandbox = False
+    if sandbox == "on":
+        if not bwrap_available():
+            return ToolResult(
+                call,
+                output=(
+                    "refused: sandbox=on requires bwrap (bubblewrap), but it is "
+                    "not on PATH. Install the `bubblewrap` package or switch to "
+                    "sandbox='auto' / 'off'."
+                ),
+                ok=False,
+            )
+        use_sandbox = True
+    elif sandbox == "auto":
+        use_sandbox = bwrap_available()
+
     try:
-        result = await runner.run_shell(command, cwd=str(cwd), timeout=timeout)
+        if use_sandbox:
+            argv = wrap_command_with_bwrap(command, cwd)
+            # The bwrap argv goes through the bypass-whitelist `run_shell`-
+            # adjacent path: AsyncShellRunner.run() enforces a whitelist
+            # by argv[0], but `bwrap` itself is not on it. Use the dedicated
+            # `_run_argv_bypassing_whitelist` if present; else fall back via
+            # asyncio directly so we don't have to grow the whitelist.
+            result = await _run_argv_unchecked(argv, cwd, timeout)
+        else:
+            result = await runner.run_shell(command, cwd=str(cwd), timeout=timeout)
     except TimeoutError:
         return ToolResult(call, output=f"timeout after {timeout}s", ok=False)
     except Exception as e:
@@ -796,16 +1095,19 @@ async def _tool_shell_exec(
             text[:_MAX_SHELL_OUTPUT]
             + f"\n... ({len(text) - _MAX_SHELL_OUTPUT} more bytes truncated)"
         )
-    summary = f"exit code: {result.returncode}\n---\n{text}"
+    sandbox_tag = " (sandboxed)" if use_sandbox else ""
+    summary = f"exit code: {result.returncode}{sandbox_tag}\n---\n{text}"
     return ToolResult(call, output=summary, ok=result.returncode == 0)
 
 
 # Re-export so the module-level `from code_scalpel.policy import TrustLevel`
 # in tests doesn't have to dig into the policy module separately.
 __all__ = (
+    "LOAD_SKILL_SCHEMA",
     "SHELL_EXEC_SCHEMA",
     "TOOL_SCHEMAS",
     "ToolCall",
+    "UNLOAD_SKILL_SCHEMA",
     "ToolResult",
     "execute",
     "format_result",

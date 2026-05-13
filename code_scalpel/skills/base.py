@@ -82,6 +82,16 @@ class Skill(ABC):
         """
         return None
 
+    def model_instructions(self) -> str:
+        """Short model-facing block injected into the system prompt during plan execution.
+
+        Override in subclasses to provide stack-specific knowledge: what
+        commands to run, what errors mean, what to do when tests fail.
+        Keep it to 5-10 lines — it goes into every task's context.
+        Default returns empty string (skill has no model-facing knowledge yet).
+        """
+        return ""
+
     def token_cost(self) -> int:
         """Approximate token cost of exposing this skill's metadata.
 

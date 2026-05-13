@@ -95,6 +95,31 @@ _HARD_BLOCKS: tuple[tuple[re.Pattern[str], str], ...] = (
         re.compile(r":\(\)\s*\{\s*:\s*\|\s*:\s*&"),
         "fork bomb pattern is hard-blocked",
     ),
+    # Project-directory escape — `cd` (or `pushd`) to an absolute path,
+    # home, or parent traversal. We can't sandbox at the kernel level
+    # (would need bwrap/firejail), but blocking the `cd` form catches
+    # most accidental writes outside the workspace. Subprocess cwd is
+    # already pinned to the project root; this just prevents the
+    # in-shell `cd && do-stuff` workaround.
+    (
+        re.compile(r"\b(?:cd|pushd)\s+(?:/|~|\.\.)"),
+        "cd to absolute / home / parent path is hard-blocked (stay inside the project)",
+    ),
+    # Redirect-write to an absolute path. Catches `>/etc/foo`,
+    # `>>/var/log/x`, `tee /tmp/y`. Same intent as the cd block —
+    # writes must stay inside the project dir.
+    (
+        re.compile(r"(?:>|>>|\btee\s+(?:-a\s+)?)\s*/(?!dev/(?:null|stdout|stderr|tty)\b)"),
+        "redirect-write outside the project is hard-blocked",
+    ),
+    # File-copying tools writing OUT of the project. We allow them
+    # reading from absolute paths (e.g. `cp /etc/template.conf .`) but
+    # block writes whose destination is an absolute path outside /tmp.
+    # /tmp is permitted because pytest/coverage use it for temp output.
+    (
+        re.compile(r"\b(?:cp|mv|install|rsync)\b[^|;&]*\s/(?!tmp/)"),
+        "copy / move OUT of the project (to an absolute path) is hard-blocked",
+    ),
 )
 
 

@@ -79,8 +79,8 @@ async def test_ask_sends_system_prompt(project: Path) -> None:
 
     messages = llm.calls[0]
     assert messages[0]["role"] == "system"
-    # New prompt teaches SEARCH/REPLACE, not unified diff
-    assert "SEARCH" in messages[0]["content"]
+    # New prompt teaches write_file as the canonical file-write tool.
+    assert "write_file" in messages[0]["content"]
 
 
 @pytest.mark.asyncio
@@ -502,10 +502,16 @@ async def test_compact_summarizes_and_replaces_history(project: Path) -> None:
 
 @pytest.mark.asyncio
 async def test_system_prompt_allows_text_only_response() -> None:
+    """The catalog header in _initial_messages mentions plain-text answers;
+    `_SYSTEM_PROMPT` itself is now task-action-oriented (write_file).
+    A text-only answer is acceptable only for questions, governed by mode
+    addenda + grounding rules in the prompt."""
     from code_scalpel.agent import _SYSTEM_PROMPT
 
     text = _SYSTEM_PROMPT.lower()
-    assert "plain text" in text
+    # The system prompt must still allow answering questions in text — the
+    # "ask only" language lives in the grounding rules.
+    assert "answer" in text
 
 
 @pytest.mark.asyncio
@@ -628,8 +634,8 @@ async def test_plan_mode_addendum_in_system_prompt() -> None:
     assert "PLAN mode" in system
     assert "## T001:" in system
     assert "Acceptance:" in system
-    # SEARCH/REPLACE explicitly forbidden in plan mode
-    assert "NO SEARCH/REPLACE" in system
+    # write_file explicitly forbidden in plan mode (planning, not coding)
+    assert "NO write_file" in system
 
 
 @pytest.mark.asyncio
@@ -651,7 +657,8 @@ async def test_review_mode_addendum_in_system_prompt(project: Path) -> None:
     await agent.ask("review this code", mode="review")
     system = llm.calls[0][0]["content"]
     assert "REVIEW mode" in system
-    assert "NO SEARCH/REPLACE" in system or "Never propose SEARCH/REPLACE" in system
+    # Review mode forbids any file-write tool calls.
+    assert "No write_file" in system or "Never propose write_file" in system
     assert "[bug]" in system
     assert "[risk]" in system
     assert "PLAN mode" not in system
@@ -874,6 +881,18 @@ def _retry_config(*, max_debug_attempts: int = 2, require_tests: bool = False) -
             # Retry-loop tests pre-date the HOOK and feed canned patches
             # straight through. Dedicated HOOK tests opt back in.
             enforce_read_before_show=False,
+            # Plan-runner shell-side effects (git init / git rev-parse)
+            # are off here so mocked shell runners don't have to account
+            # for them. Dedicated auto_git tests opt back in.
+            auto_git=False,
+            # bwrap sandbox bypasses the test-injected MockShellRunner
+            # (goes straight to subprocess.create_subprocess_exec), so on
+            # hosts with bwrap installed it would punch holes in the
+            # mocks. Off in tests.
+            sandbox="off",
+            # Plan-annotation pass fires an extra LLM call; mocks have
+            # a fixed response queue. Tests opt back in explicitly.
+            auto_annotate_plan=False,
         ),
     )
 
@@ -953,10 +972,14 @@ def hello():
 
 
 @pytest.mark.asyncio
-async def test_code_with_retry_rollback_removes_newly_created_files(project: Path) -> None:
-    """If a retry attempt created a file from scratch (empty SEARCH),
-    the rollback must delete it — otherwise the workspace ends up with
-    half-finished scaffolding the user didn't ask to keep."""
+async def test_code_with_retry_rollback_keeps_newly_created_files(project: Path) -> None:
+    """A retry that created NEW files leaves them on disk after rollback.
+
+    Originally rollback unlinked them, but that wiped visible progress
+    (Probe 2026-05-13: model built setup.py + main.py + tests/, final
+    retry failed, whole tree got deleted). Net-new files now survive;
+    only pre-existing files that were MUTATED get restored.
+    """
     from code_scalpel.tools.shell import ShellResult
     from tests.mocks import MockShellRunner
 
@@ -970,7 +993,6 @@ def stub():
 >>>>>>> REPLACE
 ```
 """
-    # All attempts produce a new file then run_tests fails.
     llm = MockLLMAdapter([new_file_patch] * 3)
     shell = MockShellRunner([ShellResult("FAIL", 1)] * 3)
     agent = StepAgent(
@@ -982,8 +1004,9 @@ def stub():
 
     await agent.code_with_retry("create a module")
 
-    assert not (project / "new_module.py").exists(), (
-        "new file from a failed loop must be deleted by rollback"
+    assert (project / "new_module.py").exists(), (
+        "net-new file from a failed loop must survive rollback so the "
+        "user sees partial progress instead of an empty workspace"
     )
 
 
@@ -1614,9 +1637,10 @@ hello()
 
 
 @pytest.mark.asyncio
-async def test_run_plan_skipped_when_model_emits_no_edits(project: Path) -> None:
-    """Model replies in plain text for a task — that task is `skipped`,
-    not `failed`. The skip doesn't count toward the failure budget."""
+async def test_run_plan_stops_on_skipped_task(project: Path) -> None:
+    """Model replies in plain text for a task — the plan halts. We never
+    silently advance past an unfinished task; the user must see what
+    happened and intervene (manual patch, edit plan, retry)."""
     from code_scalpel.tools.shell import ShellResult
     from tests.mocks import MockShellRunner
 
@@ -1626,7 +1650,7 @@ async def test_run_plan_skipped_when_model_emits_no_edits(project: Path) -> None
         "## T002: do it\n\nGoal: actually patch\nFiles: hello.py\n",
     )
 
-    # T001 → plain text. T002 → working patch.
+    # T001 → plain text (skipped). T002 should never run.
     llm = MockLLMAdapter(
         [
             "I have a question about what 'figure it out' means here.",
@@ -1638,9 +1662,9 @@ async def test_run_plan_skipped_when_model_emits_no_edits(project: Path) -> None
 
     result = await agent.run_plan(stop_after_failures=2)
 
-    assert result.stopped_reason == "all_done"
-    assert [o.status for o in result.outcomes] == ["skipped", "done"]
-    assert result.tasks_completed == 1
+    assert result.stopped_reason == "task_not_done"
+    assert [o.status for o in result.outcomes] == ["skipped"]
+    assert result.tasks_completed == 0
 
 
 @pytest.mark.asyncio
@@ -2013,3 +2037,384 @@ async def test_compress_disabled_by_config(project: Path) -> None:
     tool_msg = next(m for m in agent.history if m.get("role") == "tool")
     assert "padding line" in tool_msg["content"]
     assert "[compressed:" not in tool_msg["content"]
+
+
+# ── skills: catalog, load_skill, unload_skill, addendum ──────────────────────
+
+
+def test_skills_catalog_in_system_prompt(project: Path) -> None:
+    """The 'Available skills' catalog must ride along in the system prompt
+    of every mode so the model knows what it can load_skill."""
+    agent = StepAgent(llm=MockLLMAdapter(["ok"]), cwd=project, config=_CONFIG)
+    msgs = agent._initial_messages("task", mode="ask")
+    system = msgs[0]["content"]
+    assert "Available skills" in system
+    assert "python" in system  # catalog enumerates built-ins
+    assert "go" in system
+
+
+def test_skills_addendum_empty_when_nothing_loaded(project: Path) -> None:
+    """Nothing loaded → addendum contributes zero bytes. Avoids the
+    'always-on stack overhead' that the lazy design is meant to dodge."""
+    agent = StepAgent(llm=MockLLMAdapter(["ok"]), cwd=project, config=_CONFIG)
+    assert agent._skills_addendum() == ""
+
+
+def test_skills_addendum_renders_loaded(project: Path) -> None:
+    """Once `_loaded_skills` has a name, that skill's model_instructions
+    must surface in the addendum block."""
+    agent = StepAgent(llm=MockLLMAdapter(["ok"]), cwd=project, config=_CONFIG)
+    agent._loaded_skills.add("python")
+    addendum = agent._skills_addendum()
+    assert "pytest" in addendum
+    assert "ruff" in addendum
+
+
+def test_skills_addendum_ignores_unknown_name(project: Path) -> None:
+    """Defensive — a stale name in the set (skill unregistered between
+    turns) must not crash the prompt build."""
+    agent = StepAgent(llm=MockLLMAdapter(["ok"]), cwd=project, config=_CONFIG)
+    agent._loaded_skills.add("zzz-not-real")
+    assert agent._skills_addendum() == ""
+
+
+def test_load_skill_adds_name_and_returns_instructions(project: Path) -> None:
+    from code_scalpel.tools.agent_tools import ToolCall
+
+    agent = StepAgent(llm=MockLLMAdapter(["ok"]), cwd=project, config=_CONFIG)
+    result = agent._tool_load_skill(ToolCall(name="load_skill", body='{"name": "python"}'))
+    assert result.ok is True
+    assert "python" in agent._loaded_skills
+    assert "pytest" in result.output
+
+
+def test_load_skill_unknown_returns_error(project: Path) -> None:
+    from code_scalpel.tools.agent_tools import ToolCall
+
+    agent = StepAgent(llm=MockLLMAdapter(["ok"]), cwd=project, config=_CONFIG)
+    result = agent._tool_load_skill(ToolCall(name="load_skill", body='{"name": "zzz"}'))
+    assert result.ok is False
+    assert "zzz" not in agent._loaded_skills
+
+
+def test_load_skill_missing_name_returns_error(project: Path) -> None:
+    from code_scalpel.tools.agent_tools import ToolCall
+
+    agent = StepAgent(llm=MockLLMAdapter(["ok"]), cwd=project, config=_CONFIG)
+    result = agent._tool_load_skill(ToolCall(name="load_skill", body="{}"))
+    assert result.ok is False
+
+
+def test_unload_skill_removes_name(project: Path) -> None:
+    from code_scalpel.tools.agent_tools import ToolCall
+
+    agent = StepAgent(llm=MockLLMAdapter(["ok"]), cwd=project, config=_CONFIG)
+    agent._loaded_skills.add("python")
+    result = agent._tool_unload_skill(ToolCall(name="unload_skill", body='{"name": "python"}'))
+    assert result.ok is True
+    assert "python" not in agent._loaded_skills
+
+
+def test_unload_skill_not_loaded_returns_error(project: Path) -> None:
+    from code_scalpel.tools.agent_tools import ToolCall
+
+    agent = StepAgent(llm=MockLLMAdapter(["ok"]), cwd=project, config=_CONFIG)
+    result = agent._tool_unload_skill(ToolCall(name="unload_skill", body='{"name": "python"}'))
+    assert result.ok is False
+
+
+def test_load_skill_accepts_raw_string_body(project: Path) -> None:
+    """Legacy <TOOL> format passes args as raw text — `_decode_skill_args`
+    must still accept 'python' as a bare name."""
+    from code_scalpel.tools.agent_tools import ToolCall
+
+    agent = StepAgent(llm=MockLLMAdapter(["ok"]), cwd=project, config=_CONFIG)
+    result = agent._tool_load_skill(ToolCall(name="load_skill", body="python"))
+    assert result.ok is True
+    assert "python" in agent._loaded_skills
+
+
+def test_tool_schemas_expose_load_and_unload(project: Path) -> None:
+    """The model can only call `load_skill` / `unload_skill` if their
+    schemas are in the per-request tool list."""
+    agent = StepAgent(llm=MockLLMAdapter(["ok"]), cwd=project, config=_CONFIG)
+    names = {s["function"]["name"] for s in agent._tool_schemas()}
+    assert "load_skill" in names
+    assert "unload_skill" in names
+
+
+def test_loaded_skills_survive_clear_history(project: Path) -> None:
+    """`clear_history` resets the chat trail but skill state is
+    project-scoped, not turn-scoped — it must persist."""
+    agent = StepAgent(llm=MockLLMAdapter(["ok"]), cwd=project, config=_CONFIG)
+    agent._loaded_skills.add("python")
+    agent.clear_history()
+    assert "python" in agent._loaded_skills
+
+
+def test_is_loop_normalizes_json_whitespace() -> None:
+    """The model varied JSON whitespace (`{"path": "x"}` vs `{"path":"x"}`)
+    to slip past loop detection. After normalization those keys collide."""
+    from code_scalpel.agent import StepAgent
+    from code_scalpel.llm.adapter import NativeToolCall
+
+    tcs1 = (NativeToolCall(id="1", name="read_file", arguments='{"path": "x"}'),)
+    tcs2 = (NativeToolCall(id="2", name="read_file", arguments='{"path":"x"}'),)
+    seen: set[tuple[str, str]] = set()
+    assert StepAgent._is_loop(tcs1, seen) is False
+    assert StepAgent._is_loop(tcs2, seen) is True
+
+
+def test_is_loop_normalizes_key_order() -> None:
+    """`{"a":1,"b":2}` vs `{"b":2,"a":1}` must collide too."""
+    from code_scalpel.agent import StepAgent
+    from code_scalpel.llm.adapter import NativeToolCall
+
+    tcs1 = (NativeToolCall(id="1", name="read_file", arguments='{"a":1,"b":2}'),)
+    tcs2 = (NativeToolCall(id="2", name="read_file", arguments='{"b":2,"a":1}'),)
+    seen: set[tuple[str, str]] = set()
+    assert StepAgent._is_loop(tcs1, seen) is False
+    assert StepAgent._is_loop(tcs2, seen) is True
+
+
+def test_loaded_skill_appears_in_subsequent_system_prompt(project: Path) -> None:
+    """End-to-end: after load_skill, the next turn's system prompt must
+    carry the skill's instructions (not just the catalog header)."""
+    from code_scalpel.tools.agent_tools import ToolCall
+
+    agent = StepAgent(llm=MockLLMAdapter(["ok"]), cwd=project, config=_CONFIG)
+    agent._tool_load_skill(ToolCall(name="load_skill", body='{"name": "python"}'))
+    msgs = agent._initial_messages("next task", mode="code")
+    system = msgs[0]["content"]
+    assert "pytest" in system  # from python skill's model_instructions
+    assert "ruff" in system
+
+
+# ── plan-level task verification (Files / Test command) ──────────────────────
+
+
+def test_parse_task_files_extracts_comma_list() -> None:
+    from code_scalpel.agent import _parse_task_files
+    from code_scalpel.plan import Task
+
+    task = Task(id="T001", title="x", body="Files: a.py, b.py, c/\n", done=False)
+    assert _parse_task_files(task) == ["a.py", "b.py", "c/"]
+
+
+def test_parse_task_files_empty_when_missing() -> None:
+    from code_scalpel.agent import _parse_task_files
+    from code_scalpel.plan import Task
+
+    task = Task(id="T001", title="x", body="Goal: do it\n", done=False)
+    assert _parse_task_files(task) == []
+
+
+def test_parse_task_files_drops_placeholder() -> None:
+    from code_scalpel.agent import _parse_task_files
+    from code_scalpel.plan import Task
+
+    task = Task(id="T001", title="x", body="Files: <path to file>\n", done=False)
+    assert _parse_task_files(task) == []
+
+
+def test_parse_task_test_command_extracts() -> None:
+    from code_scalpel.agent import _parse_task_test_command
+    from code_scalpel.plan import Task
+
+    task = Task(id="T001", title="x", body="Test command: `pytest -k foo`\n", done=False)
+    assert _parse_task_test_command(task) == "pytest -k foo"
+
+
+def test_parse_task_test_command_returns_none_for_manual() -> None:
+    from code_scalpel.agent import _parse_task_test_command
+    from code_scalpel.plan import Task
+
+    task = Task(id="T001", title="x", body="Test command: manual\n", done=False)
+    assert _parse_task_test_command(task) is None
+
+
+def test_verify_task_files_pass_when_all_exist(tmp_path: Path) -> None:
+    from code_scalpel.agent import _verify_task_files
+    from code_scalpel.plan import Task
+
+    (tmp_path / "a.py").write_text("")
+    (tmp_path / "b.py").write_text("")
+    (tmp_path / "subdir").mkdir()
+    task = Task(id="T001", title="x", body="Files: a.py, b.py, subdir/\n", done=False)
+    ok, missing = _verify_task_files(task, tmp_path)
+    assert ok is True
+    assert missing == ""
+
+
+def test_verify_task_files_fail_when_one_missing(tmp_path: Path) -> None:
+    """Mirrors the screenshot bug: task declared setup.py / requirements.txt
+    but model only created the folder. Verifier must catch this."""
+    from code_scalpel.agent import _verify_task_files
+    from code_scalpel.plan import Task
+
+    (tmp_path / "weather_cli").mkdir()
+    # setup.py and requirements.txt absent
+    task = Task(
+        id="T001",
+        title="setup project",
+        body="Files: setup.py, requirements.txt, weather_cli/\n",
+        done=False,
+    )
+    ok, missing = _verify_task_files(task, tmp_path)
+    assert ok is False
+    assert "setup.py" in missing
+    assert "requirements.txt" in missing
+
+
+def test_verify_task_files_directory_must_be_dir(tmp_path: Path) -> None:
+    """Path ending in / must be a directory, not a regular file."""
+    from code_scalpel.agent import _verify_task_files
+    from code_scalpel.plan import Task
+
+    # Create a regular file with the same name — must NOT satisfy `dir/`
+    (tmp_path / "subdir").write_text("")
+    task = Task(id="T001", title="x", body="Files: subdir/\n", done=False)
+    ok, missing = _verify_task_files(task, tmp_path)
+    assert ok is False
+
+
+@pytest.mark.asyncio
+async def test_run_plan_marks_task_failed_when_declared_file_missing(project: Path) -> None:
+    """Repro of the screenshot bug: task declared three Files, model only
+    created one of them but the inner pipeline marked task done. With Files
+    verification, the outcome flips to failed and the plan halts."""
+    from code_scalpel.tools.shell import ShellResult
+    from tests.mocks import MockShellRunner
+
+    _write_tasks(
+        project,
+        "## T001: scaffold\n\nGoal: make project\nFiles: setup.py, "
+        "missing.txt\nAcceptance:\n- works\nTest command: pytest\n",
+    )
+
+    # Model writes setup.py (exists) but not missing.txt. Mock a patch
+    # that touches a real file so code_with_retry sees a successful
+    # iteration; verification then catches the missing one.
+    edit = (
+        "setup.py\n"
+        "```python\n"
+        "<<<<<<< SEARCH\n"
+        "=======\n"
+        "from setuptools import setup\nsetup()\n"
+        ">>>>>>> REPLACE\n"
+        "```\n"
+    )
+    llm = MockLLMAdapter([edit])
+    shell = MockShellRunner([ShellResult("1 passed", 0)])
+    agent = StepAgent(llm=llm, cwd=project, config=_retry_config(), shell_runner=shell)
+
+    result = await agent.run_plan(stop_after_failures=1)
+
+    assert [o.status for o in result.outcomes] == ["failed"]
+    assert result.tasks_completed == 0
+
+
+@pytest.mark.asyncio
+async def test_run_plan_fails_task_when_model_did_not_commit(project: Path) -> None:
+    """With auto_git on, run_plan requires HEAD to advance after each task.
+    If the model wrote files but didn't commit (no shell_exec git
+    commit), the task flips to failed and the plan halts."""
+    from code_scalpel.tools.shell import ShellResult
+    from tests.mocks import MockShellRunner
+
+    # Pre-seed a .git dir so `_ensure_git_repo` is a no-op (skips its
+    # own shell_exec calls — keeps the mock queue tight).
+    (project / ".git").mkdir()
+
+    _write_tasks(
+        project,
+        "## T001: make a file\n\nGoal: write hello\nFiles: hello.py\n"
+        "Acceptance:\n- exists\nTest command: pytest\n",
+    )
+
+    cfg = _retry_config()
+    cfg.agent.auto_git = True
+
+    edit = _GOOD_PATCH_NOOP
+    llm = MockLLMAdapter([edit])
+    # Shell queue (in order):
+    #   1. git rev-parse HEAD (pre-task)  → empty / non-zero
+    #   2. pytest from _run_tests         → passes
+    #   3. git rev-parse HEAD (post-task) → still empty (no commit)
+    shell = MockShellRunner(
+        [
+            ShellResult("", 128),
+            ShellResult("1 passed", 0),
+            ShellResult("", 128),
+        ]
+    )
+    agent = StepAgent(llm=llm, cwd=project, config=cfg, shell_runner=shell)
+
+    result = await agent.run_plan(stop_after_failures=1)
+
+    assert [o.status for o in result.outcomes] == ["failed"]
+
+
+@pytest.mark.asyncio
+async def test_run_plan_passes_when_model_commits(project: Path) -> None:
+    """auto_git: HEAD advances → task stays done."""
+    from code_scalpel.tools.shell import ShellResult
+    from tests.mocks import MockShellRunner
+
+    (project / ".git").mkdir()
+
+    _write_tasks(
+        project,
+        "## T001: make a file\n\nGoal: write hello\nFiles: hello.py\n"
+        "Acceptance:\n- exists\nTest command: pytest\n",
+    )
+
+    cfg = _retry_config()
+    cfg.agent.auto_git = True
+
+    edit = _GOOD_PATCH_NOOP
+    llm = MockLLMAdapter([edit])
+    shell = MockShellRunner(
+        [
+            ShellResult("abc1234\n", 0),  # pre-task HEAD
+            ShellResult("1 passed", 0),  # pytest
+            ShellResult("def5678\n", 0),  # post-task HEAD (advanced!)
+        ]
+    )
+    agent = StepAgent(llm=llm, cwd=project, config=cfg, shell_runner=shell)
+
+    result = await agent.run_plan()
+
+    assert [o.status for o in result.outcomes] == ["done"]
+
+
+@pytest.mark.asyncio
+async def test_run_plan_uses_task_test_command_when_not_pytest(project: Path) -> None:
+    """A task with a non-pytest `Test command:` (e.g. `python setup.py
+    sdist`) must trigger the extra verification. We mock the verification
+    shell call to fail; outcome must be 'failed'."""
+    from code_scalpel.tools.shell import ShellResult
+    from tests.mocks import MockShellRunner
+
+    _write_tasks(
+        project,
+        "## T001: build sdist\n\nGoal: package\nFiles: hello.py\n"
+        "Acceptance:\n- builds\nTest command: python setup.py sdist\n",
+    )
+
+    edit = _GOOD_PATCH_NOOP
+    llm = MockLLMAdapter([edit])
+    # 1st shell call: pytest from _run_tests (passes).
+    # 2nd shell call: the task's `python setup.py sdist` (fails).
+    shell = MockShellRunner(
+        [
+            ShellResult("1 passed", 0),
+            ShellResult("error: setup.py not found", 1),
+        ]
+    )
+    agent = StepAgent(llm=llm, cwd=project, config=_retry_config(), shell_runner=shell)
+
+    result = await agent.run_plan(stop_after_failures=1)
+
+    assert [o.status for o in result.outcomes] == ["failed"]
+    assert result.tasks_completed == 0

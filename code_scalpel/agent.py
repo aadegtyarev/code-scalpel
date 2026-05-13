@@ -19,12 +19,15 @@ from code_scalpel.context_compress import (
 
 if TYPE_CHECKING:
     from code_scalpel.memory import MemoryStore
+from code_scalpel import prompts as _prompts
 from code_scalpel.llm.adapter import ChatResponse, LLMAdapter, NativeToolCall
 from code_scalpel.patch.edit_block import Edit, apply_edits, extract_edits
 from code_scalpel.plan import Task, parse_tasks_md, serialize_tasks
 from code_scalpel.tools.agent_tools import (
+    LOAD_SKILL_SCHEMA,
     SHELL_EXEC_SCHEMA,
     TOOL_SCHEMAS,
+    UNLOAD_SKILL_SCHEMA,
     ConfirmShellExec,
     ToolCall,
     ToolResult,
@@ -34,42 +37,13 @@ from code_scalpel.tools.shell import ShellRunner
 
 _MAX_TOOL_ROUNDS = 6
 
-# Retry prompts for code_with_retry. We feed the failure verbatim — weak local
-# models reliably benefit from a short, blame-free framing of WHAT broke.
-_APPLY_FAILED_PROMPT = (
-    "Your previous SEARCH/REPLACE patch did not apply cleanly. The applier "
-    "reported:\n\n{error}\n\nProduce a corrected patch. Re-read the target "
-    "file first if you're not sure the SEARCH text matches character-for-"
-    "character."
-)
-_TESTS_FAILED_PROMPT = (
-    "Your previous patch was applied, but the test suite is now red. Pytest "
-    "output:\n\n{output}\n\nProduce a follow-up patch that fixes the failing "
-    "test(s). Don't revert the original change unless that's truly the only "
-    "way forward."
-)
-_MISSING_FILES_PROMPT = (
-    "The following file(s) do not exist yet: {paths}\n\n"
-    "Create each one using a SEARCH/REPLACE block with an **empty SEARCH section** "
-    "(that means: no lines between <<<<<<< SEARCH and =======). Example:\n\n"
-    "requirements.txt\n"
-    "```\n"
-    "<<<<<<< SEARCH\n"
-    "=======\n"
-    "requests\n"
-    "prettytable\n"
-    ">>>>>>> REPLACE\n"
-    "```\n\n"
-    "Proceed with the task now."
-)
-
-_NEEDS_TESTS_PROMPT = (
-    "Your previous patch applied cleanly and the existing tests pass, but it "
-    "changed production code without touching any test file. Produce a "
-    "follow-up patch that adds a test exercising the new behaviour. Put it "
-    "under `tests/`, name it `test_<feature>.py`, and keep the existing "
-    "patch on disk — only add."
-)
+# Prompt aliases — kept as module attributes for the moment so existing
+# code (and tests that import these names) keeps working. The source of
+# truth is `code_scalpel/prompts/`.
+_APPLY_FAILED_PROMPT = _prompts.APPLY_FAILED
+_TESTS_FAILED_PROMPT = _prompts.TESTS_FAILED
+_MISSING_FILES_PROMPT = _prompts.MISSING_FILES
+_NEEDS_TESTS_PROMPT = _prompts.NEEDS_TESTS
 
 
 def _changes_include_tests(edits: list[Edit]) -> bool:
@@ -97,10 +71,7 @@ def _changes_include_prod_code(edits: list[Edit]) -> bool:
 
 _FORCE_ANSWER_MSG: dict[str, Any] = {
     "role": "user",
-    "content": (
-        "You already called these tools with the same arguments. Stop calling "
-        "tools and answer the original question now, using what you have."
-    ),
+    "content": _prompts.FORCE_ANSWER,
 }
 
 # Re-prompt when the model emitted a code block targeting a file it never
@@ -108,12 +79,7 @@ _FORCE_ANSWER_MSG: dict[str, Any] = {
 # we'd silently let through patches/snippets that don't match the actual
 # source. The HOOK rejects the reply once, asks the model to ground via
 # read_file, then accepts whatever it produces on the second pass.
-_READ_BEFORE_SHOW_PROMPT = (
-    "You produced a code block targeting `{path}` without first reading "
-    "the file. Your patch / shown code may not match the actual source. "
-    "Call `read_file({path})` now, then re-emit the corrected output. "
-    "Do NOT reproduce the original block from memory."
-)
+_READ_BEFORE_SHOW_PROMPT = _prompts.READ_BEFORE_SHOW
 
 # A fenced python block in a reply that has NO surrounding SEARCH/REPLACE
 # markers. The HOOK only fires on such blocks when the user's task names a
@@ -125,198 +91,10 @@ _BARE_PY_FENCE_RE = re.compile(
     re.DOTALL | re.MULTILINE,
 )
 
-_SYSTEM_PROMPT = """\
-Always reply in the same natural language the user used.
-
-Don't open task replies with a self-introduction — the user knows
-which tool they launched. Call the relevant tool first and answer
-from its output.
-
-Tone: colleague, not customer. Russian — "ты", not "вы". No
-corporate hedging, no apologies, no emojis, no slang. Don't
-clarify until you've tried tools — first attempt is `project_map`
-/ `grep` / `read_file`, ask only after they've come back empty.
-
-Tools: project_map, read_file, goto_definition, find_references,
-grep, retrieve, run_tests. Each tool's description is normative —
-follow it.
-
-The user message contains ONLY the task. No project listing is
-attached — you have to actively explore the codebase. Don't answer
-about project structure or specific symbols without calling tools
-first; assumptions about file layout are wrong by default.
-
-When a task doesn't name a specific file, your first move is
-`project_map()` (no args) to see what's in the project. Then pick
-a candidate and continue with `project_map(path)` / `read_file` /
-`grep` / `retrieve`. Asking the user "which file?" before that
-first project_map call is the wrong default — try the tool first,
-ask only if the listing genuinely doesn't help.
-
-Navigation order:
-  1. `project_map()` (no args) — tree of files with line counts.
-     First tool when the task names no specific file.
-  2. `project_map(path="foo.py")` — drill into ONE file: classes,
-     signatures, imports. Use after spotting a candidate.
-  3. `read_file(path)` — body when you need to quote or edit.
-  4. `goto_definition(name)` — jump to a known symbol.
-  5. `find_references(name)` — where is X used?
-  6. `retrieve(query, path?)` — fuzzy "what's relevant to X" search.
-  7. `grep(pattern)` — broader regex search by text.
-
-Grounding rules — do NOT make things up:
-- Before you NAME a class / method / function / attribute, verify
-  that exact name appears in `project_map(path)` output for the file.
-  If it isn't there, don't use it — grep elsewhere or ask "the
-  only things I see in that file are X, Y, Z — which did you mean?".
-- A similar-looking name does NOT justify invention. If `project_map(path)`
-  shows `mark_compacted`, do not answer with `compact` — different
-  names.
-- The `imports: ...` line in `project_map(path)` output is GROUND TRUTH for
-  intra-project dependencies. If X's imports don't list Y, then X
-  doesn't use Y — never claim or draw otherwise.
-- Pattern recognition is NOT a source of truth: a class that looks
-  like a dataclass / BaseModel — you might "know" the body, you do
-  not. Call read_file before reproducing more than a signature.
-  (A separate HOOK rejects code blocks emitted without a prior read.)
-- Not sure which file/symbol? Ask. Sure? Call the tool first,
-  answer second.
-- When the user CLARIFIES on a follow-up ("именно …", "конкретно",
-  "I meant …", "specifically …"), do NOT recycle the previous
-  turn — your prior answer missed the thing. Run NEW tool calls
-  (grep, goto_definition, project_map on different files) first.
-  Probe 2026-05-11: model answered "specifically the compression
-  algorithm" by repeating session.py instead of grep'ing `compact`
-  to locate StepAgent.compact().
-
-Diagrams — pick the right Mermaid type. TUI renders fenced mermaid
-inline via its own ASCII parser.
-- `flowchart TD` / `flowchart LR` — FLOW & connections (components,
-  workflow, control flow, dependency graphs). Syntax:
-  `A[Label] --> B`, `A{Decision} -->|yes| B`, `A --- B`.
-- `sequenceDiagram` — ACTORS & time (user journey, request/response,
-  inter-object calls). Syntax: `participant Alice`,
-  `Alice->>Bob: Req`, `Bob-->>Alice: Resp`, `Note over A,B: …`.
-- `classDiagram` — class STRUCTURE (inheritance, composition,
-  public API). Syntax: `class Name { +method() +field: int }`,
-  `Parent <|-- Child`, `Container *-- Item`, `Owner o-- Asset`.
-Out of scope (renderer doesn't support): stateDiagram, gantt,
-journey, gitgraph, mindmap, erDiagram. For states, use flowchart
-with decisions.
-NEVER draw ASCII-art boxes-and-arrows by hand — emit fenced
-```mermaid blocks only; the TUI renders them.
-Before claiming "X uses Y" in a diagram, call `project_map(X)` and
-check `imports:` — otherwise the diagram lies. Probe 2026-05-11:
-model drew classifier.py as used-by agent.py, but agent.py's
-`imports:` doesn't list it — classifier.py is an orphan.
-
-To modify a file, output one or more SEARCH/REPLACE blocks. Each
-block has three parts: (a) filename on its own line, EXACTLY as it
-appears in the MAP, at column 0; (b) a ```python fence at column 0;
-(c) SEARCH/REPLACE body, then closing ``` at column 0. The SEARCH
-body must reproduce the file's lines with ORIGINAL indentation —
-copy from read_file output.
-
-Reference shape (documentation, not output — your real block omits
-this framing and starts at column 0):
-
-    helpers.py
-    ```python
-    <<<<<<< SEARCH
-    def greet(name):
-        return f"Hello, {name}"
-    =======
-    def greet(name, greeting="Hello"):
-        return f"{greeting}, {name}"
-    >>>>>>> REPLACE
-    ```
-
-Rules:
-- SEARCH must match the file character-for-character (bodies,
-  indentation, blank lines, trailing colons). The MAP only shows
-  signatures — never copy them into SEARCH; read_file first.
-- New file: leave SEARCH empty.
-- Prefer multiple small blocks. For questions that need no file
-  changes, respond with plain text only — no blocks."""
-
-
-_CODE_MODE_ADDENDUM = """\
-
-You are in CODE mode. Your job is to make file changes, not explain them.
-
-File creation rules (critical — re-read before each task):
-- A file that does not exist yet MUST be created with an empty SEARCH block.
-  Never assume a file exists before calling read_file. If read_file returns
-  "file not found", stop and create the file with SEARCH/REPLACE instead.
-- Use shell_exec only to RUN things (tests, installers, build commands).
-  Never use shell_exec to create or write files — use SEARCH/REPLACE for that.
-- After each task you must have at least one SEARCH/REPLACE block. Plain text
-  answers are only acceptable when the user explicitly asked a question."""
-
-_REVIEW_MODE_ADDENDUM = """\
-
-You are currently in REVIEW mode. Your job is to review code critically —
-find real problems, not reassure. Never propose SEARCH/REPLACE patches.
-
-Workflow:
-1. Read the relevant files (read_file, grep, project_map). Don't review blind.
-2. Output a structured review:
-
-## Summary
-One sentence: what this code does and whether it's solid.
-
-## Issues
-List real problems found. Each issue: severity tag + location + explanation.
-
-Severity tags:
-- [bug]      — incorrect behaviour, likely to cause failures
-- [risk]     — won't crash today but will cause trouble (race, edge case, perf)
-- [design]   — coupling, abstraction leak, hard to extend
-- [nit]      — style, naming, minor clarity issue
-
-Format each as:
-- [severity] `file.py:line` — description. Impact: what breaks or degrades.
-
-If you find nothing: say so explicitly ("No issues found") — don't manufacture fake nits.
-
-## Suggestions
-Optional. Only if there's a non-obvious improvement worth considering.
-One bullet per suggestion. Keep it short.
-
-Rules:
-- No SEARCH/REPLACE. No code blocks with proposed changes. Review only.
-- Call out the specific line or function, not a vague area.
-- "This looks fine" is not a review. Find the real edge cases.
-- If the user asked about a specific area, focus there first."""
-
-_PLAN_MODE_ADDENDUM = """\
-
-You are currently in PLAN mode. Your job is to produce a structured task
-breakdown — NOT to write code or SEARCH/REPLACE blocks.
-
-Output exactly this format (Markdown), one ## T-prefixed heading per task,
-each task with the same five-line shape:
-
-## T001: <short imperative title>
-
-Goal: <one-line description of the outcome>
-Files: <comma-separated list of project files this task touches>
-Acceptance:
-- <bullet 1 — observable test or behaviour>
-- <bullet 2>
-Test command: <pytest command that proves done, or "manual" if N/A>
-
-## T002: ...
-
-Rules for plan mode:
-- 3-7 tasks total — split big work, but don't over-fragment.
-- Each task self-contained: a separate person could pick one up.
-- Files: real paths from the MAP. If a task needs new files, list the
-  path you'll create.
-- NO SEARCH/REPLACE blocks. NO code. Just the plan. The user will
-  switch to code mode to execute each task.
-- You MAY call read_file / grep to understand the project before
-  planning — that's encouraged. Don't plan blind."""
+_SYSTEM_PROMPT = _prompts.SYSTEM
+_CODE_MODE_ADDENDUM = "\n\n" + _prompts.MODE_CODE
+_REVIEW_MODE_ADDENDUM = "\n\n" + _prompts.MODE_REVIEW
+_PLAN_MODE_ADDENDUM = "\n\n" + _prompts.MODE_PLAN
 
 
 @dataclass(frozen=True)
@@ -501,7 +279,26 @@ def _build_task_prompt(task: Task) -> str:
 # Tools that indicate real work was done (files created/modified or
 # commands executed). Read-only tools (read_file, grep, project_map …)
 # are intentionally absent — they don't change the workspace.
-_MUTATING_TOOLS = frozenset({"shell_exec"})
+_MUTATING_TOOLS = frozenset({"shell_exec", "write_file"})
+
+
+def _successful_write_paths(tool_results: tuple[ToolExecuted, ...]) -> list[str]:
+    """Return the paths from every successful `write_file` tool call in this
+    turn. Used by `code_with_retry` to treat write_file calls as first-class
+    edits — same test/rollback cycle as SEARCH/REPLACE patches.
+    """
+    paths: list[str] = []
+    for r in tool_results:
+        if r.call.name != "write_file" or not r.result.ok:
+            continue
+        try:
+            args = json.loads(r.call.body)
+            path = args.get("path", "")
+            if path and path not in paths:
+                paths.append(path)
+        except (json.JSONDecodeError, KeyError, AttributeError):
+            pass
+    return paths
 
 
 def _missing_file_paths(tool_results: tuple[ToolExecuted, ...]) -> list[str]:
@@ -526,6 +323,94 @@ def _missing_file_paths(tool_results: tuple[ToolExecuted, ...]) -> list[str]:
     return paths
 
 
+def _parse_task_skills(task: Task) -> list[str]:
+    """Extract the `Skills:` comma-separated list from a task body.
+
+    Returns an empty list when the field is missing, "none", or only
+    contains placeholder text. Same parsing posture as `_parse_task_files`.
+    """
+    for raw_line in task.body.splitlines():
+        line = raw_line.strip()
+        if not line.lower().startswith("skills:"):
+            continue
+        rest = line[len("skills:") :].strip()
+        if not rest or rest.lower() in ("none", "n/a", "-"):
+            return []
+        items: list[str] = []
+        for chunk in rest.split(","):
+            name = chunk.strip()
+            if not name or name.startswith("<") or name.endswith(">"):
+                continue
+            items.append(name)
+        return items
+    return []
+
+
+def _parse_task_files(task: Task) -> list[str]:
+    """Extract the comma-separated `Files:` list from a task body.
+
+    Empty list when the field is missing or the user wrote "n/a". A path
+    ending in `/` is treated as a directory marker — the verifier checks
+    `is_dir`, not `is_file`. Anything that looks like a description in
+    angle brackets (placeholder from an unfilled template) is skipped.
+    """
+    for raw_line in task.body.splitlines():
+        line = raw_line.strip()
+        if not line.lower().startswith("files:"):
+            continue
+        rest = line[len("files:") :].strip()
+        if not rest or rest.lower() in ("n/a", "none", "-"):
+            return []
+        items: list[str] = []
+        for chunk in rest.split(","):
+            p = chunk.strip()
+            if not p or p.startswith("<") or p.endswith(">"):
+                continue
+            items.append(p)
+        return items
+    return []
+
+
+def _parse_task_test_command(task: Task) -> str | None:
+    """Extract `Test command:` from a task body. Returns None for missing /
+    "manual" / placeholder values — those mean "no machine verification"."""
+    for raw_line in task.body.splitlines():
+        line = raw_line.strip()
+        if not line.lower().startswith("test command:"):
+            continue
+        cmd = line[len("test command:") :].strip()
+        cmd = cmd.strip("`").strip()
+        if not cmd or cmd.lower() in ("manual", "n/a", "none", "-"):
+            return None
+        if cmd.startswith("<") or cmd.endswith(">"):
+            return None
+        return cmd
+    return None
+
+
+def _verify_task_files(task: Task, cwd: Path) -> tuple[bool, str]:
+    """Check every path in the task's `Files:` list exists on disk.
+
+    Returns (ok, error). A path ending in `/` must be a directory; any
+    other path must be a file. Missing entries are reported by name so
+    the caller (run_plan) can re-prompt the model with a precise list."""
+    files = _parse_task_files(task)
+    if not files:
+        return True, ""
+    missing: list[str] = []
+    for p in files:
+        target = cwd / p.rstrip("/")
+        if p.endswith("/"):
+            if not target.is_dir():
+                missing.append(p)
+        else:
+            if not target.is_file():
+                missing.append(p)
+    if missing:
+        return False, ", ".join(missing)
+    return True, ""
+
+
 def _classify_outcome(task: Task, step_result: StepResult) -> TaskOutcome:
     """Decide done / failed / skipped from a `code_with_retry` return.
 
@@ -543,9 +428,7 @@ def _classify_outcome(task: Task, step_result: StepResult) -> TaskOutcome:
     """
     attempts = step_result.attempts
     if not attempts:
-        shell_calls = [
-            r for r in step_result.tool_results if r.call.name in _MUTATING_TOOLS
-        ]
+        shell_calls = [r for r in step_result.tool_results if r.call.name in _MUTATING_TOOLS]
         if not shell_calls:
             return TaskOutcome(task=task, step_result=step_result, status="skipped")
         if all(r.result.ok for r in shell_calls):
@@ -608,6 +491,12 @@ class StepAgent:
         # history — both points where we lose the conversational context
         # that made past reads load-bearing.
         self._read_files_history: set[str] = set()
+        # Skill names currently loaded into context. `load_skill` adds,
+        # `unload_skill` removes; the system prompt's skills addendum is
+        # rebuilt from this set on every turn. Lazy by design — the model
+        # decides what stack knowledge it needs and pays the token cost
+        # only for what's loaded.
+        self._loaded_skills: set[str] = set()
 
     @property
     def history(self) -> list[dict[str, Any]]:
@@ -736,6 +625,56 @@ class StepAgent:
             result = await self.ask(prompt, mode=mode, on_tool_executed=on_tool_executed)
             last_result = result
             if not result.edits:
+                # No SEARCH/REPLACE patch. The model may have written files
+                # via the `write_file` tool instead — that's a first-class
+                # path now, equal to SEARCH/REPLACE. Treat successful
+                # write_file calls as the "edits" of this iteration: snapshot
+                # is already captured below (lazy on first sight of each
+                # path), tests run via the standard branch, rollback on
+                # failure works because the snapshot is keyed by path.
+                write_paths = _successful_write_paths(result.tool_results)
+                if write_paths:
+                    # Synthesize a no-op snapshot record so rollback works.
+                    # The file's already been written by the tool dispatcher;
+                    # we only need the pre-loop ORIGINAL captured BEFORE the
+                    # tool fired — which means snapshotting now sees the
+                    # already-written content (wrong). For greenfield this is
+                    # fine — `original is None` and rollback unlinks. For
+                    # overwrites we'd need a pre-write snapshot; that's a
+                    # known limitation and the TODO below tracks it.
+                    for p in write_paths:
+                        target = self._cwd / p
+                        if target not in pre_loop_snapshot:
+                            # Best we can do: mark as "did not exist". For an
+                            # overwrite of an existing file this leaks the
+                            # ORIGINAL content on rollback — but write_file is
+                            # primarily for greenfield, where this is correct.
+                            pre_loop_snapshot[target] = None
+                    test_output, tests_passed = await self._run_tests()
+                    synthetic_edits = tuple(
+                        Edit(path=p, search="", replace="") for p in write_paths
+                    )
+                    attempts.append(
+                        PatchAttempt(
+                            edits=synthetic_edits,
+                            apply_ok=True,
+                            apply_error="",
+                            test_output=test_output,
+                            tests_passed=tests_passed,
+                        )
+                    )
+                    if tests_passed:
+                        return StepResult(
+                            reply=result.reply,
+                            edits=[],
+                            response=result.response,
+                            attempts=tuple(attempts),
+                            tool_results=result.tool_results,
+                        )
+                    if i == max_retries:
+                        break
+                    prompt = _TESTS_FAILED_PROMPT.format(output=test_output)
+                    continue
                 # Check for failed read_file calls on non-existent files.
                 # Model tried to read a file that doesn't exist yet — tell it
                 # to create those files and retry (once).
@@ -797,16 +736,19 @@ class StepAgent:
                 break
             prompt = _TESTS_FAILED_PROMPT.format(output=test_output)
 
-        # Exhausted retries. Roll the workspace back to its pre-loop state
-        # so a `git diff` is clean for the user to inspect — the attempts
-        # history still carries every patch so the TUI can render what
-        # was tried and let the user re-apply any of them by hand.
+        # Exhausted retries. Roll BACK to pre-loop state for files that
+        # existed before — those got mutated by SEARCH/REPLACE and the
+        # final state is half-applied junk. Files that DID NOT exist
+        # before (snapshot stored as `None`) we LEAVE on disk: the model
+        # wrote them via write_file as net-new artifacts; deleting them
+        # loses the user's visible progress (Probe 2026-05-13: model
+        # built setup.py + main.py + tests/ over several turns, then the
+        # final retry failed, and we wiped the whole tree).
         for target, original in pre_loop_snapshot.items():
+            if original is None:
+                continue  # net-new file → keep it
             try:
-                if original is None:
-                    target.unlink(missing_ok=True)
-                else:
-                    target.write_text(original)
+                target.write_text(original)
             except OSError:
                 continue
         # Surface the last attempt verbatim so the TUI can show "tests
@@ -860,6 +802,66 @@ class StepAgent:
             reason = "no_tasks" if not tasks else "all_done"
             return RunPlanResult(outcomes=(), stopped_reason=reason, tasks_completed=0)
 
+        # Ensure git repo exists BEFORE the loop so every task can land in
+        # its own commit. Missing → `git init` + a starter `.gitignore`
+        # (covers venvs, build artifacts, pyc cache — common enough to be
+        # universal). Pre-existing repo: untouched. Gated on `auto_git`
+        # so tests / hermetic callers can keep the loop free of shell
+        # side-effects.
+        if self._config.agent.auto_git:
+            await self._ensure_git_repo()
+
+        # If the plan has no `Skills:` annotations, fire a single LLM
+        # pass to add them. Cheap and one-shot; the result is written
+        # back to TASKS.md so subsequent runs (and the user) see the
+        # decision. `/annotate` can re-run this explicitly later.
+        if self._config.agent.auto_annotate_plan and not any(_parse_task_skills(t) for t in tasks):
+            # Surface the annotation pass to the user — it's an extra
+            # LLM call before the loop starts, and silently spending
+            # seconds on it would look like the agent froze.
+            if on_tool_executed is not None:
+                start_call = ToolCall(name="annotate_plan", body="{}")
+                with suppress(Exception):
+                    on_tool_executed(
+                        start_call,
+                        ToolResult(
+                            start_call,
+                            output="Annotating plan with skills (1 LLM pass)…",
+                            ok=True,
+                        ),
+                    )
+            new_text = await self._annotate_plan_with_skills(original_text)
+            if new_text and new_text != original_text:
+                _atomic_write(tasks_path, new_text)
+                original_text = new_text
+                initial_hash = _hash_text(new_text)
+                tasks = parse_tasks_md(new_text)
+                if on_tool_executed is not None:
+                    done_call = ToolCall(name="annotate_plan", body="{}")
+                    # Surface what got picked, per task — one line each
+                    # so the user can scan it without reopening TASKS.md.
+                    lines = ["Plan annotated. Skills per task:"]
+                    for t in tasks:
+                        s = _parse_task_skills(t)
+                        lines.append(f"  {t.id}: {', '.join(s) if s else 'none'}")
+                    with suppress(Exception):
+                        on_tool_executed(
+                            done_call,
+                            ToolResult(done_call, output="\n".join(lines), ok=True),
+                        )
+            elif on_tool_executed is not None:
+                fail_call = ToolCall(name="annotate_plan", body="{}")
+                with suppress(Exception):
+                    on_tool_executed(
+                        fail_call,
+                        ToolResult(
+                            fail_call,
+                            output="Annotation pass returned no changes — "
+                            "running plan without auto-loaded skills.",
+                            ok=False,
+                        ),
+                    )
+
         outcomes: list[TaskOutcome] = []
         consecutive_failures = 0
         # Mutable list so we can flip individual tasks done without
@@ -887,6 +889,20 @@ class StepAgent:
                 stopped_reason = "plan_modified"
                 break
 
+            # Snapshot HEAD before the task — at task end we compare so
+            # we can tell whether the model actually committed. `None`
+            # before-the-first-commit is fine: any non-None after means
+            # a commit happened. Skipped when auto_git is off.
+            head_before: str | None = None
+            if self._config.agent.auto_git:
+                head_before = await self._git_head_sha()
+
+            # Load the task's declared skills before code_with_retry —
+            # so the per-task `_initial_messages` system prompt includes
+            # the right stack guidance. Each new load fires through
+            # `on_tool_executed` for the chat card.
+            await self._load_skills_for_task(task, on_tool_executed)
+
             prompt = _build_task_prompt(task)
             try:
                 step_result = await self.code_with_retry(
@@ -901,6 +917,48 @@ class StepAgent:
                 raise
 
             outcome = _classify_outcome(task, step_result)
+            # Plan-level verification — defends against the model marking a
+            # task done after only partly executing it. Three machine-
+            # verifiable conditions:
+            #   1. `Files:` — every listed path must exist on disk.
+            #      Catches "model only made the folder, not setup.py".
+            #   2. `Test command:` — must exit 0. Catches "files exist but
+            #      logic is wrong". Skipped for "manual" / N/A / "pytest"
+            #      (pipeline already ran pytest via `_run_tests`).
+            #   3. Git HEAD advanced — the model is required by the
+            #      checklist to commit at the end of each task. If HEAD
+            #      didn't change, the model skipped that step.
+            if outcome.status == "done":
+                files_ok, _missing = _verify_task_files(task, self._cwd)
+                if not files_ok:
+                    outcome = TaskOutcome(
+                        task=task,
+                        step_result=step_result,
+                        status="failed",
+                    )
+                else:
+                    cmd = _parse_task_test_command(task)
+                    # Skip plain `pytest` invocations — `_run_tests`
+                    # already covered that, no point re-spawning it.
+                    if cmd and cmd.strip() != "pytest":
+                        verify_ok = await self._verify_task_test_command(cmd)
+                        if not verify_ok:
+                            outcome = TaskOutcome(
+                                task=task,
+                                step_result=step_result,
+                                status="failed",
+                            )
+                if outcome.status == "done" and self._config.agent.auto_git:
+                    head_after = await self._git_head_sha()
+                    if head_after is None or head_after == head_before:
+                        # No commit landed during the task. Mark failed
+                        # so the plan halts and the user notices.
+                        outcome = TaskOutcome(
+                            task=task,
+                            step_result=step_result,
+                            status="failed",
+                        )
+
             outcomes.append(outcome)
             if on_task_end is not None:
                 with suppress(Exception):
@@ -921,9 +979,12 @@ class StepAgent:
                     stopped_reason = "max_failures"
                     break
             else:
-                # "skipped" — model decided no patch needed. Doesn't
-                # count toward failure budget; we move on.
-                consecutive_failures = 0
+                # "skipped" — model produced no patch and no write_file.
+                # That's the model giving up; stop the plan so the user
+                # sees what happened instead of silently rolling through
+                # to the next task on top of an unfinished one.
+                stopped_reason = "task_not_done"
+                break
 
             if max_tasks is not None and len(outcomes) >= max_tasks:
                 stopped_reason = "max_tasks"
@@ -946,6 +1007,211 @@ class StepAgent:
             runner=self._shell_runner,
         )
         return result.output, result.ok
+
+    async def _verify_task_test_command(self, command: str) -> bool:
+        """Run the task's planner-declared `Test command` and return its
+        exit-code-as-bool. Bypasses the model — we don't trust the model's
+        own claim of success; we execute the command independently.
+
+        Goes through `shell_exec` with `yolo` trust because this is plan-
+        owned verification: the user explicitly authored the command in
+        TASKS.md and accepted the plan, so it's not a model-injected
+        command that needs the skeptic confirmation gate.
+        """
+        call = ToolCall(name="shell_exec", body=json.dumps({"command": command}))
+        result = await execute(
+            call,
+            self._cwd,
+            max_lines=self._config.agent.max_file_lines,
+            runner=self._shell_runner,
+            trust="yolo",
+            shell_exec_timeout=self._config.agent.shell_exec_timeout,
+            sandbox=self._config.agent.sandbox,
+        )
+        return result.ok
+
+    async def _run_plan_shell(self, command: str) -> tuple[str, bool]:
+        """Run a plan-owned shell command (`git init`, `git commit`, etc.).
+        Bypasses skeptic confirmation because these are autonomous-plan
+        operations the user already accepted by hitting /go; the command
+        text comes from this module, not from the model. Best-effort: any
+        error is captured in the returned (output, ok) pair so the caller
+        can log but the plan loop keeps moving."""
+        call = ToolCall(name="shell_exec", body=json.dumps({"command": command}))
+        result = await execute(
+            call,
+            self._cwd,
+            max_lines=self._config.agent.max_file_lines,
+            runner=self._shell_runner,
+            trust="yolo",
+            shell_exec_timeout=self._config.agent.shell_exec_timeout,
+            sandbox=self._config.agent.sandbox,
+        )
+        return result.output, result.ok
+
+    async def _ensure_git_repo(self) -> None:
+        """Initialise a git repo + starter `.gitignore` if neither exists.
+
+        Idempotent: existing `.git` is left alone (including its config),
+        existing `.gitignore` is appended to only if our markers are not
+        already present. Failure here doesn't stop the plan — the loop
+        will just run without commits.
+        """
+        if (self._cwd / ".git").exists():
+            return
+        await self._run_plan_shell("git init -q")
+        # Best-effort author so the very first commit doesn't blow up on
+        # a fresh dev machine without a global user.email. We only set
+        # LOCAL config (this repo only) — global settings are the user's.
+        await self._run_plan_shell(
+            "git config user.email scalpel@local && git config user.name 'code-scalpel'"
+        )
+        gitignore = self._cwd / ".gitignore"
+        starter = "\n".join(
+            [
+                "# Added by code-scalpel auto-init",
+                ".venv/",
+                "venv/",
+                "__pycache__/",
+                "*.pyc",
+                ".pytest_cache/",
+                ".mypy_cache/",
+                ".ruff_cache/",
+                "dist/",
+                "build/",
+                "*.egg-info/",
+                "node_modules/",
+                ".env",
+                "",
+            ]
+        )
+        if not gitignore.exists():
+            with suppress(OSError):
+                gitignore.write_text(starter)
+        elif "code-scalpel auto-init" not in gitignore.read_text():
+            with suppress(OSError), gitignore.open("a") as f:
+                f.write("\n" + starter)
+
+    async def _annotate_plan_with_skills(self, plan_text: str) -> str:
+        """Run a single LLM pass that appends `Skills:` lines to each task.
+
+        Builds a tight, focused prompt: the plan + the skill catalog + an
+        OPTIONAL "Detected stack" hint listing filesystem-detected skills
+        (only when the project has marker files — greenfield projects
+        send no hint). Returns the rewritten plan; on any error returns
+        the original text unchanged (best-effort, never breaks /go).
+        """
+        from code_scalpel.skills import active_skills, all_skills
+
+        try:
+            catalog_lines = [f"- {s.name}: {s.description}" for s in all_skills()]
+            catalog = "\n".join(catalog_lines)
+            detected = [s.name for s in active_skills(self._cwd)]
+            if detected:
+                detected_block = (
+                    f"\nDetected stack in this project (filesystem hint, informational only): "
+                    f"{', '.join(detected)}\n"
+                )
+            else:
+                detected_block = (
+                    "\nProject is empty / greenfield — no stack markers on disk. "
+                    "You'll be building from scratch; pick skills based on the "
+                    "files the plan asks you to create.\n"
+                )
+            user_msg = _prompts.ANNOTATE_SKILLS.format(plan=plan_text, catalog=catalog)
+            user_msg += detected_block
+            messages: list[dict[str, Any]] = [
+                {"role": "system", "content": _prompts.SYSTEM},
+                {"role": "user", "content": user_msg},
+            ]
+            profile = self._config.current_profile
+            response = await self._llm.chat(messages, **profile.inference_kwargs("ask"))
+        except Exception:
+            return plan_text
+        reply = (response.content or "").strip()
+        if not reply:
+            return plan_text
+        # The model sometimes wraps Markdown in a fence; strip that.
+        if reply.startswith("```"):
+            lines = reply.splitlines()
+            if lines:
+                lines = lines[1:]
+                if lines and lines[-1].startswith("```"):
+                    lines = lines[:-1]
+                reply = "\n".join(lines)
+        if "## T" not in reply:
+            return plan_text  # model didn't follow format; keep original
+        return reply
+
+    async def _load_skills_for_task(
+        self,
+        task: Task,
+        on_tool_executed: Callable[[ToolCall, ToolResult], None] | None,
+    ) -> None:
+        """Activate every skill listed in this task's `Skills:` line.
+
+        Skills already in `_loaded_skills` are skipped (no chat spam for
+        repeats). Each new load fires `on_tool_executed` with a synthetic
+        load_skill call so the user sees the activation as a card.
+        """
+        from code_scalpel.skills import get_skill
+
+        for name in _parse_task_skills(task):
+            if name in self._loaded_skills:
+                continue
+            skill = get_skill(name)
+            if skill is None:
+                continue
+            self._loaded_skills.add(name)
+            if on_tool_executed is None:
+                continue
+            instr = skill.model_instructions()
+            # Synthetic tool name `auto_load_skill` distinguishes the
+            # plan-runner's auto-load from a model-initiated `load_skill`
+            # in the chat (different card header). Not in TOOL_SCHEMAS —
+            # the model can't call this name.
+            call_view = ToolCall(name="auto_load_skill", body=json.dumps({"name": name}))
+            output = (
+                f"Skill '{name}' loaded (from plan annotation).\n\n{instr}"
+                if instr
+                else f"Skill '{name}' loaded (from plan annotation)."
+            )
+            with suppress(Exception):
+                on_tool_executed(call_view, ToolResult(call_view, output=output, ok=True))
+
+    async def annotate_plan(self) -> bool:
+        """Public entry-point for `/annotate`. Reads TASKS.md, runs the
+        skill-annotation pass, writes the result back. Returns True if
+        the file changed, False otherwise (no plan, or annotator
+        returned identical text)."""
+        tasks_path = self._cwd / ".code-scalpel" / "TASKS.md"
+        if not tasks_path.is_file():
+            return False
+        original = tasks_path.read_text()
+        if not original.strip():
+            return False
+        new_text = await self._annotate_plan_with_skills(original)
+        if not new_text or new_text == original:
+            return False
+        _atomic_write(tasks_path, new_text)
+        return True
+
+    async def _git_head_sha(self) -> str | None:
+        """Return the current HEAD sha, or None if there isn't one yet
+        (fresh repo, pre-first-commit state, or shell error).
+
+        Used by `run_plan` to snapshot HEAD before each task and compare
+        after, so we can detect whether the model actually committed.
+        """
+        out, ok = await self._run_plan_shell("git rev-parse HEAD 2>/dev/null")
+        if not ok:
+            return None
+        # Output format: `exit code: 0\n---\n<sha>\n`.
+        for line in out.splitlines():
+            line = line.strip()
+            if line and len(line) >= 7 and all(c in "0123456789abcdef" for c in line):
+                return line
+        return None
 
     async def _compress_old_tool_results(self) -> int:
         """Walk `self._history` and replace stale tool-role messages
@@ -1014,7 +1280,15 @@ class StepAgent:
     def _is_loop(tcs: tuple[NativeToolCall, ...], seen: set[tuple[str, str]]) -> bool:
         looped = False
         for tc in tcs:
-            key = (tc.name, tc.arguments)
+            # Normalize JSON whitespace so the model can't escape loop
+            # detection by re-emitting `{"path": "x"}` vs `{"path":"x"}`.
+            args_key = tc.arguments
+            try:
+                parsed = json.loads(tc.arguments) if tc.arguments else {}
+                args_key = json.dumps(parsed, sort_keys=True, separators=(",", ":"))
+            except (json.JSONDecodeError, TypeError):
+                pass
+            key = (tc.name, args_key)
             if key in seen:
                 looped = True
             seen.add(key)
@@ -1022,6 +1296,12 @@ class StepAgent:
 
     async def _execute_native(self, tc: NativeToolCall) -> ToolResult:
         call = ToolCall(name=tc.name, body=tc.arguments)
+        # Skill load/unload need agent state — handle them here before
+        # falling through to the stateless tools dispatcher.
+        if tc.name == "load_skill":
+            return self._tool_load_skill(call)
+        if tc.name == "unload_skill":
+            return self._tool_unload_skill(call)
         return await execute(
             call,
             self._cwd,
@@ -1030,6 +1310,7 @@ class StepAgent:
             trust=self._config.agent.trust,
             shell_exec_timeout=self._config.agent.shell_exec_timeout,
             confirm_shell_exec=self._confirm_shell_exec,
+            sandbox=self._config.agent.sandbox,
         )
 
     def _tool_schemas(self) -> list[dict[str, Any]]:
@@ -1038,7 +1319,7 @@ class StepAgent:
         confirmation callback registered at construction time (the
         TUI provides one; headless callers like probe/bench leave it
         `None` and shell_exec refuses in skeptic)."""
-        return [*TOOL_SCHEMAS, SHELL_EXEC_SCHEMA]
+        return [*TOOL_SCHEMAS, SHELL_EXEC_SCHEMA, LOAD_SKILL_SCHEMA, UNLOAD_SKILL_SCHEMA]
 
     def _remember(self, user_msg: str, assistant_msg: str) -> None:
         self._history.append({"role": "user", "content": user_msg})
@@ -1362,13 +1643,18 @@ class StepAgent:
     def _initial_messages(self, user_msg: str, *, mode: str = "ask") -> list[dict[str, Any]]:
         # With native function-calling, tool docs come from the API schema —
         # we don't need few-shot examples of the text <TOOL: name> format.
-        system = _SYSTEM_PROMPT
+        system = _SYSTEM_PROMPT + self._skills_catalog()
         if mode == "plan":
             system += _PLAN_MODE_ADDENDUM
         elif mode == "review":
             system += _REVIEW_MODE_ADDENDUM
         elif mode == "code":
             system += _CODE_MODE_ADDENDUM
+        # Loaded-skills block goes after mode addenda so per-stack rules
+        # win against generic mode guidance when they overlap (e.g. test
+        # command preference). Always emitted — the model can load_skill
+        # from any mode, not just code.
+        system += self._skills_addendum()
         msgs: list[dict[str, Any]] = [{"role": "system", "content": system}]
         # History may carry internal bookkeeping fields (`_tool_name`,
         # `_tool_args`) on tool messages for the compression pass. Strip
@@ -1378,6 +1664,105 @@ class StepAgent:
             msgs.append({k: v for k, v in entry.items() if not k.startswith("_")})
         msgs.append({"role": "user", "content": user_msg})
         return msgs
+
+    def _skills_catalog(self) -> str:
+        """One-line-per-skill catalog of everything the model can load_skill.
+
+        Always emitted into the system prompt so the model knows what's
+        on the menu without having to discover. Cheap (~10 tokens per
+        skill) and stable across turns.
+        """
+        from code_scalpel.skills import all_skills
+
+        try:
+            skills = all_skills()
+        except Exception:
+            return ""
+        if not skills:
+            return ""
+        lines = [
+            "",
+            "",
+            "Available skills (call load_skill('<name>') to add stack-specific guidance to your context):",
+        ]
+        for s in skills:
+            lines.append(f"- {s.name}: {s.description}")
+        return "\n".join(lines)
+
+    def _skills_addendum(self) -> str:
+        """Instructions block for currently loaded skills.
+
+        Built from `self._loaded_skills` — what the model (or auto-load
+        at plan start) has explicitly activated. Empty when nothing is
+        loaded, so the cost is paid only for skills the agent decided
+        it needs.
+        """
+        if not self._loaded_skills:
+            return ""
+        from code_scalpel.skills import get_skill
+
+        blocks: list[str] = []
+        for name in sorted(self._loaded_skills):
+            skill = get_skill(name)
+            if skill is None:
+                continue
+            instr = skill.model_instructions()
+            if instr:
+                blocks.append(instr)
+        if not blocks:
+            return ""
+        return "\n\n" + "\n\n".join(blocks)
+
+    def _tool_load_skill(self, call: ToolCall) -> ToolResult:
+        """Intercept `load_skill` — add to `_loaded_skills`, return the
+        skill's model_instructions so they're visible in the tool result
+        chain too (the next turn's system prompt also carries them via
+        `_skills_addendum`; the tool result is what the model sees
+        immediately, for the current turn's reasoning)."""
+        from code_scalpel.skills import get_skill
+
+        args = self._decode_skill_args(call.body)
+        name = str(args.get("name", "")).strip()
+        if not name:
+            return ToolResult(call, output="error: missing skill name", ok=False)
+        skill = get_skill(name)
+        if skill is None:
+            return ToolResult(call, output=f"error: unknown skill {name!r}", ok=False)
+        if name in self._loaded_skills:
+            # Idempotent — don't re-inject the instructions block when the
+            # plan-runner already loaded the skill for this task.
+            return ToolResult(call, output=f"Skill '{name}' is already loaded.", ok=True)
+        self._loaded_skills.add(name)
+        instr = skill.model_instructions()
+        if instr:
+            return ToolResult(call, output=f"Skill '{name}' loaded.\n\n{instr}", ok=True)
+        return ToolResult(call, output=f"Skill '{name}' loaded (no extra guidance).", ok=True)
+
+    def _tool_unload_skill(self, call: ToolCall) -> ToolResult:
+        args = self._decode_skill_args(call.body)
+        name = str(args.get("name", "")).strip()
+        if not name:
+            return ToolResult(call, output="error: missing skill name", ok=False)
+        if name not in self._loaded_skills:
+            return ToolResult(call, output=f"Skill '{name}' was not loaded.", ok=False)
+        self._loaded_skills.discard(name)
+        return ToolResult(call, output=f"Skill '{name}' unloaded.", ok=True)
+
+    @staticmethod
+    def _decode_skill_args(body: str) -> dict[str, Any]:
+        """Tolerate JSON-args (native function calling) or bare string
+        (legacy <TOOL> form). Mirrors `_decode_args` in agent_tools."""
+        body = body.strip()
+        if not body:
+            return {}
+        if body.startswith("{"):
+            try:
+                obj = json.loads(body)
+                if isinstance(obj, dict):
+                    return obj
+            except json.JSONDecodeError:
+                pass
+        return {"name": body}
 
     def _user_message(self, task: str) -> str:
         """Build the user message: task + optional pre-blocks.

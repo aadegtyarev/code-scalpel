@@ -27,6 +27,44 @@ from textual.widgets import Static
 _CardState = Literal["awaiting", "done"]
 
 
+# Physical-key map: Cyrillic glyph → English glyph sitting on the same
+# QWERTY key. When the user's OS layout is Russian, pressing the physical
+# `t` key sends `event.key="е"`; we re-route that back to "t" so option
+# bindings keep working across layouts. Covers only the letters our
+# ChoiceCards actually use today — extend as new keys land in cards.
+_PHYSICAL_KEY: dict[str, str] = {
+    # row 1 (qwertyuiop)
+    "й": "q",
+    "ц": "w",
+    "у": "e",
+    "к": "r",
+    "е": "t",
+    "н": "y",
+    "г": "u",
+    "ш": "i",
+    "щ": "o",
+    "з": "p",
+    # row 2 (asdfghjkl)
+    "ф": "a",
+    "ы": "s",
+    "в": "d",
+    "а": "f",
+    "п": "g",
+    "р": "h",
+    "о": "j",
+    "л": "k",
+    "д": "l",
+    # row 3 (zxcvbnm)
+    "я": "z",
+    "ч": "x",
+    "с": "c",
+    "м": "v",
+    "и": "b",
+    "т": "n",
+    "ь": "m",
+}
+
+
 @dataclass(frozen=True)
 class ChoiceOption:
     key: str
@@ -140,8 +178,14 @@ class ChoiceCard(Widget):
             return
         if self._state != "awaiting":
             return
+        # Match against `event.key` AND the same physical key under a
+        # non-English layout. Russian QWERTY puts Cyrillic glyphs on the
+        # same physical keys — user pressing the `t` key with the layout
+        # in RU sends `event.key="е"`. The map covers the letters our
+        # cards actually use (a/s/r/t/p/m/g/y/n + their RU twins).
+        pressed = _PHYSICAL_KEY.get(event.key, event.key)
         for opt in self._options:
-            if event.key == opt.key:
+            if pressed == opt.key:
                 self._resolve(opt.key, event)
                 return
         if self._cancel_on_escape and event.key == "escape":
