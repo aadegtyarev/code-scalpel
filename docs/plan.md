@@ -2676,45 +2676,48 @@ Rust language skill / Kubernetes component skill — по запросу.
       переносится из чек-листа в backlog.
 ```
 
-### v0.9 — machine checks
+### ~~v0.9 — machine checks~~ ✓ закрыта 2026-05-13
 
 ```text
 Тезис: если можно проверить машиной — не объясняй промптом.
 Машинная проверка ловит ровно то что описана, не зависит от
 температуры, не уговаривается. Дополняет v0.8, не заменяет.
 
-- [ ] Lint pass после write_file.
-      Если в проекте есть ruff/mypy — после каждой группы
-      write_file прогнать на изменённых файлах. Диагностика
-      → отдельный builder turn «вот ошибки, поправь» → повтор
-      (cap 2 цикла, дальше failed task).
+- [x] Lint pass после write_file (2026-05-13).
+      `code_scalpel/checks/lint_pass.py` детектирует ruff/mypy на
+      PATH через `shutil.which`, прогоняет на каждом изменённом
+      .py файле. Per-linter timeout (default 15s). Findings → chat
+      card `lint_pass` с ok=False. Опт-ин: `AgentConfig.lint_pass`.
+      Авто-fix builder'ом по findings — v0.9.b после калибровки.
 
-- [ ] Import graph check.
-      Модель добавила `from X import Y` — асинхронно проверить
-      что X резолвится (проект/stdlib/site-packages) и Y действительно
-      экспортируется. Несовпадение → retry с конкретной диагностикой
-      «модуль есть, имя Y отсутствует, есть похожее Y_v2».
+- [x] Import graph check (2026-05-13).
+      `code_scalpel/checks/import_graph.py` — AST walk каждого
+      `from <in-project> import <name>`. Учитывает `__all__`,
+      пропускает stdlib/relative/star. Findings → card `import_graph`
+      с file:line/module/name/reason. Опт-ин:
+      `AgentConfig.import_graph_check`.
 
-- [ ] Empty-test detector.
-      Статический анализ нового теста: содержит ли вызов продакшен-
-      кода, есть ли assertion не `assert True/pass`. Если нет —
-      failed task. Никаких «зелёных пустых тестов».
+- [x] Empty-test detector (2026-05-13).
+      `code_scalpel/checks/empty_tests.py` — AST детектор пустых/
+      тривиальных test_ функций. Pass body / assert literal / no Call.
+      Не ловит `assert x is not None` после Call — это работа LLM
+      judge из v0.8. Опт-ин: `AgentConfig.empty_test_detect`.
 
-- [ ] mkdir guard (v0.7 loose end B).
-      В _execute_native перехватить `mkdir <dir>` если в том же
-      tool-batch'е есть `write_file <dir>/...` → no-op + warning
-      в карточку. write_file сам делает parents, mkdir всегда
-      падает exit 1 в sandbox.
+- [x] mkdir guard (v0.7 loose end B) (2026-05-13).
+      `shell_exec` распознаёт bare `mkdir <dir>` / `mkdir -p <dir>`
+      без chain'а → no-op с поясняющим сообщением. Compound
+      команды (`mkdir x && do_thing`) пропускаются. write_file сам
+      создаёт parents.
 
-- [ ] write_file content="" reject (v0.7 loose end C).
-      _tool_write_file отвергает пустой контент с явной диагностикой
-      «пустой файл создаётся через `touch` или `write_file
-      content="\\n"`».
+- [x] write_file content="" reject (v0.7 loose end C) (2026-05-13).
+      `_tool_write_file` возвращает ошибку для `content=""` с
+      указанием на `content="\\n"` (deliberately blank) или
+      `shell_exec touch`.
 
-- [ ] "kept partial progress" label (v0.7 loose end D).
-      После исчерпания retry-attempts вместо лживого "rolled back"
-      явно перечислить какие файлы остались на диске и предложить
-      `git status` / ручной откат.
+- [x] "kept partial progress" label (v0.7 loose end D) (2026-05-13).
+      `/go` failed verdict теперь честный — «✗ failed — kept partial
+      progress on disk (check `git status`)». Net-new файлы остаются,
+      теперь это видно пользователю.
 ```
 
 ### v0.10 — fork delegation
