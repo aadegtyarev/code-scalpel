@@ -1480,9 +1480,14 @@ class ScalpelApp(App[None]):
                     tr = ToolResult(call=call, output=body, ok=attempt.tests_passed)
                     output.add_tool_use(call, tr)
                     self._last_tool_result = tr
+                # v0.9 loose end D: "rolled back" lied. code_with_retry
+                # restores mutated files but leaves net-new files on
+                # disk on purpose (so multi-turn write_file progress
+                # isn't wiped). Be honest about that and tell the user
+                # where to look.
                 verdict = {
                     "done": "✓ done",
-                    "failed": "✗ failed — rolled back",
+                    "failed": "✗ failed — kept partial progress on disk (check `git status`)",
                     "skipped": "↷ skipped (model emitted no patch)",
                 }.get(outcome.status, outcome.status)
                 output.print_status(f"  {outcome.task.id} {verdict}")
