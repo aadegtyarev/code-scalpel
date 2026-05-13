@@ -175,6 +175,64 @@ async def test_stream_ask_without_session_does_not_crash(project: Path) -> None:
 
 
 @pytest.mark.asyncio
+async def test_maybe_auto_compact_no_op_below_threshold(project: Path) -> None:
+    """Threshold not crossed → no LLM call, no history change."""
+    from code_scalpel.session import Session
+
+    session = Session()
+    session.last_prompt_tokens = 100  # tiny prompt
+    llm = MockLLMAdapter(["summary"])
+    agent = StepAgent(llm=llm, cwd=project, config=_CONFIG, session=session)
+    agent._history = [{"role": "user", "content": "hi"}]
+
+    ran = await agent.maybe_auto_compact(context_limit=10_000)
+
+    assert ran is False
+    assert llm.calls == []  # no LLM hit
+
+
+@pytest.mark.asyncio
+async def test_maybe_auto_compact_fires_past_threshold(project: Path) -> None:
+    """Fill crosses compact_threshold → compact() runs, history collapses
+    to a single summary row, session is marked compacted."""
+    from code_scalpel.config import AgentConfig
+    from code_scalpel.session import Session
+
+    cfg = AppConfig(
+        profiles={"local": ModelProfile(provider="lmstudio", model="m", temperature=0.0)},
+        agent=AgentConfig(compact_threshold=0.5),
+    )
+    session = Session()
+    session.last_prompt_tokens = 8_000  # 80% of 10k → over the 50% threshold
+    llm = MockLLMAdapter(["bullets summary"])
+    agent = StepAgent(llm=llm, cwd=project, config=cfg, session=session)
+    agent._history = [
+        {"role": "user", "content": "do thing"},
+        {"role": "assistant", "content": "ok"},
+    ]
+
+    ran = await agent.maybe_auto_compact(context_limit=10_000)
+
+    assert ran is True
+    assert len(agent.history) == 1
+    assert "bullets summary" in agent.history[0]["content"]
+    # mark_compacted resets last_prompt_tokens; the next turn re-measures it.
+    assert session.last_prompt_tokens == 0
+
+
+@pytest.mark.asyncio
+async def test_maybe_auto_compact_no_op_without_session(project: Path) -> None:
+    """No session → guard against AttributeError. Headless callers
+    (probe, bench) can still call run_plan safely."""
+    llm = MockLLMAdapter(["x"])
+    agent = StepAgent(llm=llm, cwd=project, config=_CONFIG)
+
+    ran = await agent.maybe_auto_compact(context_limit=10_000)
+
+    assert ran is False
+
+
+@pytest.mark.asyncio
 async def test_project_map_tool_walks_subdirs(tmp_path: Path) -> None:
     """project_map() (no path) returns a tree across nested
     directories. This is the model's main orientation entry point

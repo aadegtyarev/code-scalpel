@@ -1387,6 +1387,7 @@ async def test_slash_run_invokes_run_plan_and_renders_status_lines(
             on_task_start: Any = None,
             on_task_end: Any = None,
             on_tool_executed: Any = None,
+            context_limit: int | None = None,
         ) -> RunPlanResult:
             t1 = Task(id="T001", title="First", body="Goal: a", done=False)
             t2 = Task(id="T002", title="Second", body="Goal: b", done=False)

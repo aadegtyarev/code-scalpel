@@ -777,6 +777,7 @@ class StepAgent:
         on_task_start: Callable[[Task], None] | None = None,
         on_task_end: Callable[[TaskOutcome], None] | None = None,
         on_tool_executed: Callable[[ToolCall, ToolResult], None] | None = None,
+        context_limit: int | None = None,
     ) -> RunPlanResult:
         """Walk `.code-scalpel/TASKS.md` and execute each non-done task
         through `code_with_retry`. Marks completed tasks `[✓]` in the
@@ -880,6 +881,13 @@ class StepAgent:
         for idx, task in enumerate(live_tasks):
             if task.done:
                 continue
+
+            # Between-task auto-compact: long plans on a 14b coder drift
+            # past the prompt budget around task 5-7. Threshold from
+            # config.agent.compact_threshold; only fires when the TUI
+            # passed in a known context_limit. No-op for the first task
+            # (session.context_used_tokens is still 0).
+            await self.maybe_auto_compact(context_limit, on_tool_executed)
 
             # Fire start-hook BEFORE the modification check so the TUI
             # has its "● Running T00N…" line on screen the moment we
@@ -1417,6 +1425,62 @@ class StepAgent:
             if rel in task:
                 return rel
         return None
+
+    async def maybe_auto_compact(
+        self,
+        context_limit: int | None,
+        on_tool_executed: Callable[[ToolCall, ToolResult], None] | None = None,
+    ) -> bool:
+        """Compact history if context fill ratio crossed the configured
+        threshold. Returns True if compaction ran. No-op when session or
+        context_limit is unknown, or when the threshold is disabled.
+
+        Wired into /go between tasks — a 14b coder routinely chews through
+        the prompt budget over 5-6 tasks; without this the plan stalls
+        with an out-of-context error after task 7, leaving the user with
+        no recourse. Mid-task compaction would strand the model in a
+        half-finished tool round, so we only fire between tasks.
+        """
+        if context_limit is None or self._session is None:
+            return False
+        threshold = self._config.agent.compact_threshold
+        if threshold <= 0 or threshold >= 1:
+            return False
+        used = self._session.context_used_tokens
+        if used <= 0:
+            return False
+        ratio = used / context_limit
+        if ratio < threshold:
+            return False
+        if on_tool_executed is not None:
+            start_call = ToolCall(name="auto_compact", body="{}")
+            with suppress(Exception):
+                on_tool_executed(
+                    start_call,
+                    ToolResult(
+                        start_call,
+                        output=(
+                            f"Context at {ratio:.0%} of {context_limit} tokens "
+                            f"(threshold {threshold:.0%}) — compacting history."
+                        ),
+                        ok=True,
+                    ),
+                )
+        summary = await self.compact()
+        self._session.mark_compacted()
+        if on_tool_executed is not None and summary:
+            done_call = ToolCall(name="auto_compact", body="{}")
+            with suppress(Exception):
+                excerpt = summary if len(summary) <= 200 else summary[:200] + "…"
+                on_tool_executed(
+                    done_call,
+                    ToolResult(
+                        done_call,
+                        output=f"History compacted:\n{excerpt}",
+                        ok=True,
+                    ),
+                )
+        return True
 
     async def compact(self) -> str | None:
         """Summarize history into a short note and replace it. Returns summary

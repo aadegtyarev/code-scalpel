@@ -1432,6 +1432,7 @@ class ScalpelApp(App[None]):
                     on_task_start=_start,
                     on_task_end=_end,
                     on_tool_executed=_on_tool,
+                    context_limit=self.state.context_limit or None,
                 )
             except asyncio.CancelledError:
                 output.print_status("● Cancelled.")
