@@ -3031,6 +3031,19 @@ ruff config — получает его. Снимает класс ошибок 
       `@slash("/name", help="…") def handler(arg): …`. Поможет
       команде из backlog «TUI rework».
 
+- [ ] Богатый `/status` экран (далёкая хотелка).
+      Сейчас `/stats` — одностраничный текстовый отчёт. По образцу
+      Claude Code `/status`: полноэкранный modal с табами
+      (Settings / Status / Config / Usage / Stats), GitHub-style
+      heatmap календарь по дням, метрики (favorite model, total
+      tokens, sessions, active days, longest session/streak,
+      current streak). Сравнение типа «~21x больше токенов чем
+      Преступление и наказание» — приятный last-mile UX. Реализация
+      требует persisting per-session metrics между запусками
+      (sqlite в `.code-scalpel/stats.db`), Textual modal с
+      keyboard navigation (tabs / r cycle / ctrl+s copy). Зависимости
+      пока не покупаем — это далёкое quality-of-life, не reliability.
+
 - [ ] LM Studio model swap для v0.12 upstream-batching.
       Кейс: локальная мощная модель (например gemma-26b) не помещается
       в RAM одновременно с qwen-14b. Перед upstream flush нужно
