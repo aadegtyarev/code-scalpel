@@ -39,16 +39,21 @@ class PlanTask:
 
     task_id: str
     title: str
+    done: bool = False
     goal: str = ""
     files: str = ""
     acceptance: list[str] = field(default_factory=list)
     test_command: str = ""
 
 
-# Matches a task header like "## T001: Add feature". We capture the
-# numeric id (3+ digits to match the planner addendum's T### format) and
-# the title; greedy on the title to consume the rest of the line.
-_TASK_HEADER_RE = re.compile(r"^##\s+T(\d{3,}):\s*(.*)$", re.MULTILINE)
+# Matches both pending and done task headers:
+#   ## T001: Add feature
+#   ## [✓] T001: Add feature   (marked done by run_plan)
+# Group 1: optional mark inside [...], group 2: numeric id, group 3: title.
+_TASK_HEADER_RE = re.compile(
+    r"^##\s+(?:\[(?P<mark>[^\]]*)\]\s+)?(?P<id>T\d{3,}):\s*(?P<title>.*)$",
+    re.MULTILINE,
+)
 
 
 def parse_tasks_md(text: str) -> list[PlanTask]:
@@ -67,11 +72,20 @@ def parse_tasks_md(text: str) -> list[PlanTask]:
     for i, m in enumerate(headers):
         end = headers[i + 1].start() if i + 1 < len(headers) else len(text)
         body = text[m.end() : end]
-        tasks.append(_build_task(task_id=f"T{m.group(1)}", title=m.group(2).strip(), body=body))
+        mark = (m.group("mark") or "").strip()
+        done = mark in ("✓", "x", "X")
+        tasks.append(
+            _build_task(
+                task_id=m.group("id"),
+                title=m.group("title").strip(),
+                body=body,
+                done=done,
+            )
+        )
     return tasks
 
 
-def _build_task(*, task_id: str, title: str, body: str) -> PlanTask:
+def _build_task(*, task_id: str, title: str, body: str, done: bool = False) -> PlanTask:
     """Extract the five conventional fields out of one task's body slab.
 
     We walk lines top-down: a "Goal:" / "Files:" / "Test command:" line
@@ -116,6 +130,7 @@ def _build_task(*, task_id: str, title: str, body: str) -> PlanTask:
     return PlanTask(
         task_id=task_id,
         title=title,
+        done=done,
         goal=goal,
         files=files,
         acceptance=acceptance,
@@ -132,7 +147,12 @@ def _render_task_body(task: PlanTask) -> Text:
     Static below uses markup=False but still gets coloured spans.
     """
     out = Text()
-    out.append(f"## {task.task_id}: {task.title}\n", style="bold")
+    if task.done:
+        out.append(f"✓ {task.task_id}: {task.title}\n", style="bold #7fc090 strike")
+    else:
+        out.append(f"◻ {task.task_id}: {task.title}\n", style="bold")
+    if task.done:
+        return out  # collapsed view for completed tasks — no need for details
     if task.goal:
         out.append("Goal: ", style="dim bold")
         out.append(f"{task.goal}\n")
@@ -190,14 +210,15 @@ class PlanCard(Widget):
     }
     """
 
-    def __init__(self, tasks: list[PlanTask]) -> None:
+    def __init__(self, tasks: list[PlanTask], *, collapsed: bool = False) -> None:
         super().__init__()
         self._tasks = list(tasks)
+        self._collapsed = collapsed
 
     @classmethod
-    def from_tasks_md(cls, text: str) -> PlanCard:
+    def from_tasks_md(cls, text: str, *, collapsed: bool = False) -> PlanCard:
         """Parse TASKS.md text and return a ready-to-mount card."""
-        return cls(parse_tasks_md(text))
+        return cls(parse_tasks_md(text), collapsed=collapsed)
 
     @property
     def tasks(self) -> list[PlanTask]:
@@ -205,16 +226,19 @@ class PlanCard(Widget):
 
     def _title(self) -> str:
         n = len(self._tasks)
+        done = sum(1 for t in self._tasks if t.done)
         noun = "task" if n == 1 else "tasks"
         # All literals here — no model-sourced text in the title, so
         # markup=True is safe and gets us the bold/dim styling.
+        if done:
+            return f"[bold]📋 Plan[/bold] [dim]({done}/{n} {noun})[/dim]"
         return f"[bold]📋 Plan[/bold] [dim]({n} {noun})[/dim]"
 
     def compose(self) -> ComposeResult:
         # collapsed=False: plan is the headline artefact of a plan-mode
         # turn, not background noise. User can fold it manually via the
         # Collapsible chevron if they want.
-        with Collapsible(title=self._title(), collapsed=False):
+        with Collapsible(title=self._title(), collapsed=self._collapsed):
             if not self._tasks:
                 yield Static("(empty plan)", classes="plan-empty", markup=False)
                 return

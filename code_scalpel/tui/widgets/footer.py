@@ -34,6 +34,8 @@ class StatusFooter(Widget):
     # Thinking effort indicator — shown only when model supports thinking
     # and effort is not "off". E.g. "◐ low", "◐ med", "◐ high".
     thinking: reactive[str] = reactive("")
+    # Retry loop indicator — shown when iterative_patch_loop is active.
+    loop: reactive[str] = reactive("")
 
     def compose(self) -> ComposeResult:
         yield Label("", id="footer-label")
@@ -59,6 +61,9 @@ class StatusFooter(Widget):
     def watch_thinking(self, _: str) -> None:
         self._refresh_label()
 
+    def watch_loop(self, _: str) -> None:
+        self._refresh_label()
+
     def _refresh_label(self) -> None:
         parts = [self.hints]
         if self.status:
@@ -69,6 +74,8 @@ class StatusFooter(Widget):
             indicators.append(self.trust.replace("[", r"\["))
         if self.thinking:
             indicators.append(self.thinking)
+        if self.loop:
+            indicators.append(self.loop)
         if indicators:
             parts.append(" ".join(indicators))
         if self.ctx:

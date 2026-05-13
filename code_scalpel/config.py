@@ -81,6 +81,24 @@ class AgentConfig(BaseModel):
     # Hard cap on each shell_exec call. Independent of trust level —
     # a hung command must not block the agent indefinitely.
     shell_exec_timeout: int = 30
+    # Filesystem sandbox for shell_exec. `auto` uses bwrap if installed,
+    # falls back to bare subprocess otherwise. `on` requires bwrap (refuses
+    # to run shell_exec without it). `off` disables sandboxing entirely.
+    # Sandbox confines the command to the project directory; /home, /etc,
+    # and other host paths are not visible (network IS shared, for pip /
+    # LLM calls). See `code_scalpel/tools/sandbox.py` for layout details.
+    sandbox: Literal["auto", "on", "off"] = "auto"
+    # Plan-runner git integration. When on: run_plan auto-inits a git
+    # repo (with starter .gitignore) before the first task, and validates
+    # that HEAD advanced after each task (model is required to commit
+    # via the code-mode checklist). Off keeps the loop hermetic, which
+    # tests rely on (mocks don't expect shell calls from the runner
+    # itself). Off in tests, on in production.
+    auto_git: bool = True
+    # Auto-annotate the plan with per-task `Skills:` lines at /go time
+    # when none are present. Fires ONE extra LLM call before the loop
+    # starts. Off in tests so the mocked LLM queue stays predictable.
+    auto_annotate_plan: bool = True
     # Inference thinking effort — passed to providers that support it
     # (o1/o3, deepseek-r1, qwq). Ignored when ModelProfile.supports_thinking
     # is False or None (auto-detected as unsupported). Toggled via Ctrl+K.

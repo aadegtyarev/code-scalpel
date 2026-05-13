@@ -16,6 +16,7 @@ from code_scalpel.skills import (
     SkillRegistry,
     SqliteSkill,
     active_skills,
+    all_skills,
     default_runnable_skill,
     default_skill,
     get_skill,
@@ -337,3 +338,65 @@ def test_default_runnable_returns_none_on_component_only_dir(tmp_path: Path) -> 
     markers) has no runnable skill — caller falls back to bare pytest."""
     (tmp_path / "alembic.ini").write_text("[alembic]\n")
     assert default_runnable_skill(tmp_path) is None
+
+
+# ── model_instructions() — content injected into agent system prompt ─────────
+
+
+def test_python_skill_model_instructions_mentions_pytest_and_ruff() -> None:
+    """PythonSkill must surface its actual commands in the model-facing
+    block so the LLM uses them verbatim instead of guessing
+    `python -m unittest`."""
+    text = PythonSkill().model_instructions()
+    assert "pytest" in text
+    assert "ruff" in text
+
+
+def test_go_skill_model_instructions_mentions_go_test() -> None:
+    text = GoSkill().model_instructions()
+    assert "go test" in text
+
+
+def test_js_skill_model_instructions_mentions_npm() -> None:
+    text = JsTsSkill().model_instructions()
+    assert "npm" in text
+
+
+def test_base_skill_model_instructions_default_empty() -> None:
+    """Skill ABC defaults to empty — skills without their own knowledge
+    block don't leak placeholder text into the system prompt."""
+
+    class _Bare(Skill):
+        name = "bare"
+        description = "bare"
+
+        def detect(self, root: Path) -> bool:
+            return False
+
+        def test_cmd(self, args: str = "") -> list[str]:
+            return []
+
+        def lint_cmd(self) -> list[str]:
+            return []
+
+    assert _Bare().model_instructions() == ""
+
+
+def test_model_instructions_compact() -> None:
+    """Sanity check on size — these strings ship in every plan-execution
+    turn's system prompt. >1.5KB per skill would erase the lazy-loading
+    advantage."""
+    for skill in (PythonSkill(), GoSkill(), JsTsSkill()):
+        text = skill.model_instructions()
+        assert text, f"{skill.name} has empty model_instructions"
+        assert len(text) < 1500, f"{skill.name} model_instructions={len(text)} chars"
+
+
+# ── all_skills() — registry enumeration for the catalog block ────────────────
+
+
+def test_all_skills_returns_every_registered() -> None:
+    """all_skills() is what the agent uses to build the catalog block —
+    every built-in must appear."""
+    names = {s.name for s in all_skills()}
+    assert {"python", "go", "js", "docker", "postgres", "sqlite"}.issubset(names)

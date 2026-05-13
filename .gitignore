@@ -19,3 +19,4 @@ config.yaml
 # Per-project runtime state — caches, locks, scheduled-task pids. Never ship.
 .code-scalpel/
 .claude/
+memory/
