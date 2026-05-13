@@ -177,6 +177,227 @@ async def test_judge_test_sanity_sends_file_content(project: Path) -> None:
 
 
 @pytest.mark.asyncio
+async def test_debug_pass_returns_structured_hint(project: Path) -> None:
+    """Happy path: debug_pass returns {hypothesis, evidence,
+    suggested_fix} via response_format. Caller (code_with_retry)
+    splices suggested_fix into the next retry prompt."""
+    payload = (
+        '{"hypothesis": "ImportError: queue collides with stdlib",'
+        ' "evidence": "read_file showed queue.py imports own queue",'
+        ' "suggested_fix": "rename queue.py to job_queue.py"}'
+    )
+    llm = MockLLMAdapter([payload])
+    agent = StepAgent(llm=llm, cwd=project, config=_CONFIG)
+
+    result = await agent.debug_pass(
+        task_id="T001",
+        task_title="Add job queue",
+        diff="queue.py\n```\n+import queue\n```",
+        test_output="E   ImportError: cannot import 'enqueue' from 'queue'",
+    )
+
+    assert result is not None
+    assert "ImportError" in result.text
+    # Structured output schema must land in adapter kwargs.
+    rf = llm.kwargs_calls[0].get("response_format")
+    assert rf is not None
+    assert rf["json_schema"]["name"] == "debug_pass"
+    # Temperature pinned to the config knob (default 0.1).
+    assert llm.kwargs_calls[0]["temperature"] == 0.1
+
+
+@pytest.mark.asyncio
+async def test_debug_pass_empty_test_output_is_noop(project: Path) -> None:
+    """Without a failure trace there's nothing to debug. Skip the
+    LLM round-trip entirely — saves tokens on the apply-failed path
+    where test_output is `""`."""
+    llm = MockLLMAdapter(["unused"])
+    agent = StepAgent(llm=llm, cwd=project, config=_CONFIG)
+
+    result = await agent.debug_pass(
+        task_id="T001",
+        task_title="t",
+        diff="some diff",
+        test_output="",
+    )
+
+    assert result is None
+    assert llm.calls == []
+
+
+@pytest.mark.asyncio
+async def test_debug_pass_disabled_keeps_legacy_retry_prompt(project: Path) -> None:
+    """With `debug_pass=False` (default), code_with_retry falls back
+    to raw _TESTS_FAILED_PROMPT. Existing /go behaviour unchanged."""
+    from code_scalpel.tools.shell import ShellResult
+    from tests.mocks import MockShellRunner
+
+    bad = """\
+hello.py
+```python
+<<<<<<< SEARCH
+def hello():
+    pass
+=======
+def hello():
+    return "still wrong"
+>>>>>>> REPLACE
+```
+"""
+    llm = MockLLMAdapter([bad, bad])
+    shell = MockShellRunner([ShellResult("still failing", 1)] * 3)
+    cfg = AppConfig(
+        profiles={"local": ModelProfile(provider="lmstudio", model="m")},
+        agent=AgentConfig(
+            max_files=2,
+            max_file_lines=50,
+            max_debug_attempts=1,
+            iterative_patch_loop=True,
+            enforce_read_before_show=False,
+            auto_git=False,
+            sandbox="off",
+            debug_pass=False,  # disabled
+        ),
+    )
+    agent = StepAgent(llm=llm, cwd=project, config=cfg, shell_runner=shell)
+
+    await agent.code_with_retry("fix it", force_loop=True)
+
+    # Builder ran twice (initial + 1 retry); debugger never fired.
+    assert len(llm.calls) == 2
+
+
+@pytest.mark.asyncio
+async def test_debug_pass_enabled_fires_between_attempts(project: Path) -> None:
+    """With debug_pass=True, a failed-test attempt routes through
+    the debugger before the next builder retry. Look for the
+    `debug_pass` card in the on_tool_executed stream."""
+    from code_scalpel.tools.shell import ShellResult
+    from tests.mocks import MockShellRunner
+
+    # Two distinct patches so the second one's SEARCH actually
+    # matches the post-first-apply state (otherwise we hit
+    # apply-error path instead of tests-failed path).
+    bad_one = """\
+hello.py
+```python
+<<<<<<< SEARCH
+def hello():
+    return 'hi'
+=======
+def hello():
+    return "wrong-1"
+>>>>>>> REPLACE
+```
+"""
+    bad_two = """\
+hello.py
+```python
+<<<<<<< SEARCH
+def hello():
+    return "wrong-1"
+=======
+def hello():
+    return "wrong-2"
+>>>>>>> REPLACE
+```
+"""
+    debug_payload = (
+        '{"hypothesis": "wrong return value",'
+        ' "evidence": "test asserts hello()==\\"hi\\"",'
+        ' "suggested_fix": "return \\"hi\\" instead of \\"wrong\\""}'
+    )
+    llm = MockLLMAdapter([bad_one, debug_payload, bad_two])
+    shell = MockShellRunner([ShellResult("first failure", 1), ShellResult("second failure", 1)])
+    cfg = AppConfig(
+        profiles={"local": ModelProfile(provider="lmstudio", model="m")},
+        agent=AgentConfig(
+            max_files=2,
+            max_file_lines=50,
+            max_debug_attempts=1,
+            iterative_patch_loop=True,
+            enforce_read_before_show=False,
+            auto_git=False,
+            sandbox="off",
+            debug_pass=True,
+            debug_pass_max_attempts=2,
+        ),
+    )
+    agent = StepAgent(llm=llm, cwd=project, config=cfg, shell_runner=shell)
+    cards: list[tuple[str, str]] = []
+
+    def _on_tool(call, result):  # type: ignore[no-untyped-def]
+        cards.append((call.name, result.output))
+
+    await agent.code_with_retry("fix it", force_loop=True, on_tool_executed=_on_tool)
+
+    # Builder (1) → run_tests → debug_pass → builder (2) → run_tests.
+    # LLM saw 3 turns: 2 builder + 1 debug_pass.
+    assert len(llm.calls) == 3
+    debug_cards = [c for c in cards if c[0] == "debug_pass"]
+    assert len(debug_cards) == 1
+    assert "wrong return value" in debug_cards[0][1]
+
+
+@pytest.mark.asyncio
+async def test_debug_pass_stops_on_repeated_hypothesis(project: Path) -> None:
+    """If debugger names the same hypothesis twice, that's stuck —
+    break the loop instead of grinding through more attempts."""
+    from code_scalpel.tools.shell import ShellResult
+    from tests.mocks import MockShellRunner
+
+    bad_one = """\
+hello.py
+```python
+<<<<<<< SEARCH
+def hello():
+    return 'hi'
+=======
+def hello():
+    return "wrong-1"
+>>>>>>> REPLACE
+```
+"""
+    bad_two = """\
+hello.py
+```python
+<<<<<<< SEARCH
+def hello():
+    return "wrong-1"
+=======
+def hello():
+    return "wrong-2"
+>>>>>>> REPLACE
+```
+"""
+    same_hypothesis = '{"hypothesis": "X is wrong", "evidence": "trace", "suggested_fix": "fix X"}'
+    # builder1, debug (X), builder2, debug (X AGAIN → break), no builder3.
+    llm = MockLLMAdapter([bad_one, same_hypothesis, bad_two, same_hypothesis])
+    shell = MockShellRunner([ShellResult("differ A", 1), ShellResult("differ B", 1)])
+    cfg = AppConfig(
+        profiles={"local": ModelProfile(provider="lmstudio", model="m")},
+        agent=AgentConfig(
+            max_files=2,
+            max_file_lines=50,
+            max_debug_attempts=3,  # plenty of budget
+            iterative_patch_loop=True,
+            enforce_read_before_show=False,
+            auto_git=False,
+            sandbox="off",
+            debug_pass=True,
+            debug_pass_max_attempts=5,
+        ),
+    )
+    agent = StepAgent(llm=llm, cwd=project, config=cfg, shell_runner=shell)
+
+    await agent.code_with_retry("fix it", force_loop=True)
+
+    # builder → debug → builder → debug (same hypothesis → break).
+    # 4 LLM calls total; the 3rd builder retry never runs.
+    assert len(llm.calls) == 4
+
+
+@pytest.mark.asyncio
 async def test_run_plan_fires_test_sanity_when_enabled(project: Path) -> None:
     """Integration: with test_sanity_pass=True, a task that modifies
     a test file triggers the sanity judge after the patch lands.
