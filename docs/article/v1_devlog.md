@@ -1893,6 +1893,62 @@ upstream queue — отдельные PR'ы.
 
 ---
 
+## Глава 31 — Save-хуки: где именно писать STATE.json
+
+PR-A v0.12.5 завёз поля в `STATE.json`. PR-B должен ответить
+**когда именно** туда писать. Очевидный соблазн — «save после
+каждого изменения любого поля». Это амплификация I/O: на
+каждый tool call от 14b + один os.replace на tmp-файл. Не
+большая стоимость, но и не нулевая, плюс размывает «когда
+была crash recovery точка».
+
+Принцип, к которому пришли — **event-driven**, а не
+fine-grained:
+
+- save на **task transitions** в run_plan (старт / конец);
+- save после **успешного коммита** (поскольку коммит — это
+  natural recovery boundary: git уже знает что произошло, и
+  STATE может ссылаться на head_after);
+- save после **fork enqueue / upstream flush** (изменение
+  open_fork_questions);
+- save после **compact** (изменение history_summary_hash).
+
+НЕ save'им: на каждом tool result, на каждом stream token, на
+каждом read_file. Эти события безопасны для пропуска —
+crash в их середине просто откатывает к предыдущей recovery
+точке, потери минимальны.
+
+Архитектурный вопрос: **где живёт save**. Два варианта:
+
+1. Централизованный `StateKeeper` класс — owns AgentState +
+   методы `mark_task_started`, `mark_task_completed` и т.д.
+   StepAgent / Runtime зовут эти методы вместо прямой мутации.
+2. Прямая мутация state с явным `_persist_state()` вызовом
+   в нужных точках. State — duck-typed обьект, save —
+   wrapped в `suppress(Exception)`.
+
+Выбрали (2). StateKeeper класс — это правильное OOP, но
+текущий объём — два save'а в run_plan и пара в будущих
+PR'ах. Класс на пять методов ради этого — over-engineering.
+Прямые мутации более явные («вот тут current_task = task.id,
+вот тут save»), и если потом save'ов станет больше — рефактор
+в StateKeeper тривиален. Делаем дешёвое решение пока проблема
+маленькая.
+
+`_persist_state()` — приватный хелпер в StepAgent. Wrapped в
+`suppress(Exception)` потому что STATE — best-effort: crash
+в save'е не должен ломать /go. Disk full, permission denied,
+sigkill в середине rename — всё это лучше пропустить чем
+обвалить плэн.
+
+Эта глава отражает **PR-B** v0.12.5: Runtime → StepAgent
+передаёт `state`, run_plan вызывает `_persist_state()` на
+старте и конце каждой task. Fork-queue sync и
+history_summary_hash — PR-C/D, entry-card на старте TUI —
+PR-E.
+
+---
+
 ## Промежуточные итоги — карта глав
 
 - Глава 0 — почему пишем своё, когда вокруг уже всё есть
@@ -1924,3 +1980,4 @@ upstream queue — отдельные PR'ы.
 - Глава 28 — pending queue вместо синхронного upstream: батчинг, mark-for-review, грубое-но-честное scope атрибутирование
 - Глава 29 — carve-out релиза: вычленить вторую фичу в подверсию ради чистого surface'а + probe-driven validation как обязательный шаг перед `git tag`
 - Глава 30 — STATE.json для full resume: не пиши то что восстанавливается из других источников; STATE — мета, не лог
+- Глава 31 — Save-хуки event-driven, не fine-grained; прямая мутация state + suppress'ed save вместо StateKeeper-класса пока проблема маленькая

@@ -581,6 +581,7 @@ class StepAgent:
         confirm_shell_exec: ConfirmShellExec | None = None,
         session: Session | None = None,
         upstream_queue: object | None = None,
+        state: object | None = None,
     ) -> None:
         self._llm = llm
         self._cwd = cwd
@@ -634,6 +635,11 @@ class StepAgent:
         # commit, so the queue can later attribute commits to
         # forks-in-flight during /escalate flush.
         self._upstream_queue = upstream_queue
+        # v0.12.5 persistent state — AgentState pydantic model
+        # (duck-typed, optional). run_plan writes through it on
+        # task transitions so a crash resumes near where we stopped.
+        # Headless callers leave it None — saves become no-ops.
+        self._state = state
 
     @property
     def history(self) -> list[dict[str, Any]]:
@@ -649,6 +655,18 @@ class StepAgent:
         happens after the agent is already constructed, this is the
         public hook for handing it over. Pass None to detach."""
         self._memory = store
+
+    def _persist_state(self) -> None:
+        """Atomic STATE.json save when a state-keeper is attached.
+
+        Wrapped in suppress(Exception) at call sites — STATE bookkeeping
+        is best-effort, must never break /go. Caller mutates fields on
+        `self._state` directly before calling this. No-op when state
+        is None (probe / bench / non-TUI runs)."""
+        if self._state is None:
+            return
+        with suppress(Exception):
+            self._state.save(self._cwd)  # type: ignore[attr-defined]
 
     async def ask(
         self,
@@ -1088,6 +1106,18 @@ class StepAgent:
                 with suppress(Exception):
                     on_task_start(task)
 
+            # Persist task-start: if the process dies mid-task, resume
+            # knows which task was in flight and can show «Continue
+            # T00N / Restart» in the entry-card. step_phase="generating"
+            # is the broadest stamp — finer phases (applying / testing)
+            # live inside code_with_retry; we set them there in v0.12.5
+            # PR-C when we wire the inner pipeline.
+            if self._state is not None:
+                with suppress(Exception):
+                    self._state.current_task = task.id  # type: ignore[attr-defined]
+                    self._state.step_phase = "generating"  # type: ignore[attr-defined]
+                self._persist_state()
+
             # Plan-modification detection — re-read before each task. If
             # the file changed under us, stop. Already-marked tasks stay
             # on disk; the user's edits win the race.
@@ -1180,6 +1210,21 @@ class StepAgent:
             if on_task_end is not None:
                 with suppress(Exception):
                     on_task_end(outcome)
+
+            # Persist task-end: on success, mark the task done and clear
+            # `current_task` so resume knows we finished and didn't crash
+            # mid-flight. On failure / skip, keep `current_task` populated
+            # — the entry-card will offer to retry it.
+            if self._state is not None:
+                with suppress(Exception):
+                    if outcome.status == "done":
+                        completed_ids = list(self._state.completed_tasks)  # type: ignore[attr-defined]
+                        if task.id not in completed_ids:
+                            completed_ids.append(task.id)
+                            self._state.completed_tasks = completed_ids  # type: ignore[attr-defined]
+                        self._state.current_task = None  # type: ignore[attr-defined]
+                    self._state.step_phase = "idle"  # type: ignore[attr-defined]
+                self._persist_state()
 
             # Per-step review — independent skeptic turn on the diff
             # we just landed. Off by default; opt in via

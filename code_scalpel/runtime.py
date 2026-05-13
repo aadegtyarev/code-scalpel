@@ -33,6 +33,7 @@ from code_scalpel.fork import (
 from code_scalpel.llm.adapter import LLMAdapter, OpenAICompatibleAdapter
 from code_scalpel.memory import MemoryStore
 from code_scalpel.session import Session
+from code_scalpel.state import AgentState
 from code_scalpel.tools.agent_tools import ConfirmShellExec
 from code_scalpel.upstream_queue import (
     FlushOutcome,
@@ -61,10 +62,16 @@ class Runtime:
         confirm_shell_exec: ConfirmShellExec | None = None,
         fork_ui_hook: ChoiceUIHook | None = None,
         upstream_profile: UpstreamProfile | None = None,
+        state: AgentState | None = None,
     ) -> None:
         self.cwd = cwd
         self.config = config
         self.session = Session()
+        # v0.12.5 full resume: Runtime owns the persistent AgentState
+        # so it can save() on every meaningful transition. TUI passes
+        # the loaded state; headless callers (probe / bench / tests)
+        # leave it None — saves become no-ops.
+        self.state = state
         if llm is None:
             profile = config.current_profile
             llm = OpenAICompatibleAdapter(
@@ -91,6 +98,7 @@ class Runtime:
             confirm_shell_exec=confirm_shell_exec,
             session=self.session,
             upstream_queue=self.upstream_queue,
+            state=self.state,
         )
         # Fork resolver. TUI passes a ui_hook that mounts a ChoiceCard
         # and awaits the user; headless callers (probe / bench) leave
