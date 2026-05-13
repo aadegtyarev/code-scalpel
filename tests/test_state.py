@@ -6,7 +6,7 @@ import pytest
 
 from code_scalpel.llm.adapter import ChatResponse
 from code_scalpel.session import Session
-from code_scalpel.state import AgentState
+from code_scalpel.state import AgentState, PersistedFork
 
 # --- AgentState ---
 
@@ -56,6 +56,62 @@ def test_save_updates_last_saved_at(tmp_path: Path) -> None:
     s.save(tmp_path)
     loaded = AgentState.load(tmp_path)
     assert loaded.last_saved_at >= before
+
+
+# --- v0.12.5 full-resume поля ---
+
+
+def test_default_resume_fields_empty() -> None:
+    """Свежая STATE.json не претендует на resume — оба поля
+    нулевые. Entry-card по этим значениям решит «нечего
+    показывать»."""
+    s = AgentState()
+    assert s.history_summary_hash is None
+    assert s.open_fork_questions == []
+
+
+def test_persisted_fork_roundtrip(tmp_path: Path) -> None:
+    """Сохранили снимок очереди — после load'а получили те же
+    forks с тем же fork_id, picker_chosen и question."""
+    forks = [
+        PersistedFork(fork_id="abc1234", question="Which DB driver?", picker_chosen="asyncpg"),
+        PersistedFork(fork_id="def5678", question="HTTP client?", picker_chosen="httpx"),
+    ]
+    s = AgentState(open_fork_questions=forks, history_summary_hash="deadbeef")
+    s.save(tmp_path)
+    loaded = AgentState.load(tmp_path)
+    assert loaded.history_summary_hash == "deadbeef"
+    assert len(loaded.open_fork_questions) == 2
+    assert loaded.open_fork_questions[0].fork_id == "abc1234"
+    assert loaded.open_fork_questions[0].picker_chosen == "asyncpg"
+    assert loaded.open_fork_questions[1].fork_id == "def5678"
+    assert loaded.open_fork_questions[1].question == "HTTP client?"
+
+
+def test_resume_fields_independent_of_legacy_load(tmp_path: Path) -> None:
+    """Старая STATE.json без новых полей должна читаться без
+    ошибок — pydantic подставит дефолты. Защита от сценария
+    «обновили scalpel над живым проектом»."""
+    legacy_json = '{"current_task": "T002", "step_phase": "applying"}'
+    (tmp_path / ".code-scalpel").mkdir()
+    (tmp_path / ".code-scalpel" / "STATE.json").write_text(legacy_json)
+    loaded = AgentState.load(tmp_path)
+    assert loaded.current_task == "T002"
+    assert loaded.history_summary_hash is None
+    assert loaded.open_fork_questions == []
+
+
+def test_reset_clears_resume_fields(tmp_path: Path) -> None:
+    """`reset` должен зачистить и новые resume-поля тоже —
+    иначе stale forks переживут «Restart» в entry-card'е."""
+    s = AgentState(
+        open_fork_questions=[PersistedFork(fork_id="x", question="?", picker_chosen="a")],
+        history_summary_hash="abc",
+    )
+    s.save(tmp_path)
+    fresh = AgentState.reset(tmp_path)
+    assert fresh.open_fork_questions == []
+    assert fresh.history_summary_hash is None
 
 
 # --- Session ---
