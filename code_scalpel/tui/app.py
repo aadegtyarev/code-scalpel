@@ -175,6 +175,13 @@ class ScalpelApp(App[None]):
         self._pending_shell_confirms: dict[int, asyncio.Future[bool]] = {}
         self._next_shell_card_id: int = 0
         self._next_go_card_id: int = 0
+        # Pending fork resolutions — `_fork_ui_hook` registers a future
+        # per ChoiceCard it mounts, `on_choice_decision` resolves it
+        # when the matching card_id reports. Same shape as
+        # `_pending_shell_confirms`; both ride the same ChoiceDecision
+        # message bus.
+        self._pending_fork_futures: dict[int, asyncio.Future[str]] = {}
+        self._next_fork_card_id: int = 10_000  # leave room for /go cards
         # Double-Esc guard: first Esc arms, second cancels. Timer resets arm.
         self._esc_armed: bool = False
 
@@ -278,6 +285,7 @@ class ScalpelApp(App[None]):
                 cwd=self.cwd,
                 config=self.config,
                 confirm_shell_exec=self._confirm_shell_exec,
+                fork_ui_hook=self._fork_ui_hook,
             )
             # Bridge the runtime's quartet to legacy fields so the rest of
             # the TUI keeps using `self._agent`, `self.session`,
@@ -1668,6 +1676,39 @@ class ScalpelApp(App[None]):
         ChoiceOption("m", "manual", "type your own task, plan is unaffected"),
     ]
 
+    async def _fork_ui_hook(
+        self,
+        title: str,
+        options: tuple,  # type: ignore[type-arg]
+        timeout: int | None,
+    ) -> str | None:
+        """Mount a ChoiceCard for one fork, await the user's pick.
+
+        `options` is a tuple of `code_scalpel.fork.ChoiceCardOption` —
+        we translate to the TUI's own `ChoiceOption` shape. Pending
+        ChoiceDecision lands in `on_choice_decision`, which resolves
+        the future this method is awaiting.
+
+        `timeout` is honoured in v0.10c-2; this first cut blocks
+        without a deadline so we can validate the mount+resolve path
+        end to end before adding the asyncio.wait_for wrapper.
+        """
+        cid = self._next_fork_card_id
+        self._next_fork_card_id += 1
+        choice_options = [
+            ChoiceOption(key=o.key, label=o.label, description=o.description) for o in options
+        ]
+        card = ChoiceCard(title=title, options=choice_options, card_id=cid)
+        fut: asyncio.Future[str] = asyncio.get_event_loop().create_future()
+        self._pending_fork_futures[cid] = fut
+        await self.mount(card, before=self.query_one(ModeInput))
+        self.call_after_refresh(card.focus)
+        try:
+            return await fut
+        finally:
+            self._pending_fork_futures.pop(cid, None)
+            self.run_worker(self._remove_choice_card(cid), exclusive=False)
+
     async def _mount_go_card(self) -> None:
         cid = self._next_go_card_id
         self._next_go_card_id += 1
@@ -1677,7 +1718,14 @@ class ScalpelApp(App[None]):
 
     def on_choice_decision(self, msg: ChoiceDecision) -> None:
         # ShellExecCard handles its own ChoiceDecision and stops it.
-        # Only go-card decisions reach here.
+        # Fork resolutions route through `_pending_fork_futures` —
+        # check that table first so the per-fork future wakes up.
+        # /go-card decisions fall through to the bottom of this
+        # method.
+        fork_fut = self._pending_fork_futures.get(msg.card_id)
+        if fork_fut is not None and not fork_fut.done():
+            fork_fut.set_result(msg.chosen_key)
+            return
         output = self.query_one(OutputLog)
         key = msg.chosen_key
         self.run_worker(self._remove_choice_card(msg.card_id), exclusive=False)

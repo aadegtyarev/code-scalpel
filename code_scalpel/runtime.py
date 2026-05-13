@@ -22,6 +22,12 @@ from pathlib import Path
 
 from code_scalpel.agent import StepAgent, StepResult, StreamItem
 from code_scalpel.config import AppConfig
+from code_scalpel.fork import (
+    ChoiceUIHook,
+    ForkOption,
+    ForkResolution,
+    HumanForker,
+)
 from code_scalpel.llm.adapter import LLMAdapter, OpenAICompatibleAdapter
 from code_scalpel.memory import MemoryStore
 from code_scalpel.session import Session
@@ -46,6 +52,7 @@ class Runtime:
         llm: LLMAdapter | None = None,
         with_memory: bool = True,
         confirm_shell_exec: ConfirmShellExec | None = None,
+        fork_ui_hook: ChoiceUIHook | None = None,
     ) -> None:
         self.cwd = cwd
         self.config = config
@@ -69,6 +76,13 @@ class Runtime:
             confirm_shell_exec=confirm_shell_exec,
             session=self.session,
         )
+        # Fork resolver. TUI passes a ui_hook that mounts a ChoiceCard
+        # and awaits the user; headless callers (probe / bench) leave
+        # it None and HumanForker falls through per
+        # config.agent.fork_human_fallback. The forker is reusable —
+        # one per Runtime, picks up the latest trust level via config
+        # on each call.
+        self.fork_resolver = HumanForker(self.agent, ui_hook=fork_ui_hook, config=config.agent)
 
     async def stream(
         self,
@@ -94,3 +108,19 @@ class Runtime:
         """Iterative patch loop — same prepare_turn front-door."""
         task = self.session.prepare_turn(raw_text)
         return await self.agent.code_with_retry(task, mode=mode)
+
+    async def fork(
+        self,
+        question: str,
+        options: tuple[ForkOption, ...],
+        context: str,
+        *,
+        critical: bool = False,
+    ) -> ForkResolution:
+        """Delegate an architectural choice through the configured
+        resolver. Trust (Ctrl+L) drives whether the human picks, the
+        model picks (LocalMeta), or it depends on `critical`. Call
+        sites in /plan and /go land in v0.11 «fork wiring»; this
+        method is the public seam they'll reach for.
+        """
+        return await self.fork_resolver.resolve(question, options, context, critical=critical)
