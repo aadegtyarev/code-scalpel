@@ -177,6 +177,12 @@ class AgentConfig(BaseModel):
     #           no override safety net. Use when you've checked the
     #           probe results and don't need the reviewer pass.
     fork_auto_reviewed: bool = True
+    # Run detect_forks on the plan before /go starts. When at least
+    # one fork is found, each gets resolved through the Fork API and
+    # the decisions are prepended to TASKS.md as an «Architectural
+    # decisions» block the builder reads on the first task. Off by
+    # default to preserve legacy /go.
+    auto_detect_forks: bool = False
 
 
 class ModeTemperatures(BaseModel):

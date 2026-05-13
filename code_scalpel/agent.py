@@ -18,6 +18,7 @@ from code_scalpel.context_compress import (
 )
 
 if TYPE_CHECKING:
+    from code_scalpel.fork import HumanForker
     from code_scalpel.memory import MemoryStore
     from code_scalpel.narrow_pass import NarrowPass, PassResult
     from code_scalpel.session import Session
@@ -826,6 +827,7 @@ class StepAgent:
         on_task_end: Callable[[TaskOutcome], None] | None = None,
         on_tool_executed: Callable[[ToolCall, ToolResult], None] | None = None,
         context_limit: int | None = None,
+        fork_resolver: HumanForker | None = None,
     ) -> RunPlanResult:
         """Walk `.code-scalpel/TASKS.md` and execute each non-done task
         through `code_with_retry`. Marks completed tasks `[✓]` in the
@@ -918,6 +920,28 @@ class StepAgent:
                             ok=False,
                         ),
                     )
+
+        # detect_forks + resolve them before the builder starts the
+        # first task. Each ForkContext from `detect_forks` is handed
+        # to the resolver (HumanForker, trust-driven); the resolved
+        # choices land in TASKS.md as a header block the builder
+        # reads. Gated on `auto_detect_forks` AND a resolver actually
+        # being wired (no resolver → headless run; nothing to do).
+        if (
+            self._config.agent.auto_detect_forks
+            and fork_resolver is not None
+            and "## Architectural decisions" not in original_text
+        ):
+            await self._detect_and_resolve_forks(
+                tasks_path=tasks_path,
+                original_text=original_text,
+                fork_resolver=fork_resolver,
+                on_tool_executed=on_tool_executed,
+            )
+            # Re-read because we just rewrote the file with the
+            # decisions block.
+            original_text = tasks_path.read_text()
+            initial_hash = _hash_text(original_text)
 
         outcomes: list[TaskOutcome] = []
         consecutive_failures = 0
@@ -1750,6 +1774,101 @@ class StepAgent:
             temperature=self._config.agent.review_temperature,
         )
         return await self.run_narrow_pass(pass_spec, user_message)
+
+    async def _detect_and_resolve_forks(
+        self,
+        *,
+        tasks_path: Path,
+        original_text: str,
+        fork_resolver: HumanForker,
+        on_tool_executed: Callable[[ToolCall, ToolResult], None] | None,
+    ) -> None:
+        """Run detect_forks on the plan, resolve every fork through
+        the provided HumanForker, and prepend an «Architectural
+        decisions» block to TASKS.md.
+
+        Failures inside any step degrade gracefully:
+        - detect_forks parse failure → empty list, no block written.
+        - resolver raises ForkError on a single fork → skip that
+          fork, continue with the rest. The plan still runs; the
+          builder doesn't see the unresolved question.
+        - All-empty result → no block, no file mutation.
+        """
+        from code_scalpel.fork import ForkError, detect_forks
+
+        # Lightweight project context — language hint from skill
+        # detection. Better context could be wired later, but the
+        # detector is mostly looking at the plan itself.
+        from code_scalpel.skills import active_skills
+
+        skill_names = ", ".join(s.name for s in active_skills(self._cwd))
+        project_context = f"Detected stack: {skill_names or '(none)'}"
+
+        if on_tool_executed is not None:
+            start_call = ToolCall(name="detect_forks", body="{}")
+            with suppress(Exception):
+                on_tool_executed(
+                    start_call,
+                    ToolResult(
+                        start_call,
+                        output="Scanning plan for architectural forks (1 LLM pass)…",
+                        ok=True,
+                    ),
+                )
+        try:
+            forks = await detect_forks(self, original_text, project_context)
+        except Exception:
+            return
+        if not forks:
+            if on_tool_executed is not None:
+                done_call = ToolCall(name="detect_forks", body="{}")
+                with suppress(Exception):
+                    on_tool_executed(
+                        done_call,
+                        ToolResult(
+                            done_call,
+                            output="No architectural forks detected — plan runs as-is.",
+                            ok=True,
+                        ),
+                    )
+            return
+
+        decisions: list[str] = []
+        for fork in forks:
+            try:
+                resolution = await fork_resolver.resolve(fork.question, fork.options, fork.context)
+            except ForkError:
+                # Resolver gave up on this fork (user cancelled, no
+                # ui_hook + fork_human_fallback=error, etc.).
+                # Continue with the next fork; partial decisions
+                # are still better than nothing.
+                continue
+            line = f"- **{fork.question}** → `{resolution.chosen}`"
+            if resolution.reasoning:
+                line += f"\n  _{resolution.reasoning}_"
+            decisions.append(line)
+
+        if not decisions:
+            return
+
+        block = "## Architectural decisions\n\n" + "\n".join(decisions) + "\n\n"
+        new_text = block + original_text
+        _atomic_write(tasks_path, new_text)
+
+        if on_tool_executed is not None:
+            done_call = ToolCall(name="detect_forks", body="{}")
+            with suppress(Exception):
+                on_tool_executed(
+                    done_call,
+                    ToolResult(
+                        done_call,
+                        output=(
+                            f"Resolved {len(decisions)} architectural fork(s); "
+                            "prepended decisions block to TASKS.md."
+                        ),
+                        ok=True,
+                    ),
+                )
 
     async def maybe_auto_compact(
         self,
