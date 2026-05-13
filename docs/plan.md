@@ -2733,10 +2733,19 @@ Rust language skill / Kubernetes component skill — по запросу.
 Единая абстракция — Fork API:
   fork(question, options, context, *, critical=False) -> ForkResolution
 
-Резолвер выбирается по `fork_resolver` в config + slash `/fork`:
-  • `human`       — ChoiceCard с диалогом. Дефолт.
-  • `local_meta`  — 14b в роли архитектора. Backup для headless.
-  • `upstream`    — задел; реализация в v0.12.
+Кто решает — выводится из `trust` (Ctrl+L), той же оси что уже
+управляет shell_exec и patch-apply. Меньше сущностей — меньше
+багов; один mental model на доверие.
+  • `skeptic`  — ChoiceCard всегда, без таймера. Юзер отвечает.
+  • `optimist` — ChoiceCard с countdown 120s, по timeout → Auto
+                 (LocalMetaForker, та же 14b в роли архитектора).
+  • `yolo`     — Auto сразу, КРОМЕ forks с `critical=True` —
+                 им показываем ChoiceCard на 60s, дальше Auto.
+
+Отдельного `fork_resolver` конфига и `/fork` slash НЕТ — раньше
+был, выпилен в v0.10a. `fork_human_fallback: local_meta | error`
+остаётся только для headless (probe / bench / scripted /go где
+TUI нет физически — fall back или halt).
 
 ✓ Каркас Fork API (2026-05-13). `code_scalpel/fork.py`: frozen
   `ForkOption`/`ForkResolution`, `ForkError`, `HumanResolver`
@@ -2784,13 +2793,7 @@ Rust language skill / Kubernetes component skill — по запросу.
       (мягкий путь). Логируется в stderr — silent fallback скрыл бы
       что fork сработал.
 
-- [ ] Slash `/fork <resolver>` — переключение в рантайме. Индикатор
-      в футере: `[fork:human]` / `[fork:auto]` / `[fork:upstream]`.
-      Slash вместо Ctrl-хоткея чтобы не съедать клавишу; хоткей
-      добавим если по факту окажется нужен ежедневно.
-
 - [ ] Конфиги:
-        fork_resolver: human | local_meta | upstream  (default human)
         fork_human_fallback: local_meta | error       (default local_meta)
         fork_human_timeout_optimist: 120              (sec)
         fork_human_timeout_yolo_critical: 60          (sec)
@@ -3013,6 +3016,20 @@ ruff config — получает его. Снимает класс ошибок 
 - [ ] Рефакторинг test_config.py.
       557 строк, несвязанные области. Разбить на test_model_profile.py
       / test_config_load.py / test_config_autodetect.py.
+
+- [ ] Унификация TUI-карточек запросов.
+      ChoiceCard / ShellExecCard / PlanCard / (будущая ResumeCard)
+      имеют общий паттерн: title + body + кнопки + ожидание ответа
+      через asyncio.Event. Сейчас каждая своя реализация. Вытащить
+      общий ABC `RequestCard` с `mount()/await_answer()/dismiss()`
+      и наследниками — снимет дубли и упростит добавление новых
+      типов вопросов. Делаем когда четвёртая карточка появится
+      (ResumeCard в v0.12 — естественный триггер).
+
+- [ ] Унификация slash-обработчика.
+      `_handle_slash` — большая цепочка if. Завести registry:
+      `@slash("/name", help="…") def handler(arg): …`. Поможет
+      команде из backlog «TUI rework».
 
 - [ ] LM Studio model swap для v0.12 upstream-batching.
       Кейс: локальная мощная модель (например gemma-26b) не помещается
