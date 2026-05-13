@@ -51,6 +51,20 @@ class ForkOption:
 
 
 @dataclass(frozen=True)
+class ForkContext:
+    """A fork the detector pulled out of a plan.
+
+    Detector returns these as a list; the plan-runner (v0.11.x)
+    iterates and calls `runtime.fork(...)` per ForkContext. The
+    shape mirrors `fork()`'s arguments so wiring is one-to-one.
+    """
+
+    question: str
+    options: tuple[ForkOption, ...]
+    context: str
+
+
+@dataclass(frozen=True)
 class ForkResolution:
     """Output of a fork.
 
@@ -627,9 +641,111 @@ def _extract_json_object(text: str) -> str | None:
     return None
 
 
+_DETECT_FORKS_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "forks": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "question": {"type": "string"},
+                    "options": {
+                        "type": "array",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "name": {"type": "string"},
+                                "summary": {"type": "string"},
+                            },
+                            "required": ["name", "summary"],
+                            "additionalProperties": False,
+                        },
+                    },
+                    "context": {"type": "string"},
+                },
+                "required": ["question", "options", "context"],
+                "additionalProperties": False,
+            },
+        },
+    },
+    "required": ["forks"],
+    "additionalProperties": False,
+}
+
+
+async def detect_forks(
+    agent: StepAgent,
+    plan_text: str,
+    project_context: str = "",
+) -> tuple[ForkContext, ...]:
+    """Scan a plan and surface the architectural forks hidden in it.
+
+    Returns an empty tuple when the plan has no obvious cross-task
+    decisions — the v0.11 design treats false positives as costlier
+    than false negatives (each fork costs an LLM call and possibly
+    a user prompt). The detector prompt is conservative; the schema
+    keeps the output structured so the caller can iterate.
+
+    `plan_text` is the TASKS.md content (or whatever the plan-mode
+    produced). `project_context` is short repo-level facts the
+    detector should weigh — current language, async/sync stance,
+    detected stack. Both end up in the user message.
+
+    Designed for /plan integration in v0.11.x — call this on the
+    plan output, iterate the returned ForkContext list, hand each
+    to `runtime.fork(...)`.
+    """
+    user_message = f"Plan:\n{plan_text}\n\nProject context:\n{project_context or '(none)'}\n"
+    pass_spec = NarrowPass(
+        name="detect_forks",
+        system_prompt=_prompts.DETECT_FORKS,
+        # 0.0 — detection is a recognition task, not creativity. Two
+        # runs on the same plan should produce the same fork list.
+        temperature=0.0,
+        output_schema=_DETECT_FORKS_SCHEMA,
+    )
+    result = await agent.run_narrow_pass(pass_spec, user_message)
+    payload = _extract_json_object(result.text)
+    if payload is None:
+        return ()
+    try:
+        data = json.loads(payload)
+    except json.JSONDecodeError:
+        return ()
+    raw_forks = data.get("forks", [])
+    if not isinstance(raw_forks, list):
+        return ()
+    out: list[ForkContext] = []
+    for raw in raw_forks:
+        if not isinstance(raw, dict):
+            continue
+        question = str(raw.get("question", "")).strip()
+        context = str(raw.get("context", "")).strip()
+        raw_options = raw.get("options", [])
+        if not question or not isinstance(raw_options, list):
+            continue
+        options: list[ForkOption] = []
+        for opt in raw_options:
+            if not isinstance(opt, dict):
+                continue
+            name = str(opt.get("name", "")).strip()
+            summary = str(opt.get("summary", "")).strip()
+            if not name:
+                continue
+            options.append(ForkOption(name=name, summary=summary))
+        # Forks with <2 options aren't forks. The schema can't enforce
+        # this; check it here so the caller never sees a degenerate one.
+        if len(options) < 2:
+            continue
+        out.append(ForkContext(question=question, options=tuple(options), context=context))
+    return tuple(out)
+
+
 __all__ = [
     "ChoiceCardOption",
     "ChoiceUIHook",
+    "ForkContext",
     "ForkError",
     "ForkOption",
     "ForkResolution",
@@ -637,4 +753,5 @@ __all__ = [
     "HumanResolver",
     "LocalMetaForker",
     "ReviewedAutoForker",
+    "detect_forks",
 ]
