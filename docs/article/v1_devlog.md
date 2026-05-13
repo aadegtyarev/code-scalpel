@@ -1819,6 +1819,80 @@ behavioral регрессии (модель раньше всегда отвеч
 
 ---
 
+## Глава 30 — STATE.json для full resume: что писать и что не писать
+
+v0.12.5 — full resume сессии. Контекст: TUI должен подбирать
+работу там, где её бросили, после kill / перезагрузки / потери
+power. У нас уже был лёгкий resume — `dirty_patch` флаг в
+`STATE.json`, при старте всплывает «previous session ended
+with an unfinished patch, проверьте `git diff`». Это не resume,
+это **напоминалка**. Настоящий resume — продолжить с того
+места, в той же фазе, с тем же планом, с открытыми pending
+forks.
+
+Дизайн-вопрос: **что сохранять**. Соблазн всегда — «сохрани
+всё», и тогда любая ошибка лечится restart'ом. Но «всё» в нашем
+случае значит:
+
+- `_history` — ~30k токенов разговора, JSON с tool_calls
+  тегами; писать на каждый turn — это I/O-стоимость на горячем
+  пути builder'а
+- `_loaded_skills` — set имён, копейка по объёму
+- `_read_files_history` — список путей, копейка
+- pending upstream queue (`UpstreamPendingQueue`) — frozen
+  dataclass'ы, дюжину килобайт максимум; ForkOption-кортежи
+  не сериализуются в JSON напрямую (нужен mapping)
+- состояние Session (токены, cost) — дюжина чисел
+- mode / profile / context_limit — пара строк
+
+Сначала пошёл по соблазну — давай всё. Через 20 минут понял:
+сохранять `_history` в `STATE.json` на каждом ответе агента —
+это amplification I/O в 100×: каждый tool_call = одна-две
+строчки логики + полный JSON-dump на 30k токенов. Атомарная
+запись через tmp+rename — это ещё syscall на каждое сохранение.
+
+**Принял другое решение: STATE.json хранит только то что**
+**нельзя восстановить из других источников.**
+
+- `_history` восстанавливается через compact-summary при
+  resume. Это _история разговора_ — для возобновления контекста
+  нужна **смысловая выжимка**, а не байт-в-байт реплей. У нас
+  уже есть `_compact` который делает summary истории при
+  context_limit. Resume этим же механизмом восстанавливает —
+  достаточно знать хеш предыдущей истории, чтобы понять «нужен
+  ли compact и какой»;
+- pending upstream queue — снимок (`open_fork_questions`)
+  достаточен: fork_id, question, picker_chosen. ForkOption
+  списки опций мы при restore'е не нужны для отображения «N
+  forks ждут» — для самого flush'а через UpstreamForker нам
+  нужен только question и context, а это всё равно
+  идёт через прицельный prompt; ForkOption — клиентский
+  кэш, не источник правды;
+- `current_task`, `step_phase`, `dirty_patch`, `last_test_status` —
+  уже есть, оставляем;
+- `mode`, `profile`, `context_limit`, `max_files`, `max_file_lines` —
+  конфиг runtime, оставляем (Ctrl+L во время сессии менял
+  trust — это надо помнить).
+
+В STATE.json **не пишем**: `_history`, токен-счётчики Session
+(восстановим из последнего compact), `_loaded_skills` (восстановим
+из task'а), `_read_files_history` (восстановим из _history через
+compact). Принцип: STATE.json — мета, не лог.
+
+Дополнительная польза от компактного STATE: **диффы между
+сессиями читаются глазами**. Если что-то пошло не так —
+`git diff .code-scalpel/STATE.json` после краха показывает что
+именно изменилось перед смертью. Полный _history там был бы
+шумом.
+
+Эта глава отражает **PR-A** v0.12.5: расширение STATE.json
+двумя полями (`history_summary_hash`, `open_fork_questions`)
+с pydantic-моделью `PersistedFork` для plain-JSON shape'а.
+UI-часть (entry-card «Continue / Restart») и интеграция с
+upstream queue — отдельные PR'ы.
+
+---
+
 ## Промежуточные итоги — карта глав
 
 - Глава 0 — почему пишем своё, когда вокруг уже всё есть
@@ -1849,3 +1923,4 @@ behavioral регрессии (модель раньше всегда отвеч
 - Глава 27 — дизайн v0.12 в диалоге: факты и trade-offs побеждают одиночное планирование
 - Глава 28 — pending queue вместо синхронного upstream: батчинг, mark-for-review, грубое-но-честное scope атрибутирование
 - Глава 29 — carve-out релиза: вычленить вторую фичу в подверсию ради чистого surface'а + probe-driven validation как обязательный шаг перед `git tag`
+- Глава 30 — STATE.json для full resume: не пиши то что восстанавливается из других источников; STATE — мета, не лог
