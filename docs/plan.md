@@ -2498,7 +2498,7 @@ Rust language skill / Kubernetes component skill — по запросу.
   (режимы переключаются Ctrl+T). /help обновлён.
 ```
 
-### v0.7 — hardening drop
+### ~~v0.7 — hardening drop~~ ✓ закрыта 2026-05-13
 
 ```text
 Тезис: очищенный фундамент перед содержательной работой над надёжностью.
