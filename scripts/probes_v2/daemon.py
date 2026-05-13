@@ -74,9 +74,12 @@ class ProbeDaemon:
         """Lazy: только когда первый step придёт. Пинит модель к
         `PROBE_BASE_MODEL` (выставляется CLI'ем) — никаких `auto`,
         нужна явная id для reproducibility прогонов. Если задан
-        `PROBE_UPSTREAM_MODEL` — создаём UpstreamProfile для
-        делегирования сложных fork'ов."""
-        from code_scalpel.fork import UpstreamProfile
+        `PROBE_UPSTREAM_MODEL` — пытаемся создать UpstreamProfile.
+
+        Версионная деградация: на старых тэгах `Runtime` может не
+        иметь параметра `upstream_profile` (появился в v0.12).
+        Ловим TypeError и пишем в `meta.json.adaptations` что
+        возможность отсутствует — продолжаем без неё."""
         from code_scalpel.llm.adapter import OpenAICompatibleAdapter
 
         # Пин основной модели. Mutation модели в pydantic-объекте
@@ -97,23 +100,77 @@ class ProbeDaemon:
         upstream_model = os.environ.get("PROBE_UPSTREAM_MODEL")
         upstream_profile = None
         if upstream_model:
-            # v0.12 UpstreamProfile — отдельная конфигурация для
-            # делегирования сложных fork'ов. Базовый URL тот же
-            # (LM Studio свопает модели через `state: loaded`),
-            # но другая модель = upstream.
-            upstream_profile = UpstreamProfile(
-                base_url=f"{profile.provider_base_url()}/v1",
-                model=upstream_model,
-            )
+            try:
+                from code_scalpel.fork import UpstreamProfile
 
-        runtime = Runtime(
+                upstream_profile = UpstreamProfile(
+                    base_url=f"{profile.provider_base_url()}/v1",
+                    model=upstream_model,
+                )
+            except ImportError:
+                self._record_adaptation(
+                    "upstream_profile_missing",
+                    f"`code_scalpel.fork.UpstreamProfile` not available — "
+                    f"upstream-flag '{upstream_model}' ignored",
+                )
+
+        runtime = self._build_runtime_compat(upstream_profile=upstream_profile)
+        self.runtime = runtime
+
+    def _build_runtime_compat(self, *, upstream_profile: Any) -> Runtime:
+        """Пытаемся построить Runtime с современным набором
+        kwargs. На старом теге `Runtime.__init__` может не принимать
+        часть из них — TypeError → откат на минимум."""
+        try:
+            return Runtime(
+                cwd=self.workdir,
+                config=self.config,
+                llm=self.logging_adapter,
+                with_memory=False,
+                upstream_profile=upstream_profile,
+            )
+        except TypeError as e:
+            self._record_adaptation("runtime_kwargs_missing", str(e))
+        return Runtime(
             cwd=self.workdir,
             config=self.config,
             llm=self.logging_adapter,
-            with_memory=False,  # probe не должен подцеплять memory из workdir
-            upstream_profile=upstream_profile,
+            with_memory=False,
         )
-        self.runtime = runtime
+
+    async def _compat_call(self, func: Any, task: str, kwargs: dict[str, Any]) -> Any:
+        """Вызывает agent-метод с современным набором kwargs;
+        если на старом тэге сигнатура уже, отбрасываем
+        неподдерживаемые параметры по очереди (по TypeError) и
+        фиксируем missing kwargs в meta.json.adaptations."""
+        attempt = dict(kwargs)
+        while True:
+            try:
+                return await func(task, **attempt)
+            except TypeError as e:
+                msg = str(e)
+                dropped = None
+                for k in list(attempt.keys()):
+                    if k in msg:
+                        dropped = k
+                        break
+                if dropped is None:
+                    raise
+                self._record_adaptation(
+                    f"{func.__name__}.{dropped}_missing",
+                    f"`{func.__name__}({dropped}=...)` не поддерживается: {msg}",
+                )
+                attempt.pop(dropped, None)
+
+    def _record_adaptation(self, key: str, detail: str) -> None:
+        """Накапливаем 'отсутствующие фичи на тэге' в
+        meta.json.adaptations — это сами по себе данные для статьи."""
+        try:
+            meta = json.loads(self.paths.meta_json.read_text())
+            meta.setdefault("adaptations", {})[key] = detail
+            self.paths.meta_json.write_text(json.dumps(meta, indent=2, ensure_ascii=False) + "\n")
+        except (OSError, json.JSONDecodeError):
+            pass
 
     async def handle_step(self, text: str, mode: str) -> dict[str, Any]:
         """Один turn диалога в указанном mode.
@@ -155,14 +212,17 @@ class ProbeDaemon:
 
         try:
             if mode == "code":
-                step_result = await self.runtime.agent.code_with_retry(
+                step_result = await self._compat_call(
+                    self.runtime.agent.code_with_retry,
                     task,
-                    mode="code",
-                    on_tool_executed=_hook,
-                    force_loop=True,
+                    {"mode": "code", "on_tool_executed": _hook, "force_loop": True},
                 )
             else:
-                step_result = await self.runtime.agent.ask(task, mode=mode, on_tool_executed=_hook)
+                step_result = await self._compat_call(
+                    self.runtime.agent.ask,
+                    task,
+                    {"mode": mode, "on_tool_executed": _hook},
+                )
         except Exception as e:  # noqa: BLE001 — клиенту нужен любой fail с reason'ом
             append_jsonl(
                 self.paths.timing_jsonl,
