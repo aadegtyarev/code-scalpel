@@ -158,7 +158,10 @@ def _prompt_choice(question: str, choices: tuple[str, ...], *, default: str) -> 
     we want a closed set. Loops until the user enters one of the
     options."""
     while True:
-        value = typer.prompt(f"{question} [{'/'.join(choices)}]", default=default)
+        # typer.prompt is typed Any in older typer versions — pin to str.
+        value: str = str(
+            typer.prompt(f"{question} [{'/'.join(choices)}]", default=default)
+        )
         if value in choices:
             return value
         typer.echo(f"  → pick one of: {', '.join(choices)}")
