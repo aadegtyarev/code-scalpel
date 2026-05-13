@@ -1481,6 +1481,36 @@ class StepAgent:
             completion_tokens=response.completion_tokens,
         )
 
+    async def improve_commit_message(self, diff: str) -> PassResult | None:
+        """Narrow pass that turns a raw diff into a clean commit
+        message (imperative summary + why-body). Used by /commit-msg
+        on demand; auto-wiring into /go is a follow-up once we trust
+        the output enough to amend the model's own commit.
+
+        Returns None for an empty diff; otherwise PassResult.text is
+        the raw message bytes — no fences, no metadata.
+        """
+        from code_scalpel.narrow_pass import NarrowPass
+
+        if not diff.strip():
+            return None
+        # Cap the diff so a giant rename doesn't blow the budget on a
+        # task whose whole point is to produce a 72-char line. 4k of
+        # diff is more than any reasonable single-task PR; if /commit-msg
+        # ran on a 30-file rewrite the truncated head plus the warning
+        # marker is still a better seed than nothing.
+        max_chars = 4000
+        truncated = diff if len(diff) <= max_chars else diff[:max_chars] + "\n…(diff truncated)\n"
+        pass_spec = NarrowPass(
+            name="commit_message",
+            system_prompt=_prompts.COMMIT_MESSAGE,
+            # Commit messages want stability, not creativity. Builder's
+            # 0.3 is fine here; lower also works. Keep close to builder
+            # so behaviour is predictable across runs.
+            temperature=0.2,
+        )
+        return await self.run_narrow_pass(pass_spec, truncated)
+
     async def per_step_review(
         self,
         task: Task,
