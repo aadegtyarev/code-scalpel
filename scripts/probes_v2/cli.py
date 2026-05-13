@@ -133,12 +133,26 @@ def start(
     # сменил модель).
     base_url = "http://localhost:1234/v1"
     model_loaded = _detect_lmstudio_model(base_url)
+    all_loaded = _lmstudio_loaded_model_ids(base_url) or []
     if model_loaded not in {PINNED_BASE_MODEL, "unknown"} and not upstream_model:
         typer.echo(
             f"warning: LM Studio loaded `{model_loaded}`, probe expects "
             f"`{PINNED_BASE_MODEL}`. Continuing — verify intent in evaluation.md.",
             err=True,
         )
+    # Проверка upstream-модели — если задана, она должна быть
+    # **тоже** загружена в LM Studio. Иначе fork'и в очереди
+    # упадут при flush'е на 404/timeout. Это **критично**, поэтому
+    # fail-fast (а не warning) — иначе бессмысленно жечь токены
+    # baseline-задачами.
+    if upstream_model and upstream_model not in all_loaded:
+        typer.echo(
+            f"error: upstream model `{upstream_model}` not loaded in LM Studio.\n"
+            f"Currently loaded: {', '.join(all_loaded) if all_loaded else '(none / API unreachable)'}.\n"
+            f"Load it via LM Studio UI (или `lms load {upstream_model}` если CLI стоит) и повторите.",
+            err=True,
+        )
+        raise typer.Exit(1)
 
     upstream_cmd_part = f" --upstream-model={upstream_model}" if upstream_model else ""
     meta = {
@@ -408,18 +422,29 @@ def _detect_lmstudio_model(base_url: str) -> str:
 
     LM Studio v0.3+ имеет состояние `state: "loaded"`; пытаемся
     предпочесть его, если поле есть. Иначе — первая запись."""
+    loaded = _lmstudio_loaded_model_ids(base_url)
+    if loaded is None:
+        return "unknown"
+    return loaded[0] if loaded else "unknown"
+
+
+def _lmstudio_loaded_model_ids(base_url: str) -> list[str] | None:
+    """Возвращает список id моделей которые сейчас доступны через
+    `/v1/models`. None при сетевой ошибке (LM Studio недоступна).
+    `state: loaded` предпочтительнее, но если LM Studio не отдаёт
+    state (старые версии) — отдаём все id."""
     try:
         with urllib.request.urlopen(f"{base_url}/models", timeout=3) as resp:
             data = json.loads(resp.read())
     except (urllib.error.URLError, TimeoutError, OSError, json.JSONDecodeError):
-        return "unknown"
+        return None
     items = data.get("data") or []
     if not items:
-        return "unknown"
-    loaded = [m for m in items if m.get("state") == "loaded"]
-    chosen = loaded[0] if loaded else items[0]
-    name = chosen.get("id")
-    return str(name) if name else "unknown"
+        return []
+    has_state = any("state" in m for m in items)
+    if has_state:
+        return [str(m.get("id")) for m in items if m.get("state") == "loaded" and m.get("id")]
+    return [str(m.get("id")) for m in items if m.get("id")]
 
 
 def _commit_cell(meta: dict[str, object]) -> str:

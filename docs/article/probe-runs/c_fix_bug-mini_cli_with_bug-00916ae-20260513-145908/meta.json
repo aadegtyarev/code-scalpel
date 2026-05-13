@@ -1,0 +1,19 @@
+{
+  "run_id": "c_fix_bug-mini_cli_with_bug-00916ae-20260513-145908",
+  "scenario": "c_fix_bug",
+  "project": "mini_cli_with_bug",
+  "version_tag": "main_00916ae",
+  "git_sha": "00916ae070210a4466cbe5be61ab05e76e35e0e6",
+  "git_dirty": true,
+  "git_commit_url": "https://github.com/aadegtyarev/code-scalpel/commit/00916ae070210a4466cbe5be61ab05e76e35e0e6",
+  "git_checkout_cmd": "git checkout 00916ae070210a4466cbe5be61ab05e76e35e0e6",
+  "model_name_expected": "qwen/qwen2.5-coder-14b",
+  "model_name_actual": "qwen/qwen2.5-coder-14b",
+  "model_base_url": "http://localhost:1234/v1",
+  "upstream_model": "gemma-4-26b-a4b-it-assistant",
+  "started_at": "2026-05-13T14:59:08Z",
+  "ended_at": "2026-05-13T15:01:03Z",
+  "ended_reason": "error",
+  "user_role": "claude-acting-as-user-per-tone-of-voice.md",
+  "command": "probe start c_fix_bug mini_cli_with_bug --upstream-model=gemma-4-26b-a4b-it-assistant"
+}
