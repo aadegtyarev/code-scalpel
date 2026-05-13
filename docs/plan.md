@@ -3013,6 +3013,21 @@ ruff config — получает его. Снимает класс ошибок 
 - [ ] Рефакторинг test_config.py.
       557 строк, несвязанные области. Разбить на test_model_profile.py
       / test_config_load.py / test_config_autodetect.py.
+
+- [ ] LM Studio model swap для v0.12 upstream-batching.
+      Кейс: локальная мощная модель (например gemma-26b) не помещается
+      в RAM одновременно с qwen-14b. Перед upstream flush нужно
+      выгрузить слабую → загрузить мощную → прогнать пачку → выгрузить
+      мощную → вернуть слабую. LM Studio в свежих версиях (0.3.x+)
+      имеет нативный API/CLI для load/unload через `lms` или REST.
+      Уточнить актуальную форму, обернуть в адаптерный слой
+      `code_scalpel/llm/lmstudio_admin.py`. Архитектурный задел:
+      провайдеры в нас уже разные адаптеры, добавить пятую кнопку
+      «swap» — естественно. Для openrouter / openai это no-op
+      (нет своего lifecycle модели). Для llama.cpp потенциально
+      аналогичный механизм (`/proc` killpid + relaunch), но это
+      отдельная задача — сначала LM Studio как самый удобный
+      кейс.
 ```
 
 ### v0.14 — web tools
