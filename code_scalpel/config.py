@@ -121,6 +121,13 @@ class AgentConfig(BaseModel):
     # default; the v0.8 reliability bet only ships active when the
     # user opts in.
     test_sanity_pass: bool = False
+    # AST-based empty-test detector. Static pair of test_sanity_pass —
+    # finds tests whose body is only `pass`, `assert <literal>`, or has
+    # no Call expression at all. Cheaper than the LLM judge, deterministic,
+    # catches the obvious shape; the LLM still catches the
+    # `assert x is not None` cases that look meaningful structurally.
+    # Off by default to preserve legacy /go.
+    empty_test_detect: bool = False
 
 
 class ModeTemperatures(BaseModel):

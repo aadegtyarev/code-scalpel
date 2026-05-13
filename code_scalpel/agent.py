@@ -1042,6 +1042,30 @@ class StepAgent:
                                     ToolResult(call, output=verdict.text, ok=True),
                                 )
 
+            # Empty-test detector (AST). Same trigger as test_sanity
+            # but deterministic and cheap — runs without an LLM call.
+            # Together they form the structural + behavioural pair v0.9
+            # promises. Surfaces an `empty_test` card with the list of
+            # bad tests; no failed-task escalation yet — strict-mode
+            # is one config flag away once we trust the false-positive
+            # rate on real plans.
+            if outcome.status == "done" and self._config.agent.empty_test_detect:
+                from code_scalpel.checks import detect_empty_tests
+
+                empty_paths = _test_paths_from_step_result(step_result, self._cwd)
+                for test_path in empty_paths:
+                    with suppress(Exception):
+                        empties = detect_empty_tests(test_path)
+                        if empties and on_tool_executed is not None:
+                            lines = [f"Empty / trivial tests in {test_path.name}:"]
+                            lines.extend(f"  - {e.name}: {e.reason}" for e in empties)
+                            call = ToolCall(name="empty_test", body=str(test_path))
+                            with suppress(Exception):
+                                on_tool_executed(
+                                    call,
+                                    ToolResult(call, output="\n".join(lines), ok=False),
+                                )
+
             if outcome.status == "done":
                 live_tasks[idx] = Task(id=task.id, title=task.title, body=task.body, done=True)
                 # Persist atomically. We refresh `initial_hash` against
