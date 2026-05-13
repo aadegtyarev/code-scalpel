@@ -404,6 +404,111 @@ async def test_human_forker_headless_error_policy_raises(project: Path) -> None:
         )
 
 
+# ── detect_forks (NarrowPass on top of /plan output) ──────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_detect_forks_returns_empty_on_no_forks(project: Path) -> None:
+    """Plan without architectural decisions → empty tuple. Detector
+    must NOT invent forks (false positives are costlier than false
+    negatives — each costs an LLM call + maybe a user prompt)."""
+    from code_scalpel.fork import detect_forks
+
+    llm = MockLLMAdapter(['{"forks": []}'])
+    agent = StepAgent(llm=llm, cwd=project, config=_CONFIG)
+
+    result = await detect_forks(agent, "## T001: Add docstring to greet()\n")
+
+    assert result == ()
+
+
+@pytest.mark.asyncio
+async def test_detect_forks_parses_structured_output(project: Path) -> None:
+    """Happy path — detector returns one fork with two options;
+    we parse it into a ForkContext tuple ready for `runtime.fork()`."""
+    from code_scalpel.fork import detect_forks
+
+    payload = (
+        '{"forks": ['
+        '  {"question": "Which Postgres driver?",'
+        '   "options": ['
+        '     {"name": "psycopg2", "summary": "sync, mature"},'
+        '     {"name": "asyncpg", "summary": "async, faster"}'
+        "   ],"
+        '   "context": "Project is asyncio-first."}'
+        "]}"
+    )
+    llm = MockLLMAdapter([payload])
+    agent = StepAgent(llm=llm, cwd=project, config=_CONFIG)
+
+    result = await detect_forks(
+        agent,
+        "## T001: Add Postgres support\n",
+        "FastAPI project, asyncio-first.",
+    )
+
+    assert len(result) == 1
+    fork = result[0]
+    assert fork.question == "Which Postgres driver?"
+    assert len(fork.options) == 2
+    assert fork.options[0].name == "psycopg2"
+    assert fork.options[1].name == "asyncpg"
+    assert "asyncio-first" in fork.context
+
+
+@pytest.mark.asyncio
+async def test_detect_forks_drops_degenerate_single_option(project: Path) -> None:
+    """A 'fork' with one option is just a recommendation. Drop it —
+    Fork API needs ≥2 options or there's nothing to delegate."""
+    from code_scalpel.fork import detect_forks
+
+    payload = (
+        '{"forks": ['
+        '  {"question": "Which X?",'
+        '   "options": [{"name": "only", "summary": "alone"}],'
+        '   "context": "ctx"}'
+        "]}"
+    )
+    llm = MockLLMAdapter([payload])
+    agent = StepAgent(llm=llm, cwd=project, config=_CONFIG)
+
+    result = await detect_forks(agent, "plan")
+
+    assert result == ()
+
+
+@pytest.mark.asyncio
+async def test_detect_forks_survives_non_json(project: Path) -> None:
+    """Detector misfires → return (). Plan flow must continue
+    without architectural delegation, not crash."""
+    from code_scalpel.fork import detect_forks
+
+    llm = MockLLMAdapter(["sorry, no forks today"])
+    agent = StepAgent(llm=llm, cwd=project, config=_CONFIG)
+
+    result = await detect_forks(agent, "plan")
+
+    assert result == ()
+
+
+@pytest.mark.asyncio
+async def test_detect_forks_uses_structured_output(project: Path) -> None:
+    """Schema lands in adapter kwargs — same path probe validated.
+    Drop this assert and the detector silently regresses to
+    JSON-via-prompt."""
+    from code_scalpel.fork import detect_forks
+
+    llm = MockLLMAdapter(['{"forks": []}'])
+    agent = StepAgent(llm=llm, cwd=project, config=_CONFIG)
+
+    await detect_forks(agent, "plan")
+
+    rf = llm.kwargs_calls[0].get("response_format")
+    assert rf is not None
+    assert rf["type"] == "json_schema"
+    assert rf["json_schema"]["name"] == "detect_forks"
+
+
 # ── ReviewedAutoForker (picker + skeptic reviewer + anchor) ───────────────────
 
 
