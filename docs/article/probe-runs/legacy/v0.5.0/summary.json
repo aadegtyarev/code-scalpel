@@ -1,0 +1,51 @@
+{
+  "tag": "v0.5.0",
+  "ran_at": "2026-05-13T18:46:04Z",
+  "probes": [
+    {
+      "name": "probe.py",
+      "status": "ok",
+      "exit_code": 0,
+      "duration_sec": 157.59,
+      "pass_rate_guess": [
+        6,
+        9
+      ],
+      "stdout_path": "docs/article/probe-runs/legacy/v0.5.0/probe.py.txt"
+    },
+    {
+      "name": "probe_code.py",
+      "status": "ok",
+      "exit_code": 0,
+      "duration_sec": 16.06,
+      "pass_rate_guess": null,
+      "stdout_path": "docs/article/probe-runs/legacy/v0.5.0/probe_code.py.txt"
+    },
+    {
+      "name": "probe_recipes.py",
+      "status": "ok",
+      "exit_code": 0,
+      "duration_sec": 92.68,
+      "pass_rate_guess": [
+        2,
+        3
+      ],
+      "stdout_path": "docs/article/probe-runs/legacy/v0.5.0/probe_recipes.py.txt"
+    },
+    {
+      "name": "probe_forks.py",
+      "status": "skipped",
+      "reason": "not_found_at_this_tag"
+    },
+    {
+      "name": "probe_fork_reviewer.py",
+      "status": "skipped",
+      "reason": "not_found_at_this_tag"
+    },
+    {
+      "name": "probe_e2e_forks.py",
+      "status": "skipped",
+      "reason": "not_found_at_this_tag"
+    }
+  ]
+}
