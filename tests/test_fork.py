@@ -768,6 +768,150 @@ import asyncpg
     assert result.tasks_completed == 1
 
 
+# ── UpstreamForker (native LM Studio + OpenAI-compat fallback) ────────────────
+
+
+@pytest.mark.asyncio
+async def test_upstream_forker_lmstudio_streams_native_events(project: Path) -> None:
+    """Native path: upstream URL ends in /v1 → goes through
+    /api/v1/chat. Event_sink receives every event; final
+    resolution comes from the message.delta accumulation."""
+    import httpx
+
+    from code_scalpel.fork import UpstreamForker, UpstreamProfile
+
+    sse_body = (
+        b'data: {"type": "chat.start", "model_instance_id": "i1"}\n'
+        b'data: {"type": "model_load.start", "model_instance_id": "i1"}\n'
+        b'data: {"type": "model_load.progress", "progress": 0.5}\n'
+        b'data: {"type": "model_load.end", "load_time_seconds": 8.0}\n'
+        b'data: {"type": "message.start"}\n'
+        b'data: {"type": "message.delta", "content": '
+        b'"{\\"chosen\\": \\"asyncpg\\", \\"reasoning\\": \\"native I/O\\"}"}\n'
+        b'data: {"type": "message.end"}\n'
+        b'data: {"type": "chat.end", "result": {"usage": '
+        b'{"prompt_tokens": 100, "completion_tokens": 20}, '
+        b'"total_time_seconds": 10.0}}\n'
+    )
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert "/api/v1/chat" in str(request.url)
+        return httpx.Response(200, content=sse_body, headers={"content-type": "text/event-stream"})
+
+    captured_events: list[object] = []
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        forker = UpstreamForker(
+            UpstreamProfile(
+                base_url="http://localhost:1234/v1",
+                model="gemma-26b",
+                ttl_seconds=300,
+            ),
+            event_sink=captured_events.append,
+            http_client=client,
+        )
+        res = await forker.resolve(
+            "Which Postgres driver?",
+            (ForkOption("psycopg2", "sync"), ForkOption("asyncpg", "async")),
+            "asyncio service",
+        )
+
+    assert res.chosen == "asyncpg"
+    assert "native I/O" in res.reasoning
+    # event_sink saw the load events — that's what OperationCard
+    # will consume to render phase bars.
+    type_names = [type(e).__name__ for e in captured_events]
+    assert "ModelLoadProgress" in type_names
+    assert "ModelLoadEnd" in type_names
+    assert "ChatEnd" in type_names
+
+
+@pytest.mark.asyncio
+async def test_upstream_forker_raises_on_stream_error(project: Path) -> None:
+    """Native server emitted an `error` event mid-stream — we
+    surface it as ForkError. Caller can mark the fork unresolved
+    in the final summary (mark-for-review pattern from v0.12)."""
+    import httpx
+
+    from code_scalpel.fork import ForkError, UpstreamForker, UpstreamProfile
+
+    sse_body = (
+        b'data: {"type": "chat.start", "model_instance_id": "i1"}\n'
+        b'data: {"type": "error", "error": "out of memory"}\n'
+    )
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, content=sse_body, headers={"content-type": "text/event-stream"})
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        forker = UpstreamForker(
+            UpstreamProfile(base_url="http://localhost:1234/v1", model="x"),
+            http_client=client,
+        )
+        with pytest.raises(ForkError) as exc:
+            await forker.resolve(
+                "q",
+                (ForkOption("a", ""), ForkOption("b", "")),
+                "ctx",
+            )
+    assert "out of memory" in str(exc.value)
+
+
+@pytest.mark.asyncio
+async def test_upstream_forker_passes_ttl_in_request(project: Path) -> None:
+    """`ttl_seconds` from the upstream profile lands in the native
+    chat request body. This is how the model «lingers» between
+    batched forks — if we don't pass it, every fork triggers a
+    fresh cold load.
+    """
+    import json as _json
+
+    import httpx
+
+    from code_scalpel.fork import UpstreamForker, UpstreamProfile
+
+    captured: dict[str, object] = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured.update(_json.loads(request.content))
+        return httpx.Response(
+            200,
+            content=(
+                b'data: {"type": "chat.start", "model_instance_id": "i"}\n'
+                b'data: {"type": "message.delta", "content": '
+                b'"{\\"chosen\\": \\"a\\", \\"reasoning\\": \\"ok\\"}"}\n'
+                b'data: {"type": "chat.end", "result": {}}\n'
+            ),
+            headers={"content-type": "text/event-stream"},
+        )
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        forker = UpstreamForker(
+            UpstreamProfile(base_url="http://localhost:1234/v1", model="x", ttl_seconds=600),
+            http_client=client,
+        )
+        await forker.resolve("q", (ForkOption("a", ""), ForkOption("b", "")), "ctx")
+
+    assert captured["ttl"] == 600
+    # Structured output schema travels too — same shape LocalMeta uses.
+    rf = captured["response_format"]
+    assert isinstance(rf, dict) and rf["type"] == "json_schema"
+
+
+def test_upstream_forker_detects_lmstudio_url() -> None:
+    """Trailing /v1 is the LM Studio convention. Other providers
+    (Anthropic /v1/messages, OpenAI /v1/chat/completions) get the
+    OpenAI-compat fallback — but those URLs don't end in plain
+    /v1 either (they keep the suffix path). Detection is the
+    cheap routing key."""
+    from code_scalpel.fork import UpstreamForker
+
+    assert UpstreamForker._is_lmstudio_url("http://localhost:1234/v1") is True
+    assert UpstreamForker._is_lmstudio_url("http://localhost:1234/v1/") is True
+    assert UpstreamForker._is_lmstudio_url("https://api.openai.com/v1/chat/completions") is False
+    assert UpstreamForker._is_lmstudio_url("https://api.anthropic.com") is False
+
+
 @pytest.mark.asyncio
 async def test_human_forker_esc_raises(project: Path) -> None:
     """User pressed Escape → ForkError so the caller can choose to
