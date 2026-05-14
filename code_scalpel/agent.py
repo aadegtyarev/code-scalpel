@@ -518,7 +518,13 @@ def _parse_task_test_command(task: Task) -> str | None:
         if not line.lower().startswith("test command:"):
             continue
         cmd = line[len("test command:") :].strip()
-        cmd = cmd.strip("`").strip()
+        # qwen-14b often wraps the value in backticks (`pytest ...`) or
+        # in quotes (`Test command: "manual"`). Strip both so the
+        # sentinel check below catches `"manual"` the same way it
+        # catches `manual` — otherwise the literal string "manual"
+        # gets shelled out as a pytest arg and the task fails on
+        # verify (observed 2026-05-14 in run 1 on 9ae0968).
+        cmd = cmd.strip("`").strip('"').strip("'").strip()
         if not cmd or cmd.lower() in ("manual", "n/a", "none", "-"):
             return None
         if cmd.startswith("<") or cmd.endswith(">"):

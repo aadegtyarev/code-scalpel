@@ -2432,6 +2432,24 @@ def test_parse_task_test_command_returns_none_for_manual() -> None:
     assert _parse_task_test_command(task) is None
 
 
+def test_parse_task_test_command_returns_none_for_quoted_manual() -> None:
+    """Real-world: qwen-14b on run 9ae0968-181145 wrote
+    `Test command: "manual"` (quoted). Bare strip of backticks
+    didn't normalise it, the literal `"manual"` was shelled out as
+    a pytest arg, T001 failed on verify. Strip quotes too so the
+    sentinel matches."""
+    from code_scalpel.agent import _parse_task_test_command
+    from code_scalpel.plan import Task
+
+    for body in (
+        'Test command: "manual"\n',
+        "Test command: 'manual'\n",
+        'Test command: `"manual"`\n',
+    ):
+        task = Task(id="T001", title="x", body=body, done=False)
+        assert _parse_task_test_command(task) is None, body
+
+
 def test_verify_task_files_pass_when_all_exist(tmp_path: Path) -> None:
     from code_scalpel.agent import _verify_task_files
     from code_scalpel.plan import Task
