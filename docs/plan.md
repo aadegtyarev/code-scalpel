@@ -2978,18 +2978,26 @@ Acceptance (release gate, не «приятная цифра»):
       прогон сейчас — `~30-60s` × N версий × N runs; реалистично
       запустить ночью.
 
-- [ ] ❗ Починить логирование chat.jsonl / tools.jsonl writer'а.
-      Reality-разбор v0.8 (см. главу 36, подглава «Что на самом
-      деле произошло на v0.8»): `chat.jsonl` показывает
-      `tool_calls=[]` на всех 25 turns, `tools.jsonl` пустой.
-      Но `metrics.json` пишет `write_file: 11, shell_exec: 5`,
-      и `final_tree/` содержит реальные файлы. Streaming-tool-call
-      события куда-то теряются в probe-runner v2 writer'е.
-      Без полных логов любая дальнейшая outcome-диагностика —
-      слепая. Это блокер всех следующих outcome-правок.
-      Технически: пройтись по probe-runner v2 коду, найти где
-      должны писаться tool_call delta events, проверить что
-      streaming-chunk handler их ловит и сериализует.
+- ✓ Логирование `chat.jsonl` диагностировано (PR #113,
+      2026-05-14). Три unit-теста на `LoggingLLMAdapter`
+      (streaming с tool_call → запись; non-streaming → запись;
+      text-only → пустой tool_calls). Все зелёные на текущем
+      main. То есть **писатель работает**, дыра v0.8 была в
+      historical коде (на момент 2026-05-13), на main не
+      воспроизводится. Для новых probe-runs `chat.jsonl` будет
+      полным.
+
+      Остаточный пункт — native LM Studio path
+      (`code_scalpel/llm/lmstudio_native.py:209` сознательно
+      игнорирует `tool_call.*` events; см. docstring
+      `native_events.py:22-25`). На текущих use cases native
+      streaming используется только в `fork.py:_dispatch_native`
+      для upstream-fork resolver, где ответ идёт через
+      `response_format=json_schema`, **без** tool_calls. И в
+      `OperationCard` — там просто consumer events. Если кто-то
+      завяжет debug_pass или другой flow на native + tool calls,
+      этот пункт надо будет открыть. Сейчас — known limitation,
+      не блокер.
 
 - [ ] ❗ Реальный блокер outcome: модель пишет частичный код,
       проваливающий собственные тесты. v0.8: `cli.py: def main():`
