@@ -231,6 +231,33 @@ def start(
     typer.echo(run_id)
 
 
+def _preflight_busy_check() -> None:
+    """Refuse to send a new step/go while LM Studio is still
+    generating for a previous request.
+
+    Why: probe sessions chain many calls; if the previous one is
+    still running on the model (cli got killed early, daemon held
+    on, etc.), a new POST /v1/chat/completions queues behind it
+    and a careless caller will mistake the queue for a stuck model.
+    Worse: the new request adds load and the user has no signal
+    it's happening. We surface the state explicitly here so the
+    operator can wait, cancel, or force-unload first.
+
+    Best-effort: if `lms` CLI is missing (`is_busy` returns None)
+    we don't block — caller is on a setup without LM Studio CLI
+    and can't act on this signal anyway."""
+    from code_scalpel.llm.lmstudio_status import is_busy
+
+    busy = is_busy()
+    if busy is True:
+        typer.echo(
+            "error: LM Studio is still GENERATING from a previous request. "
+            "Either wait until it finishes, or `lms unload <model>` first.",
+            err=True,
+        )
+        raise typer.Exit(3)
+
+
 @app.command()
 def step(
     run_id: Annotated[str, typer.Argument()],
@@ -248,6 +275,7 @@ def step(
     if mode not in {"ask", "plan", "code", "review"}:
         typer.echo(f"error: bad --mode `{mode}`; expected ask|plan|code|review", err=True)
         raise typer.Exit(2)
+    _preflight_busy_check()
     paths = _resolve_run(run_id)
     host, port = _daemon_info(paths)
     response = send_request(host, port, {"op": "step", "text": text, "mode": mode})
@@ -262,6 +290,7 @@ def go(run_id: Annotated[str, typer.Argument()]) -> None:
     """Запустить `agent.run_plan` на сгенерированном TASKS.md в
     workdir. scalpel сам идёт по плану в code mode с iterative
     patch loop. Печатает агрегированный результат."""
+    _preflight_busy_check()
     paths = _resolve_run(run_id)
     host, port = _daemon_info(paths)
     # /go в среднем длится несколько минут (N задач × code-loop) —
