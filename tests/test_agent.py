@@ -1806,10 +1806,11 @@ hello()
 
 
 @pytest.mark.asyncio
-async def test_run_plan_stops_on_skipped_task(project: Path) -> None:
-    """Model replies in plain text for a task — the plan halts. We never
-    silently advance past an unfinished task; the user must see what
-    happened and intervene (manual patch, edit plan, retry)."""
+async def test_run_plan_continues_past_single_skipped_task(project: Path) -> None:
+    """Skipping one task (model emits no patch, e.g. T001 "explore the
+    structure") must NOT halt the plan — the next task gets its shot.
+    Historical-series ch. 36/37: halting on T001 left every run
+    stranded at L3 even when T002+ were action-form."""
     from code_scalpel.tools.shell import ShellResult
     from tests.mocks import MockShellRunner
 
@@ -1819,7 +1820,7 @@ async def test_run_plan_stops_on_skipped_task(project: Path) -> None:
         "## T002: do it\n\nGoal: actually patch\nFiles: hello.py\n",
     )
 
-    # T001 → plain text (skipped). T002 should never run.
+    # T001 → plain text (skipped). T002 → real patch (done).
     llm = MockLLMAdapter(
         [
             "I have a question about what 'figure it out' means here.",
@@ -1831,8 +1832,37 @@ async def test_run_plan_stops_on_skipped_task(project: Path) -> None:
 
     result = await agent.run_plan(stop_after_failures=2)
 
+    assert result.stopped_reason == "all_done"
+    assert [o.status for o in result.outcomes] == ["skipped", "done"]
+    assert result.tasks_completed == 1
+
+
+@pytest.mark.asyncio
+async def test_run_plan_stops_on_repeated_skips(project: Path) -> None:
+    """If every task gets skipped — model replying in plain text across
+    the board — the plan still halts after `stop_after_failures`
+    consecutive non-progress outcomes. Otherwise an unproductive run
+    would silently iterate through the whole list."""
+    _write_tasks(
+        project,
+        "## T001: a\n\nGoal: x\n\n## T002: b\n\nGoal: y\n\n## T003: c\n\nGoal: z\n",
+    )
+
+    # Every task → plain text (skipped). With stop_after_failures=2,
+    # we should bail out after T002.
+    llm = MockLLMAdapter(
+        [
+            "I have a question about T001.",
+            "I have a question about T002.",
+            "I have a question about T003.",
+        ]
+    )
+    agent = StepAgent(llm=llm, cwd=project, config=_retry_config())
+
+    result = await agent.run_plan(stop_after_failures=2)
+
     assert result.stopped_reason == "task_not_done"
-    assert [o.status for o in result.outcomes] == ["skipped"]
+    assert [o.status for o in result.outcomes] == ["skipped", "skipped"]
     assert result.tasks_completed == 0
 
 
