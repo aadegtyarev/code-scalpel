@@ -23,6 +23,7 @@ dependencies = [
     "tree-sitter~=0.25",
     "tree-sitter-python~=0.25",
     "html2text>=2024.2.26",
+    "lmstudio>=1.5",
 ]
 
 [project.scripts]
