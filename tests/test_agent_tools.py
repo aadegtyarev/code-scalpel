@@ -805,18 +805,29 @@ async def test_write_file_creates_parent_dirs(tmp_path: Path) -> None:
 
 
 @pytest.mark.asyncio
-async def test_write_file_rejects_empty_content(tmp_path: Path) -> None:
+async def test_write_file_rejects_empty_content_on_existing_file(tmp_path: Path) -> None:
     """v0.9 loose end C: write_file content="" was clobbering existing
-    files with nothing. Now explicit reject with a how-to-do-this-right
-    hint pointing at `content="\\n"` or `shell_exec touch`."""
+    files with nothing. Refuse remains for the clobber case."""
     (tmp_path / "existing.py").write_text("don't lose me\n")
     call = ToolCall(name="write_file", body='{"path": "existing.py", "content": ""}')
     result = await execute(call, tmp_path)
     assert result.ok is False
     assert "empty content" in result.output
-    assert "touch" in result.output
     # File is untouched.
     assert (tmp_path / "existing.py").read_text() == "don't lose me\n"
+
+
+@pytest.mark.asyncio
+async def test_write_file_allows_empty_content_on_new_file(tmp_path: Path) -> None:
+    """v0.14: empty content on a new path is fine — there's nothing to
+    clobber. Common case: placeholder __init__.py, stub modules the
+    model fills in the next turn. Observed 2026-05-14 trust=yolo run
+    192502: T001 was failing because write_file content="" on a new
+    notes/cli.py was being refused."""
+    call = ToolCall(name="write_file", body='{"path": "notes/__init__.py", "content": ""}')
+    result = await execute(call, tmp_path)
+    assert result.ok is True
+    assert (tmp_path / "notes/__init__.py").read_text() == ""
 
 
 @pytest.mark.asyncio
