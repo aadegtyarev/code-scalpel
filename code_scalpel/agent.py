@@ -1010,13 +1010,38 @@ class StepAgent:
         `code_with_retry` call; exceptions inside them are swallowed so
         a buggy widget can't kill the autonomous loop.
         """
+        # v0.14: JSON is the source of truth when present, markdown
+        # falls back for back-compat (user hand-edits TASKS.md, legacy
+        # fixtures, old runs). The "tasks_path" markdown stays around
+        # as the on-disk plan-modification sentinel — when the user
+        # edits TASKS.md mid-run we detect it via hash. With JSON
+        # primary, we also re-render the markdown on every status flip
+        # so the sentinel stays in sync.
+        from code_scalpel.plan import (
+            parse_tasks_json,
+            render_tasks_markdown,
+        )
+
+        json_path = self._cwd / ".code-scalpel" / "TASKS.json"
         tasks_path = self._cwd / ".code-scalpel" / "TASKS.md"
+        tasks: tuple[Task, ...] = ()
+        if json_path.is_file():
+            tasks = parse_tasks_json(json_path.read_text())
+            # Keep markdown in sync so the rest of the loop's "plan
+            # modified mid-run" detection (hash on tasks_path) keeps
+            # working unchanged. Write only if differs to avoid
+            # touching mtime on every read.
+            rendered = render_tasks_markdown(tasks) if tasks else ""
+            if rendered and (not tasks_path.is_file() or tasks_path.read_text() != rendered):
+                tasks_path.parent.mkdir(parents=True, exist_ok=True)
+                tasks_path.write_text(rendered)
         if not tasks_path.is_file():
             return RunPlanResult(outcomes=(), stopped_reason="no_tasks", tasks_completed=0)
 
         original_text = tasks_path.read_text()
         initial_hash = _hash_text(original_text)
-        tasks = parse_tasks_md(original_text)
+        if not tasks:
+            tasks = parse_tasks_md(original_text)
         if not tasks or all(t.done for t in tasks):
             reason = "no_tasks" if not tasks else "all_done"
             return RunPlanResult(outcomes=(), stopped_reason=reason, tasks_completed=0)
@@ -2476,13 +2501,36 @@ class StepAgent:
         completion_total = 0
 
         seen: set[tuple[str, str]] = set()
+        # plan-mode emits JSON via response_format=json_schema (v0.14).
+        # `tools` and `response_format` are mutually exclusive in
+        # OpenAI-compat — we drop tools for plan so the schema can
+        # enforce the shape sampler-side. The model can't explore via
+        # read_file in plan-mode on this path; on greenfield projects
+        # (no existing structure) that's fine, on legacy projects we
+        # may want a 2-phase plan-mode later (explore + emit).
+        stream_kwargs: dict[str, Any] = dict(
+            profile.inference_kwargs(mode, self._config.agent.thinking_effort)
+        )
+        stream_tools: list[dict[str, Any]] | None = self._tool_schemas()
+        if mode == "plan":
+            from code_scalpel.plan import PLAN_JSON_SCHEMA
+
+            stream_kwargs["response_format"] = {
+                "type": "json_schema",
+                "json_schema": {
+                    "name": "plan",
+                    "strict": True,
+                    "schema": PLAN_JSON_SCHEMA,
+                },
+            }
+            stream_tools = None
         for _ in range(_MAX_TOOL_ROUNDS):
             full = ""
             round_tool_calls: list[NativeToolCall] = []
             async for chunk in self._llm.stream(
                 messages,
-                tools=self._tool_schemas(),
-                **profile.inference_kwargs(mode, self._config.agent.thinking_effort),
+                tools=stream_tools,
+                **stream_kwargs,
             ):
                 if chunk.text:
                     full += chunk.text
@@ -2561,18 +2609,48 @@ class StepAgent:
         return m.group(1) if m else "(file)"
 
     def _maybe_save_plan(self, reply: str) -> None:
-        """Persist the planner's TASKS.md output to .code-scalpel/TASKS.md.
+        """Persist the planner's plan to disk.
 
-        Looks for the conventional "## T001:" first-task heading; if found,
-        writes everything from that heading onward to disk. Anything before
-        the first heading is conversational lead-in and gets dropped.
-        Silent no-op when the reply doesn't contain a recognised plan
-        (e.g. model asked a clarifying question)."""
+        Two paths after v0.14 step 2:
+          - **JSON path** (preferred): reply is a JSON object matching
+            PLAN_JSON_SCHEMA. We parse via `parse_tasks_json`, save the
+            raw JSON to `.code-scalpel/TASKS.json` AND render a
+            human-readable `TASKS.md` from the typed tasks. JSON is
+            the source of truth, markdown is a derived view.
+          - **Legacy markdown path**: reply contains a `## T001:`
+            heading — we save everything from that heading on to
+            `.code-scalpel/TASKS.md` as before. No JSON sidecar.
+
+        Silent no-op when the reply matches neither shape (model asked
+        a clarifying question, sampler hiccup, etc.)."""
+        from code_scalpel.plan import (
+            parse_tasks_json,
+            render_tasks_markdown,
+            serialize_tasks_json,
+        )
+
+        target_dir = self._cwd / ".code-scalpel"
+
+        # JSON path — recognise reply that starts with `{` (after
+        # whitespace) and parses cleanly via the schema parser.
+        stripped = reply.lstrip()
+        if stripped.startswith("{"):
+            tasks = parse_tasks_json(stripped)
+            if tasks:
+                try:
+                    target_dir.mkdir(parents=True, exist_ok=True)
+                    (target_dir / "TASKS.json").write_text(serialize_tasks_json(tasks))
+                    (target_dir / "TASKS.md").write_text(render_tasks_markdown(tasks))
+                except OSError:
+                    pass
+                return
+
+        # Legacy markdown fallback for back-compat (user hand-edits,
+        # old fixtures, model emitting markdown despite the schema).
         m = re.search(r"^##\s+T\d{3}:", reply, flags=re.MULTILINE)
         if m is None:
             return
         plan_text = reply[m.start() :].rstrip() + "\n"
-        target_dir = self._cwd / ".code-scalpel"
         target = target_dir / "TASKS.md"
         try:
             target_dir.mkdir(parents=True, exist_ok=True)

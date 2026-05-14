@@ -708,7 +708,9 @@ Test command: pytest tests/test_notes.py::test_search
 
 @pytest.mark.asyncio
 async def test_plan_mode_addendum_in_system_prompt() -> None:
-    """Plan mode appends a planning addendum that asks for TASKS.md output."""
+    """Plan mode appends a planning addendum asking for JSON output
+    matching PLAN_JSON_SCHEMA. v0.14 step 2: emit JSON via
+    response_format=json_schema, no markdown DSL anymore."""
     from code_scalpel.agent import StepAgent
 
     cfg = AppConfig(
@@ -720,8 +722,10 @@ async def test_plan_mode_addendum_in_system_prompt() -> None:
     await agent.ask("plan something", mode="plan")
     system = llm.calls[0][0]["content"]
     assert "PLAN mode" in system
-    assert "## T001:" in system
-    assert "Acceptance:" in system
+    # JSON schema fields the prompt references.
+    assert "tasks" in system
+    assert "test_command" in system
+    assert "acceptance" in system
     # write_file explicitly forbidden in plan mode (planning, not coding)
     assert "NO write_file" in system
 
