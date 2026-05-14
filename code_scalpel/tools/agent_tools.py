@@ -749,16 +749,18 @@ def _tool_write_file(call: ToolCall, cwd: Path) -> ToolResult:
         return ToolResult(call, output="error: content must be a string", ok=False)
     # v0.9 loose end C: 14b sometimes calls write_file twice with the
     # same path and content="", clobbering whatever the previous turn
-    # produced. Refuse the empty case explicitly — if you really want
-    # an empty file, the model can use `content="\n"` or shell_exec
-    # touch. The error nudges the model to pick the right tool.
-    if content == "":
+    # produced. Refuse the empty-clobber case explicitly. But on a
+    # path that doesn't exist yet (placeholder __init__.py, empty cli.py
+    # stub that will be filled in the next turn) there's nothing to
+    # clobber — observed 2026-05-14 trust=yolo run 192502 tool 6 fail
+    # blocking the whole T001 chain. v0.14.
+    if content == "" and (cwd / path_str).exists():
         return ToolResult(
             call,
             output=(
-                'error: empty content. write_file rejects content="" to avoid '
-                'overwriting existing files with nothing. Use content="\\n" for '
-                "a deliberately blank file, or shell_exec `touch <path>`."
+                'error: empty content. write_file rejects content="" on an '
+                "existing file to avoid clobbering it with nothing. Use "
+                'content="\\n" if you really mean to blank it.'
             ),
             ok=False,
         )
