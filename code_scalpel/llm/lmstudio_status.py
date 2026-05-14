@@ -30,7 +30,7 @@ LMS_BINARY_CANDIDATES = (
     "/home/adegtyarev/.lmstudio/bin/lms",  # default install path
 )
 
-Status = Literal["LOADED", "GENERATING", "LOADING", "UNKNOWN"]
+Status = Literal["LOADED", "IDLE", "GENERATING", "LOADING", "UNKNOWN"]
 
 
 @dataclass(frozen=True)
@@ -99,10 +99,15 @@ def _parse_lms_ps(output: str) -> list[InstanceStatus]:
             parts.append("")
         identifier, model, status_str, size, context, parallel, device, ttl = parts[:8]
         status: Status
+        # Observed statuses, 2026-05-14: LOADED, IDLE (after unload+load),
+        # GENERATING (in progress), LOADING. IDLE and LOADED both mean
+        # "ready, not busy" — UI vocabulary varies by lifecycle.
         if status_str == "GENERATING":
             status = "GENERATING"
         elif status_str == "LOADED":
             status = "LOADED"
+        elif status_str == "IDLE":
+            status = "IDLE"
         elif status_str == "LOADING":
             status = "LOADING"
         else:
@@ -149,6 +154,40 @@ def list_loaded(timeout: float = 5.0) -> list[InstanceStatus] | None:
     return _parse_lms_ps(result.stdout)
 
 
+def cancel_generation(model_id: str, timeout: float = 10.0) -> bool | None:
+    """Hard-stop the model by unloading it. Returns True on success,
+    False on failure, None if `lms` CLI is missing.
+
+    This is the **blunt** cancellation path: `lms unload` kills the
+    in-flight inference and clears the model from memory. Next chat
+    completion will trigger an auto-reload (~5s warm-up on a 14B
+    Q4_K_M / 8.99 GB). We lose the warm KV cache and pay the load
+    time.
+
+    Used for: user pressed Esc to abort a /go that's stuck, probe
+    runner cleanup between scenarios, hung-inference recovery.
+    Not used for: routine completion of one chat — for that, just
+    close the streaming connection on the client.
+
+    A cleaner cancellation (via WS-SDK cancellation token, without
+    losing the model) is an open task — see [[reference_lmstudio_status]]
+    memory for status."""
+    binary = _find_lms_binary()
+    if binary is None:
+        return None
+    try:
+        result = subprocess.run(
+            [binary, "unload", model_id],
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+            check=False,
+        )
+    except (subprocess.TimeoutExpired, OSError):
+        return False
+    return result.returncode == 0
+
+
 def is_busy(model_id: str | None = None, timeout: float = 5.0) -> bool | None:
     """Return True if any loaded model (or the named one) is in
     STATUS=GENERATING, False if it's idle (LOADED), None if unknown
@@ -166,4 +205,4 @@ def is_busy(model_id: str | None = None, timeout: float = 5.0) -> bool | None:
     return any(i.status == "GENERATING" for i in instances)
 
 
-__all__ = ["InstanceStatus", "Status", "is_busy", "list_loaded"]
+__all__ = ["InstanceStatus", "Status", "cancel_generation", "is_busy", "list_loaded"]

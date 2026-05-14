@@ -11,6 +11,7 @@ from __future__ import annotations
 from code_scalpel.llm.lmstudio_status import (
     InstanceStatus,
     _parse_lms_ps,
+    cancel_generation,
     is_busy,
     list_loaded,
 )
@@ -130,3 +131,74 @@ def test_is_busy_returns_false_when_no_models_loaded(monkeypatch) -> None:  # ty
 
     monkeypatch.setattr(mod, "list_loaded", lambda timeout=5.0: [])
     assert is_busy() is False
+
+
+def test_parse_lms_ps_idle_status() -> None:
+    """After `lms unload && lms load`, the model reports IDLE
+    instead of LOADED. Same meaning (ready, not busy) — both must
+    map to a known non-GENERATING status, not UNKNOWN."""
+    output = (
+        "IDENTIFIER                MODEL                     STATUS    "
+        "SIZE       CONTEXT    PARALLEL    DEVICE    TTL\n"
+        "qwen/qwen2.5-coder-14b    qwen/qwen2.5-coder-14b    IDLE      "
+        "8.99 GB    16384      1           Local\n"
+    )
+    rows = _parse_lms_ps(output)
+    assert len(rows) == 1
+    assert rows[0].status == "IDLE"
+
+
+def test_is_busy_false_for_idle(monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    """IDLE must read as not-busy. Otherwise post-unload + load
+    sequence would falsely show 'busy' and block downstream calls."""
+    import code_scalpel.llm.lmstudio_status as mod
+
+    monkeypatch.setattr(
+        mod,
+        "list_loaded",
+        lambda timeout=5.0: [
+            InstanceStatus(
+                identifier="qwen",
+                model="qwen",
+                status="IDLE",
+                size="9 GB",
+                context="16384",
+                parallel="1",
+                device="Local",
+                ttl="",
+            )
+        ],
+    )
+    assert is_busy() is False
+
+
+def test_cancel_generation_returns_none_when_lms_missing(monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    """No `lms` CLI on PATH → cancel returns None. Caller can
+    either skip or fall back to closing the HTTP connection."""
+    import code_scalpel.llm.lmstudio_status as mod
+
+    monkeypatch.setattr(mod, "_find_lms_binary", lambda: None)
+    assert cancel_generation("qwen/qwen2.5-coder-14b") is None
+
+
+def test_cancel_generation_invokes_lms_unload(monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    """When `lms` is available, cancel shells out to
+    `lms unload <model_id>`. We assert the argv shape so a future
+    arg-order change doesn't pass tests but break in prod."""
+    import code_scalpel.llm.lmstudio_status as mod
+
+    captured: dict[str, object] = {}
+
+    class _FakeResult:
+        returncode = 0
+        stdout = ""
+        stderr = ""
+
+    def fake_run(argv: list[str], **kw: object) -> _FakeResult:
+        captured["argv"] = argv
+        return _FakeResult()
+
+    monkeypatch.setattr(mod, "_find_lms_binary", lambda: "/usr/local/bin/lms")
+    monkeypatch.setattr(mod.subprocess, "run", fake_run)
+    assert cancel_generation("qwen/qwen2.5-coder-14b") is True
+    assert captured["argv"] == ["/usr/local/bin/lms", "unload", "qwen/qwen2.5-coder-14b"]
