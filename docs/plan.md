@@ -3069,18 +3069,85 @@ commit hook — две правки на ~50 строк каждая), но дл
 что отдельные слои не ловят.
 ```
 
-### v0.14 — consistency: от 1/3 до 9/10 task_solved
+### v0.14 — consistency: 3/3 task_solved на notes_cli
 
-Тезис: после v0.13 L5 достижим на одном из трёх прогонов. Этого
-достаточно для acceptance, но недостаточно для tool который будут
-использовать. Цель v0.14 — поднять воспроизводимость до ≥9/10 на
-notes_cli + добавить второй сценарий (например `mini_fullstack`)
-чтобы не overfit'ить на одной задаче.
+Тезис: после v0.13 L5 достижим на одном из трёх прогонов. Цель
+v0.14 — **3/3** (100% на N=3). Не 9/10, не 1 prog — три из трёх.
+Юзер уточнил 2026-05-15: «не надо N10, должно быть 3/3».
 
 Acceptance (release gate):
-  ≥9/10 task_solved на notes_cli **и** ≥7/10 на втором сценарии.
+  **3 из 3 prog с `verdict: task_solved` на notes_cli.**
+  N=10 не нужен — если флуктуирует 3/3 ≠ 0/3 на rerun, значит
+  consistency недостаточная и acceptance не закрыт.
 
-Три открытые блокера, наблюдённые на runs 2/3 серии 662d2bc:
+### Что закрыто в этой сессии (2026-05-15)
+
+Целая серия steps по выбранному пути **A** «выкинуть markdown-
+парсеры, перейти на JSON-schema response_format»:
+
+- PR #126: typed Task fields + PLAN_JSON_SCHEMA + helpers
+- PR #127: plan-mode эмиттит JSON, _maybe_save_plan dual write
+  (TASKS.json + rendered TASKS.md), run_plan читает JSON первым
+- PR #128: упростить schema (LM Studio не enforce'нит strict
+  constraints) + strip ```json fence
+
+Дополнительные landed:
+- PR #124 trust=yolo в probe-runner headless
+- PR #125 write_file empty content на новых файлах
+- PR #129 N=3 на 4 pointcuts artifacts
+
+**JSON pipeline работает end-to-end.** TASKS.json + TASKS.md
+sidecar сохраняются, schema enforce'нится (после упрощения),
+fence stripped.
+
+### Что НЕ закрыто (план дальше)
+
+#### Steps 5-7 plan-to-JSON migration:
+
+- [ ] **step 5**: TUI render rich layout from JSON. Сейчас TUI
+  показывает derived markdown — приемлемо но не оптимально.
+- [ ] **step 6**: Удалить `_parse_task_test_command`,
+  `_parse_task_files`, `_parse_task_skills` парсеры body —
+  legacy под markdown-tasks. После migration их не нужны.
+- [ ] **step 7**: Обновить тесты — typed fields везде вместо
+  body parsing.
+
+#### Outcome — 3/3 не достигнут:
+
+Состояние на конец сессии:
+- 1 task_solved за всю сессию (662d2bc run 1, 8 done all_done
+  pytest 5/5)
+- N=3 на 4 разных pointcuts: 8/0/0, 1/0/0, 0/0/3, 0/1/0
+- Дисперсия sampler'а доминирует над моими fix'ами
+
+Возможные направления для consistency:
+- **a) Усилить prompt в mode_plan.md** — модель часто оставляет
+  files/acceptance пустыми (schema их optional). Принудить
+  заполнять.
+- **b) Снять `additionalProperties` ограничения, но добавить
+  required на all fields** — попробовать другую конфигурацию
+  schema enforcement.
+- **c) Сменить модель** — qwen-14b в strict-schema mode может
+  быть недостаточен для 3/3. gemma-26b на single-run probe была
+  лучше по bench-models.md. Но это противоречит решению
+  «qwen-coder-14b остаётся» из v0.13 — нужно re-litigate'нуть.
+- **d) Упростить сценарий** — `notes_cli` довольно много
+  компонентов (storage, CLI, tests на 4 команды). Можно начать
+  с `mini_cli` (echo + version + список 2 файла).
+- **e) 2-фазный plan-mode** — explore (с tools) + emit (с
+  schema без tools). Сейчас single-phase теряет project_map.
+
+Все пять направлений требуют **наблюдения в данных** (правило
+data-before-code из [[outcome-driven-release]]). Конкретно:
+- (a) видно на runs 58b43fc — `files: []` пустые сплошь
+- (b) непонятно из данных — гипотеза
+- (c) bench-models.md уже есть, но на старом scenario; нужен
+  свежий замер
+- (d) не пробовали — гипотеза «проще = надёжнее»
+- (e) видно в runs 9ae0968: модель в plan не знает структуру
+  проекта (выдумывает имена пакетов)
+
+### Старые блокеры (из v0.13 evaluation)
 
 - [ ] **Sampler-drift в имени пакета.** Plan-mode выдаёт разные
   имена пакетов между прогонами: `notes/`, `notes_cli/`,
