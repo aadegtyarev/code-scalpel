@@ -114,6 +114,14 @@ class LoggingLLMAdapter:
                 "messages": messages,
                 "tools": tools,
                 "stream": True,
+                # Log the rest of the inference kwargs (response_format,
+                # temperature, max_tokens, ...) so we can verify what
+                # actually went over the wire. Without this, a "did the
+                # response_format reach the server" check has to be done
+                # by reading the OpenAI SDK source. v0.14 step 2 ran
+                # blind on this — found out only after probe that we
+                # couldn't tell.
+                "extra_kwargs": kwargs,
             },
         )
         text_chunks: list[str] = []
