@@ -15,6 +15,7 @@ from pathlib import Path
 from typing import Any, cast
 
 import pytest
+import typer
 
 from code_scalpel.llm.adapter import (
     ChatResponse,
@@ -334,6 +335,49 @@ async def test_logging_adapter_records_non_streaming_tool_calls(tmp_path: Path) 
         {"id": "c1", "name": "project_map", "arguments": "{}"},
         {"id": "c2", "name": "read_file", "arguments": '{"path":"x.py"}'},
     ]
+
+
+def test_preflight_blocks_when_lmstudio_busy(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The CLI must refuse `step` / `go` if LM Studio is already
+    GENERATING for a previous request. Otherwise the new chat
+    completion queues on the model, daemon timeouts cascade, and
+    the operator can't tell stuck-vs-busy. Exit code 3 is the
+    distinct signal."""
+    from scripts.probes_v2 import cli
+
+    monkeypatch.setattr(cli, "_preflight_busy_check", cli._preflight_busy_check)
+    # is_busy lives in code_scalpel.llm.lmstudio_status; patch there
+    # so the preflight import picks up the fake.
+    import code_scalpel.llm.lmstudio_status as status_mod
+
+    monkeypatch.setattr(status_mod, "is_busy", lambda model_id=None, timeout=5.0: True)
+
+    with pytest.raises(typer.Exit) as exc:
+        cli._preflight_busy_check()
+    assert exc.value.exit_code == 3
+
+
+def test_preflight_allows_when_lmstudio_idle(monkeypatch: pytest.MonkeyPatch) -> None:
+    """When `is_busy` says False — model is idle — preflight is a
+    no-op, no exit."""
+    import code_scalpel.llm.lmstudio_status as status_mod
+    from scripts.probes_v2 import cli
+
+    monkeypatch.setattr(status_mod, "is_busy", lambda model_id=None, timeout=5.0: False)
+    # Should not raise.
+    cli._preflight_busy_check()
+
+
+def test_preflight_allows_when_lms_cli_missing(monkeypatch: pytest.MonkeyPatch) -> None:
+    """No `lms` CLI on PATH → is_busy returns None → preflight
+    proceeds. The caller can't act on the signal anyway, so we
+    don't gate on it. If they actually do have LM Studio busy,
+    they'll see the symptom at the daemon-timeout level."""
+    import code_scalpel.llm.lmstudio_status as status_mod
+    from scripts.probes_v2 import cli
+
+    monkeypatch.setattr(status_mod, "is_busy", lambda model_id=None, timeout=5.0: None)
+    cli._preflight_busy_check()
 
 
 @pytest.mark.asyncio
