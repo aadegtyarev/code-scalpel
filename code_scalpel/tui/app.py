@@ -185,6 +185,10 @@ class ScalpelApp(App[None]):
         self._next_fork_card_id: int = 10_000  # leave room for /go cards
         # Double-Esc guard: first Esc arms, second cancels. Timer resets arm.
         self._esc_armed: bool = False
+        # After python-side cancel + 3s grace, if LM Studio is still
+        # generating, we offer the user a chance to force-unload (loses
+        # warm cache). One more Esc → unload. Auto-disarm after 5s.
+        self._unload_armed: bool = False
 
     # ── compose ───────────────────────────────────────────────────────────────
 
@@ -324,8 +328,43 @@ class ScalpelApp(App[None]):
             else:
                 self._supports_thinking = await autodetect_supports_thinking(profile, model_name)
             self._update_footer()
+            # Start the LM Studio busy-state poller for the footer
+            # indicator — only for LM Studio, since other providers
+            # have no equivalent state probe.
+            if getattr(profile, "provider", None) == "lmstudio":
+                self.run_worker(
+                    self._poll_lm_state(),
+                    exclusive=True,
+                    group="lm-state-poll",
+                )
         except Exception:
             pass
+
+    async def _poll_lm_state(self) -> None:
+        """Update StatusFooter.lm_state ('gen' / 'idle') every ~1.5s
+        so the user can see at a glance whether the model is busy.
+        Lightweight: `lms ps` is a local subprocess (~10ms), runs on
+        a thread to avoid blocking the asyncio loop. Stops naturally
+        when the app exits (worker is cancelled). Defensive: any
+        error → footer cleared, poll continues."""
+        import asyncio as _asyncio
+
+        from code_scalpel.llm.lmstudio_status import is_busy
+
+        footer = self.query_one(StatusFooter)
+        model_id: str | None = footer.model or self.config.current_profile.model
+        while True:
+            try:
+                busy = await _asyncio.to_thread(is_busy, model_id)
+                if busy is True:
+                    footer.lm_state = "gen"
+                elif busy is False:
+                    footer.lm_state = "idle"
+                else:
+                    footer.lm_state = ""  # unknown — hide the indicator
+            except Exception:
+                footer.lm_state = ""
+            await _asyncio.sleep(1.5)
 
     # ── user message ──────────────────────────────────────────────────────────
 
@@ -853,11 +892,19 @@ class ScalpelApp(App[None]):
         if self._focused_card() is not None:
             self.query_one(ModeInput).focus_input()
             return
+        footer = self.query_one(StatusFooter)
+        # Phase-3 path: previous Esc-pair was followed by a 3s grace
+        # check that found the model still generating. We armed the
+        # user for unload. THIS Esc confirms it.
+        if self._unload_armed:
+            self._unload_armed = False
+            footer.status = ""
+            self.run_worker(self._run_force_unload(), exclusive=False, group="cancel")
+            return
         w = getattr(self, "_step_worker", None)
         if w is None or w.is_finished:
             self._esc_armed = False
             return
-        footer = self.query_one(StatusFooter)
         if not self._esc_armed:
             self._esc_armed = True
             footer.status = "⚠ ESC ещё раз — отменить задачу"
@@ -866,6 +913,107 @@ class ScalpelApp(App[None]):
         self._esc_armed = False
         footer.status = ""
         w.cancel()
+        # Python-side cancel closes the streaming connection. Most
+        # servers stop generating shortly after. For the case where
+        # they don't (LM Studio sometimes keeps generating, paid APIs
+        # may keep billing), we follow up with a grace check and offer
+        # the user explicit choice to force-unload.
+        self.run_worker(self._run_cancel_inflight(), exclusive=False, group="cancel")
+
+    async def _run_cancel_inflight(self) -> None:
+        """Phase-2 follow-up after python-side Esc: 3s grace, then
+        for LM Studio check whether the model actually stopped. If
+        it did → quiet success notification. If it didn't → ARM the
+        user for a force-unload (one more Esc), don't unload silently.
+        For paid / unknown providers we have no busy-state probe; we
+        just tell the user the connection is closed and that's all
+        we can do today.
+
+        Defensive try/except: cancel must never raise back into
+        Textual; worst case the user is left with the python-side
+        cancel that already happened in `action_cancel_step`."""
+        import asyncio
+
+        from code_scalpel.llm.lmstudio_status import is_busy
+
+        try:
+            profile = self.config.current_profile
+            provider = getattr(profile, "provider", None)
+            model_id: str | None = self.query_one(StatusFooter).model or profile.model
+
+            # Grace period — let the server notice the closed
+            # connection and stop on its own.
+            await asyncio.sleep(3.0)
+
+            if provider == "lmstudio":
+                still_busy = await asyncio.to_thread(is_busy, model_id)
+                if still_busy is False:
+                    self.notify(
+                        "Esc: модель сама остановилась после закрытия соединения.",
+                        severity="information",
+                        timeout=4,
+                    )
+                    return
+                if still_busy is None:
+                    # `lms` CLI missing — can't verify. Don't auto-arm
+                    # for unload since we can't confirm it'd work.
+                    self.notify(
+                        "Esc: соединение закрыто; статус модели не известен "
+                        "(`lms` CLI не доступен).",
+                        severity="warning",
+                        timeout=4,
+                    )
+                    return
+                # still_busy is True → arm the user for a force-unload.
+                # Don't unload silently — destructive action (loses warm
+                # cache, ~5s reload), so it needs explicit consent.
+                self._unload_armed = True
+                self.query_one(
+                    StatusFooter
+                ).status = "⚠ Модель не отреагировала за 3s. ESC снова → выгрузить"
+                self.set_timer(5.0, self._disarm_unload)
+                return
+
+            # Paid / unknown provider — can't ping busy state. The
+            # client-side cancel is the best we have today.
+            self.notify(
+                f"Esc: соединение закрыто. Provider {provider!r} — "
+                "биллинг может тикать до сервер-side cleanup.",
+                severity="warning",
+                timeout=5,
+            )
+        except Exception as e:  # pragma: no cover — defensive
+            self.notify(f"Cancel error: {e}", severity="warning", timeout=4)
+
+    async def _run_force_unload(self) -> None:
+        """Phase-3: user confirmed via third Esc that the model should
+        be hard-stopped via `lms unload`. Runs the unload, surfaces
+        result. Only ever called from `action_cancel_step` after
+        `_unload_armed=True`."""
+        from code_scalpel.llm.cancel import cancel_inflight_inference
+
+        try:
+            profile = self.config.current_profile
+            provider = getattr(profile, "provider", None)
+            model_id: str | None = self.query_one(StatusFooter).model or profile.model
+            import asyncio as _asyncio
+
+            result = await _asyncio.to_thread(cancel_inflight_inference, provider, model_id)
+        except Exception as e:  # pragma: no cover — defensive
+            self.notify(f"Unload error: {e}", severity="warning", timeout=4)
+            return
+        if result.stopped:
+            self.notify(result.message, severity="information", timeout=4)
+        else:
+            self.notify(result.message, severity="warning", timeout=4)
+
+    def _disarm_unload(self) -> None:
+        if not self._unload_armed:
+            return
+        self._unload_armed = False
+        footer = self.query_one(StatusFooter)
+        if "выгрузить" in (footer.status or ""):
+            footer.status = ""
 
     def _disarm_esc(self) -> None:
         self._esc_armed = False
