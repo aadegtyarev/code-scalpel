@@ -2514,14 +2514,19 @@ async def test_run_plan_marks_task_failed_when_declared_file_missing(project: Pa
 
 
 @pytest.mark.asyncio
-async def test_run_plan_fails_task_when_model_did_not_commit_and_hook_disabled(
+async def test_run_plan_keeps_done_for_noop_task_when_hook_disabled(
     project: Path,
 ) -> None:
-    """With auto_git on AND auto_commit_on_done off, run_plan requires
-    the model to commit. If HEAD didn't advance, the task flips to
-    failed and the plan halts. Old (pre-v0.13) behaviour, preserved
-    behind the disabled-hook flag for callers that want manual
-    commits."""
+    """Defer-not-fail (v0.13): if a task already passed verify
+    (files exist + test command green) but HEAD didn't advance and
+    auto-commit hook is disabled, status STAYS done. Previously
+    (pre-v0.13) it flipped to failed. Marking failed broke L4→L5
+    on the 2026-05-14 N=3 main runs — see probe-runs/
+    ...eb5ee2f-152318/evaluation.md.
+
+    The pattern this catches: T_N+1 says "write tests" but model
+    already wrote them under T_N. Nothing new to commit, but the
+    task is functionally done. No-op done > spurious failed."""
     from code_scalpel.tools.shell import ShellResult
     from tests.mocks import MockShellRunner
 
@@ -2544,7 +2549,8 @@ async def test_run_plan_fails_task_when_model_did_not_commit_and_hook_disabled(
     # Shell queue (in order):
     #   1. git rev-parse HEAD (pre-task)  → empty / non-zero
     #   2. pytest from _run_tests         → passes
-    #   3. git rev-parse HEAD (post-task) → still empty (no commit)
+    #   3. git rev-parse HEAD (post-task) → still empty (no commit,
+    #      hook disabled)
     shell = MockShellRunner(
         [
             ShellResult("", 128),
@@ -2556,7 +2562,66 @@ async def test_run_plan_fails_task_when_model_did_not_commit_and_hook_disabled(
 
     result = await agent.run_plan(stop_after_failures=1)
 
-    assert [o.status for o in result.outcomes] == ["failed"]
+    # v0.13 change: was ["failed"], now ["done"] — no-op done.
+    assert [o.status for o in result.outcomes] == ["done"]
+    assert result.tasks_completed == 1
+    assert result.stopped_reason == "all_done"
+
+
+@pytest.mark.asyncio
+async def test_run_plan_keeps_done_when_hook_finds_nothing_to_stage(
+    project: Path,
+) -> None:
+    """Defer-not-fail (v0.13), hook-enabled case: auto-commit hook
+    runs `git add -A && git commit` but there's nothing staged —
+    commit fails, HEAD stays where it was. Status MUST stay done.
+    Common pattern from N=3 main runs (2026-05-14): T_N+1 has the
+    same Files as T_N, model already wrote them. We don't want to
+    fail the second task just because git has nothing new."""
+    from code_scalpel.tools.shell import ShellResult
+    from tests.mocks import MockShellRunner
+
+    (project / ".git").mkdir()
+
+    _write_tasks(
+        project,
+        "## T001: make a file\n\nGoal: write hello\nFiles: hello.py\n"
+        "Acceptance:\n- exists\nTest command: pytest\n",
+    )
+
+    cfg = _retry_config()
+    cfg.agent.auto_git = True
+    cfg.agent.auto_commit_on_done = True
+
+    llm = MockLLMAdapter([_GOOD_PATCH_NOOP])
+    # Shell queue (in order):
+    #   1. git rev-parse HEAD (pre-task)              → "abc1234"
+    #   2. pytest from _run_tests                     → passes
+    #   3. git rev-parse HEAD (post-task, before hook) → "abc1234"
+    #   4. git add -A                                  → ok (nothing)
+    #   5. git commit -m                               → fails: nothing
+    #      to commit. Exit non-zero, BUT we ignore the exit from
+    #      _run_plan_shell — we only check HEAD after the call.
+    #   6. git rev-parse HEAD (after hook)             → "abc1234"
+    #      still — commit did not land.
+    shell = MockShellRunner(
+        [
+            ShellResult("abc1234\n", 0),
+            ShellResult("1 passed", 0),
+            ShellResult("abc1234\n", 0),
+            ShellResult("", 0),
+            ShellResult("nothing to commit, working tree clean", 1),
+            ShellResult("abc1234\n", 0),
+        ]
+    )
+    agent = StepAgent(llm=llm, cwd=project, config=cfg, shell_runner=shell)
+
+    result = await agent.run_plan()
+
+    # v0.13 defer-not-fail: was ["failed"], now ["done"].
+    assert [o.status for o in result.outcomes] == ["done"]
+    assert result.tasks_completed == 1
+    assert result.stopped_reason == "all_done"
 
 
 @pytest.mark.asyncio

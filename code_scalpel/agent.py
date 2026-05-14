@@ -1216,22 +1216,28 @@ class StepAgent:
                     ) and self._config.agent.auto_commit_on_done:
                         await self._auto_commit_task(task)
                         head_after = await self._git_head_sha()
-                    if head_after is None or head_after == head_before:
-                        # Still no commit (auto-commit disabled, or it
-                        # ran but had nothing to stage). Mark failed
-                        # so the plan halts and the user notices.
-                        outcome = TaskOutcome(
-                            task=task,
-                            step_result=step_result,
-                            status="failed",
-                        )
-                    elif self._upstream_queue is not None:
-                        # Task committed AND we have upstream forks in
-                        # flight — attribute this commit to every
-                        # pending fork so /review-overrides can show
-                        # which commits to inspect if upstream later
-                        # disagrees. Defensive suppress: queue
-                        # bookkeeping must never break /go.
+                    # If HEAD advanced (either by the model itself or
+                    # by the auto-commit hook), the task is fully done
+                    # and we may want to attribute the commit to any
+                    # pending upstream forks. If HEAD did NOT advance,
+                    # the task is a no-op: model touched no new files
+                    # (or wrote identical content), `git add -A` had
+                    # nothing to stage. We keep status="done" because
+                    # _verify_task_files + _verify_task_test_command
+                    # already passed earlier in this block — the task
+                    # is functionally complete, just adds no new commit.
+                    # Common case: T_N+1 says "write tests for T_N"
+                    # but model already wrote them under T_N. Marking
+                    # failed here broke L4→L5 on the 2026-05-14 N=3
+                    # main runs (see probe-runs/.../eb5ee2f-152318/
+                    # evaluation.md). v0.13.
+                    if (
+                        head_after is not None
+                        and head_after != head_before
+                        and self._upstream_queue is not None
+                    ):
+                        # Defensive suppress: queue bookkeeping must
+                        # never break /go.
                         with suppress(Exception):
                             self._upstream_queue.record_commit(head_after)  # type: ignore[attr-defined]
 
