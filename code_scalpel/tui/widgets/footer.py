@@ -36,6 +36,12 @@ class StatusFooter(Widget):
     thinking: reactive[str] = reactive("")
     # Retry loop indicator — shown when iterative_patch_loop is active.
     loop: reactive[str] = reactive("")
+    # LM Studio runtime state (`gen` / `idle`) — visible signal so user
+    # can tell at a glance "model is still generating" vs "stuck on my
+    # side". Set by App's poller (every ~1.5s via `lms ps`). Empty
+    # string hides — for non-LM-Studio providers we have no busy info,
+    # showing fake "idle" would be a lie.
+    lm_state: reactive[str] = reactive("")
 
     def compose(self) -> ComposeResult:
         yield Label("", id="footer-label")
@@ -64,6 +70,9 @@ class StatusFooter(Widget):
     def watch_loop(self, _: str) -> None:
         self._refresh_label()
 
+    def watch_lm_state(self, _: str) -> None:
+        self._refresh_label()
+
     def _refresh_label(self) -> None:
         parts = [self.hints]
         if self.status:
@@ -76,6 +85,16 @@ class StatusFooter(Widget):
             indicators.append(self.thinking)
         if self.loop:
             indicators.append(self.loop)
+        if self.lm_state:
+            # Highlight only the active-generation state — idle is the
+            # boring default, but `gen` is what the user wants to spot
+            # at a glance.
+            if self.lm_state == "gen":
+                indicators.append("[yellow]● gen[/yellow]")
+            elif self.lm_state == "idle":
+                indicators.append("[dim]○ idle[/dim]")
+            else:
+                indicators.append(self.lm_state)
         if indicators:
             parts.append(" ".join(indicators))
         if self.ctx:
