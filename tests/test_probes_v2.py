@@ -10,11 +10,21 @@ from __future__ import annotations
 import asyncio
 import json
 import socket
+from collections.abc import AsyncIterator
 from pathlib import Path
+from typing import Any, cast
 
 import pytest
 
+from code_scalpel.llm.adapter import (
+    ChatResponse,
+    LLMAdapter,
+    NativeToolCall,
+    StreamChunk,
+    StreamUsage,
+)
 from scripts.probes_v2.ipc import send_request, send_response, serve_request
+from scripts.probes_v2.logging_adapter import LoggingLLMAdapter
 from scripts.probes_v2.state import (
     RunPaths,
     append_jsonl,
@@ -197,3 +207,156 @@ async def test_no_op_pytest_async_works() -> None:
     не запустился, в test_probes_v2 что-то с конфигом."""
     await asyncio.sleep(0)
     assert True
+
+
+# ─── LoggingLLMAdapter diagnostics ───────────────────────────────────────
+#
+# Reality-разбор v0.8 (главы 36/38 девлога): chat.jsonl показывал
+# `tool_calls=[]` на всех response entries, но metrics.json пишет
+# write_file:11. Логи теряли streaming-tool-call события. Здесь —
+# unit-тесты которые проверяют, что **на текущем main** writer
+# действительно записывает tool_calls и для streaming, и для non-
+# streaming пути. Если красные — фиксим writer. Если зелёные —
+# проблема была в historical коде, текущий main пишет логи правильно.
+
+
+class _FakeAdapter:
+    """Минимальный LLMAdapter для теста: возвращает заранее
+    подготовленные chunks из stream() и заготовленный ChatResponse
+    из chat()."""
+
+    def __init__(
+        self,
+        *,
+        stream_chunks: list[StreamChunk] | None = None,
+        chat_response: ChatResponse | None = None,
+    ) -> None:
+        self._stream_chunks = stream_chunks or []
+        self._chat_response = chat_response
+
+    async def chat(
+        self,
+        messages: list[dict[str, Any]],
+        *,
+        tools: list[dict[str, Any]] | None = None,
+        **kwargs: Any,
+    ) -> ChatResponse:
+        assert self._chat_response is not None
+        return self._chat_response
+
+    def stream(
+        self,
+        messages: list[dict[str, Any]],
+        *,
+        tools: list[dict[str, Any]] | None = None,
+        **kwargs: Any,
+    ) -> AsyncIterator[StreamChunk]:
+        return self._iter()
+
+    async def _iter(self) -> AsyncIterator[StreamChunk]:
+        for c in self._stream_chunks:
+            yield c
+
+    def set_model(self, model: str) -> None:
+        pass
+
+
+@pytest.mark.asyncio
+async def test_logging_adapter_records_streamed_tool_calls(tmp_path: Path) -> None:
+    """Когда `stream()` yieldит `StreamChunk(tool_call=...)`,
+    writer должен записать его в response entry chat.jsonl как
+    {id, name, arguments}. Если этот тест падает — мы воспроизвели
+    дыру логирования из v0.8 (см. главу 38)."""
+    chat_log = tmp_path / "chat.jsonl"
+    inner = _FakeAdapter(
+        stream_chunks=[
+            StreamChunk(text="Понял, пишу файл. "),
+            StreamChunk(
+                tool_call=NativeToolCall(
+                    id="call_1",
+                    name="write_file",
+                    arguments='{"path":"a.py","content":"x=1\\n"}',
+                )
+            ),
+            StreamChunk(usage=StreamUsage(prompt_tokens=100, completion_tokens=20)),
+        ],
+    )
+    adapter = LoggingLLMAdapter(cast(LLMAdapter, inner), chat_log)
+    # Just drain the stream — caller would yield each chunk to StepAgent.
+    chunks: list[StreamChunk] = []
+    async for c in adapter.stream([{"role": "user", "content": "сделай файл"}], tools=[]):
+        chunks.append(c)
+
+    lines = [json.loads(line) for line in chat_log.read_text().splitlines()]
+    # Find the response entry — there should be exactly one for the stream call.
+    response_entries = [e for e in lines if e.get("role") == "response"]
+    assert len(response_entries) == 1, response_entries
+    entry = response_entries[0]
+    assert entry["tool_calls"] == [
+        {
+            "id": "call_1",
+            "name": "write_file",
+            "arguments": '{"path":"a.py","content":"x=1\\n"}',
+        }
+    ], entry
+    assert entry["content"] == "Понял, пишу файл. "
+    assert entry["prompt_tokens"] == 100
+    assert entry["completion_tokens"] == 20
+
+
+@pytest.mark.asyncio
+async def test_logging_adapter_records_non_streaming_tool_calls(tmp_path: Path) -> None:
+    """Контрольный тест для non-streaming пути: `chat()` возвращает
+    `ChatResponse` с непустым `tool_calls` — writer должен их
+    записать."""
+    chat_log = tmp_path / "chat.jsonl"
+    inner = _FakeAdapter(
+        chat_response=ChatResponse(
+            content="готово",
+            prompt_tokens=50,
+            completion_tokens=10,
+            cost=None,
+            tool_calls=(
+                NativeToolCall(id="c1", name="project_map", arguments="{}"),
+                NativeToolCall(id="c2", name="read_file", arguments='{"path":"x.py"}'),
+            ),
+        ),
+    )
+    adapter = LoggingLLMAdapter(cast(LLMAdapter, inner), chat_log)
+    response = await adapter.chat([{"role": "user", "content": "посмотри"}], tools=[])
+    assert len(response.tool_calls) == 2
+
+    lines = [json.loads(line) for line in chat_log.read_text().splitlines()]
+    response_entries = [e for e in lines if e.get("role") == "response"]
+    assert len(response_entries) == 1
+    entry = response_entries[0]
+    assert entry["tool_calls"] == [
+        {"id": "c1", "name": "project_map", "arguments": "{}"},
+        {"id": "c2", "name": "read_file", "arguments": '{"path":"x.py"}'},
+    ]
+
+
+@pytest.mark.asyncio
+async def test_logging_adapter_records_empty_tool_calls_when_text_only(
+    tmp_path: Path,
+) -> None:
+    """Sanity: если модель ответила text-only без tool_calls — entry
+    должен содержать пустой `tool_calls: []`. Защита от того, чтобы
+    мы не пропустили field вовсе."""
+    chat_log = tmp_path / "chat.jsonl"
+    inner = _FakeAdapter(
+        stream_chunks=[
+            StreamChunk(text="Шаг 1. "),
+            StreamChunk(text="Шаг 2."),
+            StreamChunk(usage=StreamUsage(prompt_tokens=20, completion_tokens=5)),
+        ],
+    )
+    adapter = LoggingLLMAdapter(cast(LLMAdapter, inner), chat_log)
+    async for _ in adapter.stream([{"role": "user", "content": "objyasni"}], tools=[]):
+        pass
+
+    lines = [json.loads(line) for line in chat_log.read_text().splitlines()]
+    response_entries = [e for e in lines if e.get("role") == "response"]
+    assert len(response_entries) == 1
+    assert response_entries[0]["tool_calls"] == []
+    assert response_entries[0]["content"] == "Шаг 1. Шаг 2."
