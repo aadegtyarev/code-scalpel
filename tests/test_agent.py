@@ -2514,10 +2514,14 @@ async def test_run_plan_marks_task_failed_when_declared_file_missing(project: Pa
 
 
 @pytest.mark.asyncio
-async def test_run_plan_fails_task_when_model_did_not_commit(project: Path) -> None:
-    """With auto_git on, run_plan requires HEAD to advance after each task.
-    If the model wrote files but didn't commit (no shell_exec git
-    commit), the task flips to failed and the plan halts."""
+async def test_run_plan_fails_task_when_model_did_not_commit_and_hook_disabled(
+    project: Path,
+) -> None:
+    """With auto_git on AND auto_commit_on_done off, run_plan requires
+    the model to commit. If HEAD didn't advance, the task flips to
+    failed and the plan halts. Old (pre-v0.13) behaviour, preserved
+    behind the disabled-hook flag for callers that want manual
+    commits."""
     from code_scalpel.tools.shell import ShellResult
     from tests.mocks import MockShellRunner
 
@@ -2533,6 +2537,7 @@ async def test_run_plan_fails_task_when_model_did_not_commit(project: Path) -> N
 
     cfg = _retry_config()
     cfg.agent.auto_git = True
+    cfg.agent.auto_commit_on_done = False
 
     edit = _GOOD_PATCH_NOOP
     llm = MockLLMAdapter([edit])
@@ -2552,6 +2557,61 @@ async def test_run_plan_fails_task_when_model_did_not_commit(project: Path) -> N
     result = await agent.run_plan(stop_after_failures=1)
 
     assert [o.status for o in result.outcomes] == ["failed"]
+
+
+@pytest.mark.asyncio
+async def test_run_plan_auto_commits_when_model_skipped_commit(project: Path) -> None:
+    """v0.13 auto-commit hook: model produced files + pytest green but
+    didn't run `git commit` (qwen-14b's standard failure mode). Pipeline
+    stages all changes and commits with "<task.id>: <task.title>" —
+    HEAD advances → task stays done. Without this hook, every task on
+    qwen-14b would fall back to failed (see article ch. 36-37)."""
+    from code_scalpel.tools.shell import ShellResult
+    from tests.mocks import MockShellRunner
+
+    (project / ".git").mkdir()
+
+    _write_tasks(
+        project,
+        "## T001: make a file\n\nGoal: write hello\nFiles: hello.py\n"
+        "Acceptance:\n- exists\nTest command: pytest\n",
+    )
+
+    cfg = _retry_config()
+    cfg.agent.auto_git = True
+    # auto_commit_on_done defaults to True; spelling it out for clarity.
+    cfg.agent.auto_commit_on_done = True
+
+    edit = _GOOD_PATCH_NOOP
+    llm = MockLLMAdapter([edit])
+    # Shell queue (in order):
+    #   1. git rev-parse HEAD (pre-task)              → empty / 128
+    #   2. pytest from _run_tests                     → passes
+    #   3. git rev-parse HEAD (post-task, before hook) → still empty
+    #   4. git add -A                                  → ok
+    #   5. git commit -m "T001: make a file"           → ok
+    #   6. git rev-parse HEAD (after hook)             → advanced!
+    shell = MockShellRunner(
+        [
+            ShellResult("", 128),
+            ShellResult("1 passed", 0),
+            ShellResult("", 128),
+            ShellResult("", 0),
+            ShellResult("[main abc] T001: make a file", 0),
+            ShellResult("abc1234\n", 0),
+        ]
+    )
+    agent = StepAgent(llm=llm, cwd=project, config=cfg, shell_runner=shell)
+
+    result = await agent.run_plan()
+
+    assert [o.status for o in result.outcomes] == ["done"]
+    # Verify the hook composed the commit message from the task — keeps
+    # log readable across plan runs and reproduces deterministically.
+    # All shell_exec commands (incl. git commit) land in shell.shell_calls
+    # because they go through `runner.run_shell` in the non-sandboxed path.
+    assert any("T001: make a file" in c for c in shell.shell_calls)
+    assert any("git add -A" in c for c in shell.shell_calls)
 
 
 @pytest.mark.asyncio

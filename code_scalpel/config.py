@@ -95,6 +95,18 @@ class AgentConfig(BaseModel):
     # tests rely on (mocks don't expect shell calls from the runner
     # itself). Off in tests, on in production.
     auto_git: bool = True
+    # Auto-commit hook: after a task lands done AND tests pass, if the
+    # model didn't commit on its own (HEAD didn't advance), the runner
+    # stages all changes and commits with a generated message
+    # "<task.id>: <task.title>". This pulls the commit step out of the
+    # model's responsibilities — qwen-14b never reached L4 on any
+    # historical-series version because it always forgot the final
+    # `git commit`. See docs/article/v1_devlog.md ch. 36-37 and
+    # docs/plan.md §31 v0.13 outcome-driven release. Gated on
+    # `auto_git`; off skips the hook the same way it skips the rest of
+    # the git integration. Default on because v0.13 acceptance
+    # (≥1 task_solved on notes_cli) depends on it.
+    auto_commit_on_done: bool = True
     # Auto-annotate the plan with per-task `Skills:` lines at /go time
     # when none are present. Fires ONE extra LLM call before the loop
     # starts. Off in tests so the mocked LLM queue stays predictable.
