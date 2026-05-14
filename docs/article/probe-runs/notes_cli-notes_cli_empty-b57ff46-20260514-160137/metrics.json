@@ -1,0 +1,17 @@
+{
+  "user_turns": 1,
+  "tool_calls_total": 20,
+  "tool_calls_by_name": {
+    "annotate_plan": 2,
+    "auto_load_skill": 1,
+    "load_skill": 1,
+    "write_file": 11,
+    "shell_exec": 1,
+    "run_tests": 4
+  },
+  "wall_time_sec": 5416.53,
+  "agent_llm_requests": 27,
+  "prompt_tokens_total": 251750,
+  "completion_tokens_total": 5090,
+  "prompt_tokens_peak": 13705
+}

@@ -1,0 +1,16 @@
+[tool.ruff]
+line-length = 88
+select = [
+    "E", # PEP 8 errors
+    "F", # Flake8 errors
+    "W503" # line break before binary operator
+]
+ignore = []
+exclude = [".venv/"]
+
+[tool.pytest.ini_options]
+addopts = "-x --tb=short --no-header -q"
+testpaths = [
+    "tests"
+]
+asyncio_default_fixture_loop_scope = 'function'
