@@ -866,6 +866,39 @@ class ScalpelApp(App[None]):
         self._esc_armed = False
         footer.status = ""
         w.cancel()
+        # Python-side cancellation closes the streaming HTTP connection,
+        # but the server isn't guaranteed to stop generating. For LM
+        # Studio that means GPU stays busy + queue blocks the next call.
+        # For paid providers (OpenAI / Anthropic / OpenRouter) billing
+        # can keep ticking until server cleanup. Fire a provider-specific
+        # abort so Esc actually stops the model. Result is surfaced as a
+        # notification so the user knows whether the server side stopped
+        # or only the client connection closed.
+        self.run_worker(self._run_cancel_inflight(), exclusive=False, group="cancel")
+
+    async def _run_cancel_inflight(self) -> None:
+        """Best-effort server-side abort following Esc. Routes through
+        provider type — see `code_scalpel.llm.cancel`. Runs on a worker
+        so the blocking `lms unload` subprocess (~1s) doesn't stall the
+        UI loop. Defensive try/except: cancel must never raise back into
+        Textual; worst case the user is left with the python-side cancel
+        that already happened above."""
+        import asyncio
+
+        from code_scalpel.llm.cancel import cancel_inflight_inference
+
+        try:
+            profile = self.config.current_profile
+            provider = getattr(profile, "provider", None)
+            model_id: str | None = self.query_one(StatusFooter).model or profile.model
+            result = await asyncio.to_thread(cancel_inflight_inference, provider, model_id)
+        except Exception as e:
+            self.notify(f"Cancel error: {e}", severity="warning", timeout=4)
+            return
+        if result.stopped:
+            self.notify(result.message, severity="information", timeout=4)
+        else:
+            self.notify(result.message, severity="warning", timeout=4)
 
     def _disarm_esc(self) -> None:
         self._esc_armed = False
