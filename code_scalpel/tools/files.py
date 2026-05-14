@@ -1,12 +1,11 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any
 
 import pathspec
 
 
-def _load_gitignore(root: Path) -> pathspec.PathSpec[Any]:
+def _load_gitignore(root: Path) -> pathspec.PathSpec:
     gitignore = root / ".gitignore"
     patterns = [".git/", ".*/"]
     if gitignore.is_file():

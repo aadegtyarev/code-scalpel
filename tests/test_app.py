@@ -785,12 +785,28 @@ async def test_tool_use_card_collapsible_is_not_focusable(sandbox: Path) -> None
 
 
 @pytest.mark.asyncio
-async def test_footer_model_reactive_renders(sandbox: Path) -> None:
+async def test_footer_model_reactive_renders(
+    sandbox: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """When model is set, footer must include it in the rendered label.
     Empty model means no dim suffix — keep the bar tidy for legacy configs."""
     from textual.widgets import Label
 
+    import code_scalpel.tui.app as app_mod
     from code_scalpel.tui.widgets.footer import StatusFooter
+
+    async def _no_model(_profile: Any) -> str:
+        return ""
+
+    async def _no_tokens(_profile: Any) -> int:
+        return 0
+
+    async def _no_thinking(_profile: Any, _name: str) -> bool:
+        return False
+
+    monkeypatch.setattr(app_mod, "resolve_model_name", _no_model)
+    monkeypatch.setattr(app_mod, "autodetect_context_tokens", _no_tokens)
+    monkeypatch.setattr(app_mod, "autodetect_supports_thinking", _no_thinking)
 
     app = ScalpelApp(config=_CONFIG, cwd=sandbox)
     async with app.run_test(headless=True, size=(120, 24)) as pilot:

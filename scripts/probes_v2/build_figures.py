@@ -113,7 +113,7 @@ def fig_reached_level(metrics: dict[str, dict]) -> None:
     ax.plot(xs, ys, marker="o", markersize=10, linewidth=2.2, color=COL_LIVE)
 
     # Annotations on data points
-    for x, y, tag in zip(xs, ys, TAGS):
+    for x, y, _tag in zip(xs, ys, TAGS, strict=True):
         label = "L3+" if y == 3.5 else "L3"
         ax.annotate(
             label,
@@ -161,9 +161,16 @@ def fig_live_activity(metrics: dict[str, dict]) -> None:
     # write_file bars
     colors_wf = [COL_PROBE if v > 0 else COL_GREY for v in wf]
     bars1 = ax1.bar(xs, wf, color=colors_wf, edgecolor="white", linewidth=1)
-    for b, v in zip(bars1, wf):
+    for b, v in zip(bars1, wf, strict=True):
         if v > 0:
-            ax1.annotate(str(v), (b.get_x() + b.get_width() / 2, v), ha="center", va="bottom", fontsize=9, fontweight="bold")
+            ax1.annotate(
+                str(v),
+                (b.get_x() + b.get_width() / 2, v),
+                ha="center",
+                va="bottom",
+                fontsize=9,
+                fontweight="bold",
+            )
     ax1.set_xticks(xs)
     ax1.set_xticklabels(TAGS, rotation=30, ha="right", fontsize=9)
     ax1.set_ylabel("write_file calls")
@@ -172,8 +179,10 @@ def fig_live_activity(metrics: dict[str, dict]) -> None:
 
     # wall_sec bars
     bars2 = ax2.bar(xs, wall, color=COL_LIVE, edgecolor="white", linewidth=1, alpha=0.85)
-    for b, v in zip(bars2, wall):
-        ax2.annotate(f"{int(v)}s", (b.get_x() + b.get_width() / 2, v), ha="center", va="bottom", fontsize=8)
+    for b, v in zip(bars2, wall, strict=True):
+        ax2.annotate(
+            f"{int(v)}s", (b.get_x() + b.get_width() / 2, v), ha="center", va="bottom", fontsize=8
+        )
     ax2.set_xticks(xs)
     ax2.set_xticklabels(TAGS, rotation=30, ha="right", fontsize=9)
     ax2.set_ylabel("wall time, sec")
@@ -196,8 +205,20 @@ def fig_tokens(metrics: dict[str, dict]) -> None:
     requests = [metrics[t]["agent_llm_requests"] for t in TAGS]
 
     w = 0.4
-    ax.bar([x - w / 2 for x in xs], total, width=w, color=COL_LIVE, label="prompt_tokens_total (kT, sum)")
-    ax.bar([x + w / 2 for x in xs], peak, width=w, color=COL_RECIPES, label="prompt_tokens_peak (kT, single req)")
+    ax.bar(
+        [x - w / 2 for x in xs],
+        total,
+        width=w,
+        color=COL_LIVE,
+        label="prompt_tokens_total (kT, sum)",
+    )
+    ax.bar(
+        [x + w / 2 for x in xs],
+        peak,
+        width=w,
+        color=COL_RECIPES,
+        label="prompt_tokens_peak (kT, single req)",
+    )
     ax2 = ax.twinx()
     ax2.plot(xs, requests, marker="D", linewidth=1.5, color=COL_REGRESS, label="agent_llm_requests")
     ax2.set_ylabel("LLM requests", color=COL_REGRESS)
@@ -208,7 +229,9 @@ def fig_tokens(metrics: dict[str, dict]) -> None:
     ax.set_xticks(xs)
     ax.set_xticklabels(TAGS, rotation=30, ha="right")
     ax.set_ylabel("tokens, kT")
-    ax.set_title("Стоимость live-прогона: total / peak / requests", fontsize=12, fontweight="bold", pad=14)
+    ax.set_title(
+        "Стоимость live-прогона: total / peak / requests", fontsize=12, fontweight="bold", pad=14
+    )
     style_axes(ax)
 
     lines1, labels1 = ax.get_legend_handles_labels()
@@ -248,13 +271,22 @@ def fig_legacy_probes(legacy: dict[str, dict]) -> None:
                 ys.append(100 * a / b)
             else:
                 ys.append(None)
-        xs_clean = [x for x, y in zip(xs, ys) if y is not None]
+        xs_clean = [x for x, y in zip(xs, ys, strict=True) if y is not None]
         ys_clean = [y for y in ys if y is not None]
-        ax.plot(xs_clean, ys_clean, marker=marker, linewidth=1.8, markersize=8, color=color, linestyle=ls, label=probe)
+        ax.plot(
+            xs_clean,
+            ys_clean,
+            marker=marker,
+            linewidth=1.8,
+            markersize=8,
+            color=color,
+            linestyle=ls,
+            label=probe,
+        )
 
     # FAIL markers for e2e_forks v0.12
     e2e_xs, e2e_ys = [], []
-    for x, tag in zip(xs, TAGS):
+    for x, tag in zip(xs, TAGS, strict=True):
         v = legacy[tag].get("probe_e2e_forks.py")
         if v == "FAIL":
             e2e_xs.append(x)
@@ -263,7 +295,15 @@ def fig_legacy_probes(legacy: dict[str, dict]) -> None:
             e2e_xs.append(x)
             e2e_ys.append(50)  # show as "partial" since we only know "ok / FAIL"
     if e2e_xs:
-        ax.scatter(e2e_xs, e2e_ys, color=COL_E2E, marker="x", s=120, linewidths=2.5, label="probe_e2e_forks (×=FAIL, dot=ok)")
+        ax.scatter(
+            e2e_xs,
+            e2e_ys,
+            color=COL_E2E,
+            marker="x",
+            s=120,
+            linewidths=2.5,
+            label="probe_e2e_forks (×=FAIL, dot=ok)",
+        )
 
     # Highlight regress eras
     ax.axvspan(6.4, 10.4, color="#fbeaea", alpha=0.4, zorder=0)
@@ -303,12 +343,14 @@ def fig_tool_calls_breakdown(metrics: dict[str, dict]) -> None:
     for kind, col in tool_kinds:
         vals = [metrics[t]["tool_calls_by_name"].get(kind, 0) for t in TAGS]
         ax.bar(xs, vals, bottom=bottoms, color=col, edgecolor="white", linewidth=0.5, label=kind)
-        bottoms = [b + v for b, v in zip(bottoms, vals)]
+        bottoms = [b + v for b, v in zip(bottoms, vals, strict=True)]
 
     # Total tool_calls annotation on top
-    for x, total in zip(xs, bottoms):
+    for x, total in zip(xs, bottoms, strict=True):
         if total > 0:
-            ax.annotate(str(total), (x, total), ha="center", va="bottom", fontsize=9, fontweight="bold")
+            ax.annotate(
+                str(total), (x, total), ha="center", va="bottom", fontsize=9, fontweight="bold"
+            )
 
     ax.set_xticks(xs)
     ax.set_xticklabels(TAGS, rotation=30, ha="right")
