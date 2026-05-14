@@ -3034,9 +3034,19 @@ test_cli.py) и провалилась на verify — `cli.py: def main():`
   достигает skipped/done. Они **могут** дать эффект на других
   сценариях, где модель пишет рабочий код. На главном
   integration-тесте — нет.
-- **Новый приоритетный пункт v0.13: починить логирование**
-  `chat.jsonl` / `tools.jsonl` writer'а. Без полных логов
-  любая дальнейшая outcome-правка — слепая.
+- **Логирование диагностировано** (PR #113): три unit-теста на
+  `LoggingLLMAdapter` — streaming/non-streaming/text-only — все
+  зелёные на текущем main. То есть **писатель работает**, дыра
+  v0.8 была в historical коде (на момент 2026-05-13). Для новых
+  probe-runs `chat.jsonl` будет полным.
+
+  Native streaming через `lmstudio_native.py` сознательно
+  не парсит `tool_call.*` events (явно в docstring
+  `native_events.py:22-25`). На текущих use cases это не
+  задевает — native streaming используется только в
+  `fork.py:_dispatch_native` для upstream-fork resolver, где
+  ответ идёт через JSON schema без tool_calls. Known limitation,
+  не блокер.
 - **Реальный блокер outcome** на v0.8 — модель пишет несовместимые
   код+тесты. Это **другая** проблема, чем «забыла commit», её
   не закроет один hook. Возможные направления (требуют данных
