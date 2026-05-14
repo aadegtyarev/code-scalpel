@@ -1205,8 +1205,20 @@ class StepAgent:
                             )
                 if outcome.status == "done" and self._config.agent.auto_git:
                     head_after = await self._git_head_sha()
+                    # Model didn't commit. Try the auto-commit hook
+                    # before failing — pulling commit out of the
+                    # model's responsibilities is the only path to
+                    # L4 on qwen-14b (see article ch. 36-37 /
+                    # plan §31 v0.13). When the hook successfully
+                    # lands a commit, the task stays "done".
+                    if (
+                        head_after is None or head_after == head_before
+                    ) and self._config.agent.auto_commit_on_done:
+                        await self._auto_commit_task(task)
+                        head_after = await self._git_head_sha()
                     if head_after is None or head_after == head_before:
-                        # No commit landed during the task. Mark failed
+                        # Still no commit (auto-commit disabled, or it
+                        # ran but had nothing to stage). Mark failed
                         # so the plan halts and the user notices.
                         outcome = TaskOutcome(
                             task=task,
@@ -1485,6 +1497,30 @@ class StepAgent:
         elif "code-scalpel auto-init" not in gitignore.read_text():
             with suppress(OSError), gitignore.open("a") as f:
                 f.write("\n" + starter)
+
+    async def _auto_commit_task(self, task: Task) -> bool:
+        """Stage all changes and commit them with a generated message.
+
+        Called when a task lands done but the model didn't run `git
+        commit` on its own — qwen-14b consistently forgets the final
+        commit step (see article ch. 36-37). Returns True if HEAD
+        advanced after the attempt. Best-effort: never raises.
+
+        Message format mirrors the task: "<task.id>: <task.title>".
+        Avoids letting the model dictate commit text — keeps the
+        history readable and reproducible across runs.
+        """
+        if not self._config.agent.auto_git:
+            return False
+        await self._run_plan_shell("git add -A")
+        # `--allow-empty=false` is the default; the commit fails
+        # cleanly if there's nothing staged (e.g. model only ran read
+        # tools). We treat that as "nothing to commit" → False.
+        safe_title = task.title.replace('"', '\\"').replace("\n", " ")
+        msg = f"{task.id}: {safe_title}"
+        await self._run_plan_shell(f'git commit -m "{msg}"')
+        head_after = await self._git_head_sha()
+        return head_after is not None
 
     async def _annotate_plan_with_skills(self, plan_text: str) -> str:
         """Run a single LLM pass that appends `Skills:` lines to each task.
