@@ -1,0 +1,16 @@
+[build-system]
+requires = ['hatchling']
+build-backend = 'hatchling.build'
+
+[project]
+name = 'notes-cli'
+version = '0.1.0'
+description = 'CLI для заметок'
+requires-python = '>=3.7'
+dependencies = ['click', 'jsonschema']
+
+[project.optional-dependencies]
+dev = ['pytest>=8']
+
+[tool.pytest.ini_options]
+testpaths = ['tests']
