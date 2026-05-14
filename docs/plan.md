@@ -2937,27 +2937,23 @@ Acceptance (release gate, не «приятная цифра»):
   части рефакторов v0.10-v0.12 — допустимый и ожидаемый путь,
   если потребуется.
 
-- [ ] skip-without-stop в run_plan.
-      Сейчас если T001 = «Проанализировать структуру» с Files:
-      project_map() — run_plan честно классифицирует как
-      `skipped` и стопает pipeline. Изменить: skipped task →
-      продолжить к следующей task (T002 обычно уже action-form
-      с real-file Files). Stopping criterion остаётся для
-      `failed`, не для `skipped`. Это самая дешёвая правка с
-      понятным root-cause (см. эвалюацию main: T002-T007 в
-      TASKS.md уже action-oriented, но pipeline не доходит).
+- ✓ skip-without-stop в run_plan (PR #109, landed 2026-05-14).
+      Раньше: одна skipped task → run_plan стоп. Теперь: skipped
+      инкрементирует counter, и стоп срабатывает только если
+      ≥ stop_after_failures подряд недоделанных task. Эффект на
+      outcome **не доказан** — на наблюдаемых прогонах (v0.8)
+      модель ловится на `failed` (verify), до `skipped` не
+      доходит. Может помочь на сценариях с T001-как-analytic.
 
-- [ ] auto-commit hook после pytest green.
-      Текущая ситуация: на v0.8/v0.9 модель доходит до
-      write_file × 11 и pytest green, но НЕ делает финальный
-      `git add && git commit`. Это L4-фаза, которой не было ни
-      на одной версии серии. Вынести commit из ответственности
-      модели в инфраструктуру: после успешного write_file +
-      pytest green pipeline сам делает `git add <touched-files>
-      && git commit -m "<task-id>: <task-goal>"`. Модель не
-      должна решать, делать commit или нет — это автомат.
-      Опт-out флагом для пользователей, которые хотят review
-      перед commit'ом, но default — auto.
+- ✓ auto-commit hook (PR #110, landed 2026-05-14).
+      Pipeline сам делает `git add -A && git commit -m
+      "<task.id>: <task.title>"` если модель сделала задачу
+      (`outcome.status == "done"`) но забыла commit. Эффект на
+      outcome **не доказан** — reality-разбор v0.8 показал, что
+      модель проваливается на verify (несовместимые код+тесты)
+      ДО шага commit'а; status=failed, hook не активируется
+      вовсе. Может помочь на сценариях где модель пишет рабочий
+      код но забывает финальный commit.
 
 - ✗ annotate_plan rewriter — **отменён 2026-05-14** (см. главу
       38 девлога). Regression hunt v0.9↔v0.10 показал: в
@@ -2981,6 +2977,35 @@ Acceptance (release gate, не «приятная цифра»):
       тэг, distill'ируется до медианы + std reached_level. Сам
       прогон сейчас — `~30-60s` × N версий × N runs; реалистично
       запустить ночью.
+
+- [ ] ❗ Починить логирование chat.jsonl / tools.jsonl writer'а.
+      Reality-разбор v0.8 (см. главу 36, подглава «Что на самом
+      деле произошло на v0.8»): `chat.jsonl` показывает
+      `tool_calls=[]` на всех 25 turns, `tools.jsonl` пустой.
+      Но `metrics.json` пишет `write_file: 11, shell_exec: 5`,
+      и `final_tree/` содержит реальные файлы. Streaming-tool-call
+      события куда-то теряются в probe-runner v2 writer'е.
+      Без полных логов любая дальнейшая outcome-диагностика —
+      слепая. Это блокер всех следующих outcome-правок.
+      Технически: пройтись по probe-runner v2 коду, найти где
+      должны писаться tool_call delta events, проверить что
+      streaming-chunk handler их ловит и сериализует.
+
+- [ ] ❗ Реальный блокер outcome: модель пишет частичный код,
+      проваливающий собственные тесты. v0.8: `cli.py: def main():`
+      без аргументов + `test_cli.py: main(['add', ...])` с
+      аргументами → `_verify_task_test_command` failed → task
+      failed → pipeline стоп. Это **другая** проблема, чем
+      «забыла commit». Решение неочевидно и требует данных
+      (т.е. сначала пункт «починить логирование»). Возможные
+      направления: (1) debug_pass — retry на failing test с
+      hint'ом «test ссылается на signature не из cli.py»; (2)
+      scope reduction в plan-mode — T002 пусть пишет ТОЛЬКО
+      cli.py, T003 пусть пишет тест **после** того как cli.py
+      зафиксирован; (3) prompt-правка в mode_code — «перед
+      next file прогони уже написанное через quick mental
+      compile». Любую правку landить только под измеренный
+      эффект на ≥3 прогонах.
 
 - [ ] probe-suite v2 как обязательный CI gate.
       Сейчас probe-suite v2 запускается руками. Сделать его
