@@ -1367,12 +1367,18 @@ class StepAgent:
                     stopped_reason = "max_failures"
                     break
             else:
-                # "skipped" — model produced no patch and no write_file.
-                # That's the model giving up; stop the plan so the user
-                # sees what happened instead of silently rolling through
-                # to the next task on top of an unfinished one.
-                stopped_reason = "task_not_done"
-                break
+                # "skipped" — model produced no patch and no write_file
+                # for this task. Single skip moves on: a common pattern
+                # is T001 "analyze the structure" (no action) followed by
+                # T002+ with real Files. Halting on T001 left every
+                # historical-series run stranded at L3 — see article
+                # ch. 36/37. We still stop if `stop_after_failures`
+                # consecutive tasks didn't finish; that catches the
+                # "model giving up across the board" case.
+                consecutive_failures += 1
+                if consecutive_failures >= stop_after_failures:
+                    stopped_reason = "task_not_done"
+                    break
 
             if max_tasks is not None and len(outcomes) >= max_tasks:
                 stopped_reason = "max_tasks"
