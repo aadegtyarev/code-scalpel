@@ -2632,8 +2632,17 @@ class StepAgent:
         target_dir = self._cwd / ".code-scalpel"
 
         # JSON path — recognise reply that starts with `{` (after
-        # whitespace) and parses cleanly via the schema parser.
-        stripped = reply.lstrip()
+        # whitespace) and parses cleanly via the schema parser. The
+        # model often wraps JSON in a ```json ... ``` fence despite
+        # response_format=json_schema; strip the fence first.
+        stripped = reply.strip()
+        if stripped.startswith("```"):
+            # Drop the opening fence (` ```json ` or just ` ``` `).
+            stripped = re.sub(r"^```\w*\s*", "", stripped)
+            # Drop the trailing closing fence.
+            if stripped.endswith("```"):
+                stripped = stripped[:-3]
+            stripped = stripped.strip()
         if stripped.startswith("{"):
             tasks = parse_tasks_json(stripped)
             if tasks:

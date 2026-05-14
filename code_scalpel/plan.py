@@ -131,77 +131,38 @@ def serialize_tasks(tasks: tuple[Task, ...], original_text: str) -> str:
     return "".join(out)
 
 
-# JSON schema for `response_format=json_schema` — drives the planner
-# to emit typed JSON instead of free-form markdown DSL. Field shape
-# mirrors the typed Task dataclass above. v0.14 step 1.
+# JSON schema for `response_format=json_schema`. Empirically (LM
+# Studio + qwen2.5-coder-14b, 2026-05-15) sampler grammar enforces
+# the basic shape but ignores `pattern`, `additionalProperties:false`,
+# `minItems` — keeping those tight made the model produce a completely
+# off-schema reply. Schema below is **deliberately loose**: only the
+# top-level shape (`tasks` array of objects with named fields) is
+# enforced. Rules that the schema can't enforce (id format T001..,
+# files-only-for-this-task, null vs "manual") live in `mode_plan.md`.
 PLAN_JSON_SCHEMA: dict[str, object] = {
     "type": "object",
     "properties": {
         "tasks": {
             "type": "array",
-            "minItems": 1,
-            "maxItems": 9,
             "items": {
                 "type": "object",
                 "properties": {
-                    "id": {
-                        "type": "string",
-                        "pattern": "^T\\d{3}$",
-                        "description": "Task identifier T001..T009 in plan order.",
-                    },
-                    "title": {
-                        "type": "string",
-                        "description": "Short imperative title.",
-                    },
-                    "goal": {
-                        "type": "string",
-                        "description": "One-line description of the outcome.",
-                    },
-                    "files": {
-                        "type": "array",
-                        "items": {"type": "string"},
-                        "description": (
-                            "Project files this task creates or modifies. "
-                            "Only the paths this task itself touches — "
-                            "files created by later tasks belong to those "
-                            "tasks. Real paths from the project map; for "
-                            "new files, the path you'll create."
-                        ),
-                    },
+                    "id": {"type": "string"},
+                    "title": {"type": "string"},
+                    "goal": {"type": "string"},
+                    "files": {"type": "array", "items": {"type": "string"}},
                     "acceptance": {
                         "type": "array",
                         "items": {"type": "string"},
-                        "description": "Observable test or behaviour bullets.",
                     },
-                    "skills": {
-                        "type": "array",
-                        "items": {"type": "string"},
-                        "description": "Skill names (e.g. python). Empty if irrelevant.",
-                    },
-                    "test_command": {
-                        "type": ["string", "null"],
-                        "description": (
-                            "Exact shell command that proves the task done "
-                            "(e.g. `pytest tests/test_x.py`). Null when "
-                            "verification is manual or N/A — do NOT write "
-                            "the string 'manual' here, use null."
-                        ),
-                    },
+                    "skills": {"type": "array", "items": {"type": "string"}},
+                    "test_command": {"type": ["string", "null"]},
                 },
-                "required": [
-                    "id",
-                    "title",
-                    "goal",
-                    "files",
-                    "acceptance",
-                    "test_command",
-                ],
-                "additionalProperties": False,
+                "required": ["id", "title", "goal", "test_command"],
             },
         }
     },
     "required": ["tasks"],
-    "additionalProperties": False,
 }
 
 
