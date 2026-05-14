@@ -2940,20 +2940,21 @@ Acceptance (release gate, не «приятная цифра»):
 - ✓ skip-without-stop в run_plan (PR #109, landed 2026-05-14).
       Раньше: одна skipped task → run_plan стоп. Теперь: skipped
       инкрементирует counter, и стоп срабатывает только если
-      ≥ stop_after_failures подряд недоделанных task. Эффект на
-      outcome **не доказан** — на наблюдаемых прогонах (v0.8)
-      модель ловится на `failed` (verify), до `skipped` не
-      доходит. Может помочь на сценариях с T001-как-analytic.
+      ≥ stop_after_failures подряд недоделанных task. **Эффект
+      на outcome доказан на N=3 прогонах main**: run 1 показал
+      T001 skipped → continue → T002 done. См. главу 38
+      «Постскриптум — N=3 прогонов на main опровергли вывод этой
+      главы» + evaluation.md прогона 1.
 
 - ✓ auto-commit hook (PR #110, landed 2026-05-14).
       Pipeline сам делает `git add -A && git commit -m
       "<task.id>: <task.title>"` если модель сделала задачу
-      (`outcome.status == "done"`) но забыла commit. Эффект на
-      outcome **не доказан** — reality-разбор v0.8 показал, что
-      модель проваливается на verify (несовместимые код+тесты)
-      ДО шага commit'а; status=failed, hook не активируется
-      вовсе. Может помочь на сценариях где модель пишет рабочий
-      код но забывает финальный commit.
+      (`outcome.status == "done"`) но забыла commit. **Эффект
+      доказан на N=3 main**: на run 1 все 4 done-task'и получили
+      коммит от hook'а (модель ни одного не сделала
+      самостоятельно). Без hook'а все 4 были бы failed —
+      впервые в проекте получено L4 (4 done + 4 commits + pytest
+      зелёный).
 
 - ✗ annotate_plan rewriter — **отменён 2026-05-14** (см. главу
       38 девлога). Regression hunt v0.9↔v0.10 показал: в
@@ -2999,21 +3000,33 @@ Acceptance (release gate, не «приятная цифра»):
       этот пункт надо будет открыть. Сейчас — known limitation,
       не блокер.
 
-- [ ] ❗ Реальный блокер outcome: модель пишет частичный код,
-      проваливающий собственные тесты. v0.8: `cli.py: def main():`
-      без аргументов + `test_cli.py: main(['add', ...])` с
-      аргументами → `_verify_task_test_command` failed → task
-      failed → pipeline стоп. Это **другая** проблема, чем
-      «забыла commit». Решение неочевидно и требует данных
-      (т.е. сначала пункт «починить логирование»). Возможные
-      направления: (1) debug_pass — retry на failing test с
-      hint'ом «test ссылается на signature не из cli.py»; (2)
-      scope reduction в plan-mode — T002 пусть пишет ТОЛЬКО
-      cli.py, T003 пусть пишет тест **после** того как cli.py
-      зафиксирован; (3) prompt-правка в mode_code — «перед
-      next file прогони уже написанное через quick mental
-      compile». Любую правку landить только под измеренный
-      эффект на ≥3 прогонах.
+- [ ] ❗ Блокер L4 → L5 (run 1 на main, evaluation.md):
+      T006/T007 на одном из прогонов попали в семантику
+      «task уже сделан в предыдущей» — модель не делает
+      write_file (тесты уже на диске от T005), HEAD не двигается,
+      auto-commit hook пытается `git add -A` но nothing staged
+      → commit fails → status переклассифицируется в failed.
+      Это **другая** проблема, чем v0.8 verify-fail, и решается
+      проще:
+
+      (a) **Defer-not-fail для no-op task**: если outcome=done
+      и нечего commit'ить, но `_verify_task_test_command`
+      зелёный — task done без коммита. Реквиет `noop_done`
+      статус.
+
+      (b) **T001-rewriter**: модель в plan-mode иногда выдаёт
+      analytic-task с `Files: project_map()`. skip-without-stop
+      спасает в одном случае, но если два-три такие подряд —
+      max_failures. annotate_plan может переписать `Files:
+      project_map()` в `Files: pyproject.toml, setup.py`
+      эвристически.
+
+      (c) **Tests-on-empty-checked done**: если test command
+      `pytest tests/` зелёный и Files упомянутого task'а на
+      диске — считать done независимо от того, был ли
+      write_file в **этом** turn'е.
+
+      Любую правку landить только под N≥3 measurement.
 
 - [ ] probe-suite v2 как обязательный CI gate.
       Сейчас probe-suite v2 запускается руками. Сделать его

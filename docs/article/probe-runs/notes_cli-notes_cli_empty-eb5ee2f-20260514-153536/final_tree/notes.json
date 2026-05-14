@@ -1,0 +1,14 @@
+[
+    {
+        "id": 1,
+        "note": "Test note"
+    },
+    {
+        "id": 2,
+        "note": "First note"
+    },
+    {
+        "id": 3,
+        "note": "Second note"
+    }
+]
