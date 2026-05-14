@@ -88,6 +88,27 @@ class ProbeDaemon:
         profile = self.config.current_profile
         if pinned:
             profile.model = pinned
+
+        # Probe-runner работает headless: нет TUI, нет ChoiceCard,
+        # нет confirmation handler для shell_exec. На trust=skeptic
+        # (default scalpel'а) shell_exec возвращает "refused: ...
+        # needs a confirmation handler". Модель пробует `git commit`,
+        # `pip install`, `mkdir` — все refused, retry'ит,
+        # max_failures, T001 fails.
+        #
+        # Реальный observed pattern на 662d2bc N=3 серии 2: runs 2/3
+        # упали на T001/T002 именно по этой причине (см. evaluation.md
+        # run 1 серии 2 + tools.jsonl runs 2/3 — там штатные
+        # "refused: shell_exec at trust=skeptic" выводы).
+        #
+        # Probe-suite v2 запускается в изолированном workdir под
+        # `docs/article/probe-runs/<run-id>/.workdir` с pre-seeded
+        # fixture. Никаких ценных файлов там нет, sandbox эффективный.
+        # Безопасно поднять trust до `yolo` (auto-approve).
+        # Hard-block list для rm -rf / / dd / mkfs / sudo / pipe-to-shell
+        # остаётся активным независимо от trust — это про защиту
+        # от случайного `rm`, а не про confirmation.
+        self.config.agent.trust = "yolo"
         base_llm = OpenAICompatibleAdapter(
             base_url=f"{profile.provider_base_url()}/v1",
             api_key=profile.api_key(),
