@@ -82,6 +82,18 @@ class Skill(ABC):
         """
         return None
 
+    def lint_file_cmd(self, path: Path) -> list[str] | None:
+        """Shell argv for linting a single file, or None if not supported.
+
+        Used by the agent to inject quick lint feedback directly into a
+        write_file tool result so the model sees errors in the same turn.
+        Should be fast (< 5s) — avoid whole-project passes here.
+
+        Default returns None (no per-file linting). Override in language
+        skills that have a file-level linter (ruff, eslint).
+        """
+        return None
+
     def model_instructions(self) -> str:
         """Short model-facing block injected into the system prompt during plan execution.
 

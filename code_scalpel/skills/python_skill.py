@@ -42,6 +42,17 @@ class PythonSkill(Skill):
     def lint_cmd(self) -> list[str]:
         return ["ruff", "check", "."]
 
+    def lint_file_cmd(self, path: Path) -> list[str] | None:
+        return [
+            "ruff",
+            "check",
+            "--select",
+            "E,F",
+            "--no-fix",
+            "--output-format=concise",
+            str(path),
+        ]
+
     def format_cmd(self) -> list[str] | None:
         return ["ruff", "format", "."]
 

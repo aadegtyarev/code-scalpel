@@ -52,6 +52,14 @@ class JsTsSkill(Skill):
         pm = _detect_pm(Path.cwd())
         return [pm, "run", "lint"]
 
+    def lint_file_cmd(self, path: Path) -> list[str] | None:
+        # eslint supports per-file invocation; npm run lint does not.
+        import shutil
+
+        if not shutil.which("eslint"):
+            return None
+        return ["eslint", "--format=compact", str(path)]
+
     def format_cmd(self) -> list[str] | None:
         pm = _detect_pm(Path.cwd())
         return [pm, "run", "format"]

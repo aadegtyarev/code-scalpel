@@ -7,6 +7,7 @@ import re
 from collections.abc import AsyncIterator, Callable
 from contextlib import suppress
 from dataclasses import dataclass
+from dataclasses import replace as dc_replace
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -405,6 +406,42 @@ def _build_task_prompt(task: Task) -> str:
 # commands executed). Read-only tools (read_file, grep, project_map …)
 # are intentionally absent — they don't change the workspace.
 _MUTATING_TOOLS = frozenset({"shell_exec", "write_file"})
+
+
+async def _lint_on_write(path: Path, cwd: Path) -> str:
+    """Run a fast per-file linter via the active project skill.
+
+    Resolves the language skill for `cwd`, calls `lint_file_cmd(path)`,
+    runs the command. Returns findings (non-empty on errors), or "" when
+    clean / no skill / skill has no per-file linter. Timeout 10s.
+    """
+    import asyncio
+
+    from code_scalpel.skills import active_skills
+
+    argv: list[str] | None = None
+    for skill in active_skills(cwd):
+        argv = skill.lint_file_cmd(path)
+        if argv is not None:
+            break
+    if not argv:
+        return ""
+
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            *argv,
+            cwd=str(cwd),
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=10)
+    except (FileNotFoundError, TimeoutError):
+        return ""
+    if proc.returncode == 0:
+        return ""
+    return (
+        stdout.decode("utf-8", errors="replace") + stderr.decode("utf-8", errors="replace")
+    ).strip()
 
 
 def _successful_write_paths(tool_results: tuple[ToolExecuted, ...]) -> list[str]:
@@ -1643,7 +1680,9 @@ class StepAgent:
         return result.output, result.ok
 
     @staticmethod
-    def _model_already_committed(tool_results: list[ToolExecuted] | tuple[ToolExecuted, ...]) -> bool:
+    def _model_already_committed(
+        tool_results: list[ToolExecuted] | tuple[ToolExecuted, ...],
+    ) -> bool:
         """True if the model already called shell_exec with 'git commit' this turn."""
         return any(
             te.call.name == "shell_exec" and "git commit" in (te.call.body or "")
@@ -2050,7 +2089,7 @@ class StepAgent:
             return self._tool_unload_skill(call)
         if tc.name == "web_learn":
             return await self._tool_web_learn(call)
-        return await execute(
+        result = await execute(
             call,
             self._cwd,
             max_lines=self._config.agent.max_file_lines,
@@ -2060,6 +2099,23 @@ class StepAgent:
             confirm_shell_exec=self._confirm_shell_exec,
             sandbox=self._config.agent.sandbox,
         )
+        if tc.name == "write_file" and result.ok:
+            try:
+                import json as _json
+
+                args = _json.loads(tc.arguments) if tc.arguments else {}
+                rel = str(args.get("path", ""))
+            except Exception:
+                rel = ""
+            if rel:
+                with suppress(Exception):
+                    findings = await _lint_on_write(self._cwd / rel, self._cwd)
+                    if findings:
+                        result = dc_replace(
+                            result,
+                            output=result.output + f"\n\nlint:\n{findings}",
+                        )
+        return result
 
     @property
     def cwd(self) -> Path:
