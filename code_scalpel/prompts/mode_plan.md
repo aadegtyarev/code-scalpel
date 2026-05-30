@@ -35,6 +35,9 @@ Rules:
 - `files`: only paths THIS task itself creates or modifies. Files
   created by a later task belong to that task — don't list them
   here. For new files, write the path you'll create.
+  **MUST list only real file paths.** Never use tool calls or
+  descriptions as file names (`project_map()` is WRONG, `README.md`
+  is correct).
 - `test_command`: exact shell command that verifies the task is
   done (e.g. `pytest tests/test_x.py`). Use `null` (literal JSON
   null, not the string "null" or "manual") when verification is

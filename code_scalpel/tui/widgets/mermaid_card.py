@@ -43,7 +43,7 @@ from code_scalpel.mermaid import render_mermaid
 try:
     from rich_pixels import Pixels as _Pixels
 except ImportError:  # pragma: no cover - exercised by env without rich-pixels
-    _Pixels = None
+    _Pixels = None  # type: ignore[misc, assignment]
 
 
 _INSTALL_HINT = (
