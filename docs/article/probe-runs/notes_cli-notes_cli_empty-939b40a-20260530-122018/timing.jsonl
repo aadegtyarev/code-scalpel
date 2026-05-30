@@ -1,3 +1,4 @@
 {"ts": "2026-05-30T12:20:20Z", "event": "step.start", "turn": 1, "mode": "plan"}
 {"ts": "2026-05-30T12:20:32Z", "event": "step.end", "turn": 1}
 {"ts": "2026-05-30T12:20:32Z", "event": "go.start"}
+{"ts": "2026-05-30T13:24:24Z", "event": "go.error", "error": "APIError('Model unloaded.')"}
