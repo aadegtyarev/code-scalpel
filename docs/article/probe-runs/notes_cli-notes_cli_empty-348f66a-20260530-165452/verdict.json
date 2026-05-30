@@ -1,0 +1,41 @@
+{
+  "scenario": "notes_cli",
+  "pass_score": 3,
+  "pass_max": 8,
+  "criteria": {
+    "package": {
+      "passed": false,
+      "detail": "0 непустых .py-файла(ов) с исходным кодом"
+    },
+    "four_commands": {
+      "passed": false,
+      "detail": "нет упоминания: ['add', 'list', 'search', 'delete']"
+    },
+    "json_storage": {
+      "passed": false,
+      "detail": "json.dump/load=False, .json-путь=False"
+    },
+    "tests_present": {
+      "passed": true,
+      "detail": "1 тест-файл(ов)"
+    },
+    "docs": {
+      "passed": true,
+      "detail": "README найден (README.md)"
+    },
+    "installable": {
+      "passed": true,
+      "detail": "проект ставится как пакет"
+    },
+    "tests_pass": {
+      "passed": false,
+      "detail": "pytest упал (rc=2): lecting tests/test_notes.py _____________________\nImportError while importing test module '/tmp/claude-1000/probe-check-is_wc4i7/proj/tests/test_notes.py'.\nHint: make sure your test modules/packages have valid Python names.\nTraceback:\n/usr/lib/python3.12/importlib/__init__.py:90: in import_module\n    return _bootstrap._gcd_import(name[level:], package, level)\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\ntests/test_notes.py:2: in <module>\n    from notes.storage import add_note, list_notes, search_notes, delete_note\nE   ModuleNotFoundError: No module named 'notes.storage'\n=========================== short test summary info ============================\nERROR tests/test_notes.py\n!!!!!!!!!!!!!!!!!!!! Interrupted: 1 error during collection !!!!!!!!!!!!!!!!!!!!\n1 error in 0.07s"
+    },
+    "acceptance": {
+      "passed": false,
+      "detail": "нет точки входа CLI (__main__/argparse) — не запускается как CLI"
+    }
+  },
+  "ended_reason": "user_gave_up",
+  "mechanical_solved": false
+}

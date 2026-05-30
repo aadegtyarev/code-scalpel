@@ -1,0 +1,41 @@
+{
+  "scenario": "notes_cli",
+  "pass_score": 6,
+  "pass_max": 8,
+  "criteria": {
+    "package": {
+      "passed": true,
+      "detail": "4 непустых .py-файла(ов) с исходным кодом"
+    },
+    "four_commands": {
+      "passed": true,
+      "detail": "все 4 команды упомянуты"
+    },
+    "json_storage": {
+      "passed": true,
+      "detail": "json-сериализация + .json-хранилище найдены"
+    },
+    "tests_present": {
+      "passed": true,
+      "detail": "4 тест-файл(ов)"
+    },
+    "docs": {
+      "passed": true,
+      "detail": "README найден (README.md)"
+    },
+    "installable": {
+      "passed": true,
+      "detail": "проект ставится как пакет"
+    },
+    "tests_pass": {
+      "passed": false,
+      "detail": "pytest упал (rc=1): _________________________\n\n    def test_search_notes():\n        add_note('Test note 1')\n        add_note('Another test note')\n        add_note('Test note 2')\n        output = search_notes('test')\n>       assert '0: Test note 1' in output\n               ^^^^^^^^^^^^^^^^^^^^^^^^^^\nE       TypeError: argument of type 'NoneType' is not iterable\n\ntests/test_search.py:8: TypeError\n=========================== short test summary info ============================\nFAILED tests/test_add.py::test_add_note - TypeError: string indices must be i...\nFAILED tests/test_delete.py::test_delete_note - TypeError: argument of type '...\nFAILED tests/test_list.py::test_list_notes - NameError: name 'add_note' is no...\nFAILED tests/test_search.py::test_search_notes - TypeError: argument of type ...\n4 failed in 0.02s"
+    },
+    "acceptance": {
+      "passed": false,
+      "detail": "нет точки входа CLI (__main__/argparse) — не запускается как CLI"
+    }
+  },
+  "ended_reason": "user_gave_up",
+  "mechanical_solved": false
+}

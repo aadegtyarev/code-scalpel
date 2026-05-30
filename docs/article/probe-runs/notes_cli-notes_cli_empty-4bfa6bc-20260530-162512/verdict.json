@@ -1,0 +1,41 @@
+{
+  "scenario": "notes_cli",
+  "pass_score": 5,
+  "pass_max": 8,
+  "criteria": {
+    "package": {
+      "passed": true,
+      "detail": "1 непустых .py-файла(ов) с исходным кодом"
+    },
+    "four_commands": {
+      "passed": true,
+      "detail": "все 4 команды упомянуты"
+    },
+    "json_storage": {
+      "passed": true,
+      "detail": "json-сериализация + .json-хранилище найдены"
+    },
+    "tests_present": {
+      "passed": true,
+      "detail": "2 тест-файл(ов)"
+    },
+    "docs": {
+      "passed": true,
+      "detail": "README найден (README.md)"
+    },
+    "installable": {
+      "passed": false,
+      "detail": "editable/requirements install не прошёл: ERROR: Could not find a version that satisfies the requirement json (from versions: none)\nERROR: No matching distribution found for json"
+    },
+    "tests_pass": {
+      "passed": false,
+      "detail": "pytest упал (rc=2): r while importing test module '/tmp/claude-1000/probe-check-n41rj1or/proj/tests/test_list.py'.\nHint: make sure your test modules/packages have valid Python names.\nTraceback:\n/usr/lib/python3.12/importlib/__init__.py:90: in import_module\n    return _bootstrap._gcd_import(name[level:], package, level)\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\ntests/test_list.py:2: in <module>\n    from notes.cli import list_notes, load_notes\nE   ImportError: cannot import name 'load_notes' from 'notes.cli' (/tmp/claude-1000/probe-check-n41rj1or/proj/notes/cli.py)\n=========================== short test summary info ============================\nERROR tests/test_add.py\nERROR tests/test_list.py\n!!!!!!!!!!!!!!!!!!! Interrupted: 2 errors during collection !!!!!!!!!!!!!!!!!!!!\n2 errors in 0.08s"
+    },
+    "acceptance": {
+      "passed": false,
+      "detail": "точка входа есть, но add/list не сработали (1 кандидат(ов))"
+    }
+  },
+  "ended_reason": "user_gave_up",
+  "mechanical_solved": false
+}
