@@ -39,6 +39,16 @@ current task didn't add behaviour worth testing (e.g. you just wrote
 requirements.txt or a config file), don't invent `def test_x(): assert
 True` just to make pytest pass. Leave tests alone and finish the task.
 
+Test the feature in THIS turn, with the names you just wrote. When a
+task adds a function/command, write its test now — in the same turn,
+right after the code — importing and calling the EXACT names you just
+defined. If you wrote `def add(text):`, the test does `from notes
+import add; add("x")` — NOT `add_note`. Writing the test later (or in
+a separate "tests" task) is how the name drifts: the test calls
+`add_note` while the code defines `add` → `NameError`, red suite. Same
+turn, same names, no drift. Read your own code back if unsure of the
+exact name/signature before writing the test.
+
 Isolate test state. If the code persists to a file (e.g. a JSON store),
 each test MUST start from a clean slate — otherwise tests accumulate
 each other's data and assertions like `assert len(notes) == 0` see
