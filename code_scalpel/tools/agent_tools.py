@@ -43,19 +43,29 @@ WEB_LEARN_SCHEMA: dict[str, Any] = {
     "function": {
         "name": "web_learn",
         "description": (
-            "Search the web for documentation on a topic, fetch the top result, "
-            "and save it as a recipe in `.code-scalpel/recipes/`. "
-            "Use at the start of a task when the required recipe doesn't exist yet "
-            "and the stack/technology is known. "
-            "Example: web_learn('python pyproject.toml setuptools') saves a recipe "
-            "that future tasks can use without re-searching."
+            "Fetch documentation on a technology from the web and save it as a "
+            "recipe in `.code-scalpel/recipes/` for reuse across all tasks.\n"
+            "WHEN to call: PLANNING phase only — before coding starts, when the "
+            "project stack is known and a recipe for the technology is missing. "
+            "The plan runner calls this automatically; you only need to call it "
+            "manually if a new technology appears mid-task.\n"
+            "NEVER call during coding to look up an immediate error — use "
+            "`web_search` for that.\n"
+            "QUERY tips (use English):\n"
+            "• Include technology name + specific topic + 'docs' or 'official'\n"
+            "• Good: 'setuptools pyproject.toml build-backend docs'\n"
+            "• Bad: 'python' or 'packaging' (too broad, returns noise)\n"
+            "• For frameworks: '<framework> getting started official documentation'"
         ),
         "parameters": {
             "type": "object",
             "properties": {
                 "query": {
                     "type": "string",
-                    "description": "Search query, e.g. 'python pytest tmp_path fixtures'",
+                    "description": (
+                        "Search query in English. Include technology name + topic + "
+                        "'docs'. Example: 'pytest tmp_path fixture official docs'"
+                    ),
                 }
             },
             "required": ["query"],
@@ -68,19 +78,29 @@ WEB_SEARCH_SCHEMA: dict[str, Any] = {
     "function": {
         "name": "web_search",
         "description": (
-            "Search the web (DuckDuckGo) for syntax, conventions, error messages, "
-            "or package docs. Returns up to 6 result titles + snippets.\n"
-            "Use when you hit an error you can't diagnose from the codebase alone "
-            "(e.g. TOML syntax error, unknown setuptools option, pytest config key).\n"
-            "Tip: save useful findings to `.code-scalpel/knowledge.md` with "
-            "write_file so the knowledge persists across tasks."
+            "Search the web (DuckDuckGo) for an answer to an immediate problem "
+            "during coding. Returns up to 6 result titles + snippets to read now.\n"
+            "WHEN to call: you hit an error or syntax question you cannot resolve "
+            "from the codebase or loaded recipes — TOML parse error, unknown option, "
+            "unfamiliar API. Last resort during coding, not a first step.\n"
+            "Results are NOT saved automatically — if a snippet solves the problem, "
+            "note it via write_file if it will help future tasks.\n"
+            "QUERY tips (use English):\n"
+            "• Paste the exact error type or the term you don't recognise\n"
+            "• Good: 'pyproject.toml authors inline-table TOML syntax error'\n"
+            "• Good: 'pytest ImportError conftest relative import'\n"
+            "• Bad: 'error' or 'how to fix' (returns generic noise)"
         ),
         "parameters": {
             "type": "object",
             "properties": {
                 "query": {
                     "type": "string",
-                    "description": "Search query, e.g. 'pyproject.toml authors TOML syntax'",
+                    "description": (
+                        "Search query in English. Include the exact error term or "
+                        "technology name + specific symptom. "
+                        "Example: 'setuptools find_packages src layout pyproject'"
+                    ),
                 }
             },
             "required": ["query"],
