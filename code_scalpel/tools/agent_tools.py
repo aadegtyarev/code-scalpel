@@ -30,6 +30,7 @@ from typing import Any
 from code_scalpel.tools.files import list_files, read_file
 from code_scalpel.tools.search import ripgrep
 from code_scalpel.tools.shell import AsyncShellRunner, ShellResult, ShellRunner
+from code_scalpel.tools.web_search import web_search as _web_search
 
 # Awaitable callback the dispatch invokes when a shell command needs
 # the user's blessing before running (skeptic trust level). Returns
@@ -37,6 +38,31 @@ from code_scalpel.tools.shell import AsyncShellRunner, ShellResult, ShellRunner
 ConfirmShellExec = Callable[[str], Awaitable[bool]]
 
 # OpenAI tools schema — sent with chat() so the model can call them natively.
+WEB_SEARCH_SCHEMA: dict[str, Any] = {
+    "type": "function",
+    "function": {
+        "name": "web_search",
+        "description": (
+            "Search the web (DuckDuckGo) for syntax, conventions, error messages, "
+            "or package docs. Returns up to 6 result titles + snippets.\n"
+            "Use when you hit an error you can't diagnose from the codebase alone "
+            "(e.g. TOML syntax error, unknown setuptools option, pytest config key).\n"
+            "Tip: save useful findings to `.code-scalpel/knowledge.md` with "
+            "write_file so the knowledge persists across tasks."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "query": {
+                    "type": "string",
+                    "description": "Search query, e.g. 'pyproject.toml authors TOML syntax'",
+                }
+            },
+            "required": ["query"],
+        },
+    },
+}
+
 TOOL_SCHEMAS: list[dict[str, Any]] = [
     {
         "type": "function",
@@ -361,6 +387,7 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
             },
         },
     },
+    WEB_SEARCH_SCHEMA,  # forward reference resolved at module load; defined below
 ]
 
 
@@ -555,6 +582,16 @@ async def execute(
             confirm=confirm_shell_exec,
             sandbox=sandbox,
         )
+    if call.name == "web_search":
+        decoded = _decode_args(call.body)
+        query = str(decoded.get("query", decoded.get("_raw", ""))).strip()
+        if not query:
+            return ToolResult(call, output="error: query is required", ok=False)
+        try:
+            results = await _web_search(query)
+        except RuntimeError as e:
+            return ToolResult(call, output=str(e), ok=False)
+        return ToolResult(call, output=results, ok=True)
     return ToolResult(
         call=call,
         output=f"error: unknown tool {call.name!r}",
@@ -1271,6 +1308,10 @@ async def _tool_shell_exec(
         return ToolResult(call, output=f"error: {e}", ok=False)
 
     text = result.stdout
+    # Strip absolute workdir prefix so error messages show relative paths
+    # the model can act on, not opaque probe-run / temp-dir paths.
+    cwd_str = str(cwd)
+    text = text.replace(cwd_str + "/", "").replace(cwd_str, ".")
     if len(text) > _MAX_SHELL_OUTPUT:
         text = (
             text[:_MAX_SHELL_OUTPUT]
@@ -1289,6 +1330,7 @@ __all__ = (
     "TOOL_SCHEMAS",
     "ToolCall",
     "UNLOAD_SKILL_SCHEMA",
+    "WEB_SEARCH_SCHEMA",
     "ToolResult",
     "execute",
     "format_result",

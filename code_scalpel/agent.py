@@ -901,18 +901,48 @@ class StepAgent:
         # модель воспроизводит ту же правку — это топтание (трэш на
         # слабой модели). Один раз эскалируем (промпт «смени подход»),
         # при повторе после эскалации — рвём петлю, не жжём бюджет.
+        #
+        # Two levels of detection:
+        # 1. Per-turn signature (all write_file calls hashed together) —
+        #    catches exact-same-turn repeats.
+        # 2. Per-file signature (path + content per write_file) — catches
+        #    the case where the model writes a broken file repeatedly across
+        #    turns that differ in other files (e.g. always writes the same
+        #    broken pyproject.toml even when requirements.txt also changes).
         seen_sigs: set[str] = set()
+        seen_file_sigs: set[str] = set()  # sha256(path \x00 content)
         no_progress_escalated = False
         for i in range(max_retries + 1):
             result = await self.ask(prompt, mode=mode, on_tool_executed=on_tool_executed)
             last_result = result
             sig = _attempt_signature(result)
-            if sig and sig in seen_sigs:
+            # Per-file detection: any write_file whose (path, content) was
+            # already seen in a previous turn counts as stuck.
+            stuck_file: str | None = None
+            for r in result.tool_results:
+                if r.call.name == "write_file" and r.result.ok:
+                    try:
+                        fa = json.loads(r.call.body)
+                    except (json.JSONDecodeError, AttributeError):
+                        continue
+                    fsig = hashlib.sha256(
+                        f"{fa.get('path', '')}\x00{fa.get('content', '')}".encode()
+                    ).hexdigest()
+                    if fsig in seen_file_sigs:
+                        stuck_file = fa.get("path", "?")
+                        break
+                    seen_file_sigs.add(fsig)
+            repeat_detected = (sig and sig in seen_sigs) or stuck_file is not None
+            if repeat_detected:
                 if on_tool_executed is not None:
+                    if stuck_file and not (sig and sig in seen_sigs):
+                        detail = f"файл {stuck_file} уже писался с таким же содержимым"
+                    else:
+                        detail = "та же правка"
                     note = (
-                        "Повтор после эскалации — останавливаю петлю."
+                        f"Повтор после эскалации ({detail}) — останавливаю петлю."
                         if no_progress_escalated
-                        else "Модель повторила ту же правку — требую сменить подход."
+                        else f"Модель повторила правку ({detail}) — требую сменить подход."
                     )
                     with suppress(Exception):
                         call = ToolCall(name="no_progress", body=task_label)

@@ -377,8 +377,17 @@ def test_preflight_blocks_when_lmstudio_busy(monkeypatch: pytest.MonkeyPatch) ->
     # is_busy lives in code_scalpel.llm.lmstudio_status; patch there
     # so the preflight import picks up the fake.
     import code_scalpel.llm.lmstudio_status as status_mod
+    from code_scalpel.config import AppConfig, ModelProfile
 
     monkeypatch.setattr(status_mod, "is_busy", lambda model_id=None, timeout=5.0: True)
+    # Ensure provider=lmstudio regardless of the system config file.
+    import code_scalpel.config as config_mod
+
+    monkeypatch.setattr(
+        config_mod,
+        "load_config",
+        lambda: AppConfig(profiles={"local": ModelProfile(provider="lmstudio", model="auto")}),
+    )
 
     with pytest.raises(typer.Exit) as exc:
         cli._preflight_busy_check()
