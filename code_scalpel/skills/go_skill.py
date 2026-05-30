@@ -20,6 +20,7 @@ from code_scalpel.skills.base import Skill
 class GoSkill(Skill):
     name = "go"
     description = "go test / go vet / gofmt for a Go module (detects go.mod)."
+    priority = 30
 
     def detect(self, root: Path) -> bool:
         return (root / "go.mod").is_file()

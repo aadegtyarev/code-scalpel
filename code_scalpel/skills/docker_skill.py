@@ -25,6 +25,7 @@ from code_scalpel.skills.base import Skill
 class DockerSkill(Skill):
     name = "docker"
     description = "docker compose run app pytest (detects Dockerfile / docker-compose.yml)."
+    priority = 40
 
     def detect(self, root: Path) -> bool:
         for marker in ("Dockerfile", "docker-compose.yml", "docker-compose.yaml", "compose.yml"):

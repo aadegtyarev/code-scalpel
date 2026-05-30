@@ -52,6 +52,7 @@ class Skill(ABC):
     name: str = ""
     description: str = ""
     provides_test_runner: bool = True
+    priority: int = 50  # lower = registered first; controls default_runnable_skill order
 
     @abstractmethod
     def detect(self, root: Path) -> bool:
@@ -120,3 +121,27 @@ class Skill(ABC):
         chars per token matches `session.py` accounting.
         """
         return max(0, (len(self.name) + len(self.description)) // 4)
+
+
+class MarkdownSkill(Skill):
+    """Prompt-only skill backed by prompts/skills/<name>.md.
+
+    Never auto-detected — must be loaded explicitly via load_skill().
+    Use for advisory skills (git workflow, etc.) where the model already
+    knows the basics but needs specific rules for edge cases.
+    """
+
+    provides_test_runner: bool = False
+
+    def __init__(self, skill_name: str, skill_description: str = "") -> None:
+        self.name = skill_name
+        self.description = skill_description or f"{skill_name.title()} instructions"
+
+    def detect(self, root: Path) -> bool:
+        return False
+
+    def test_cmd(self, args: str = "") -> list[str]:
+        return []
+
+    def lint_cmd(self) -> list[str]:
+        return []

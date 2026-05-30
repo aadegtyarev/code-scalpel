@@ -35,6 +35,7 @@ class JsTsSkill(Skill):
         "npm/pnpm/yarn test/lint/format for a JavaScript or TypeScript project "
         "(detects package.json)."
     )
+    priority = 20
 
     def detect(self, root: Path) -> bool:
         return (root / "package.json").is_file()

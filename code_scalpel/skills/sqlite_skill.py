@@ -26,6 +26,7 @@ class SqliteSkill(Skill):
     name = "sqlite"
     description = "SQLite component (detects *.db / *.sqlite files or top-level schema.sql)."
     provides_test_runner = False
+    priority = 70
 
     def detect(self, root: Path) -> bool:
         if (root / "schema.sql").is_file():
