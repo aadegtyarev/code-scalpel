@@ -1,0 +1,18 @@
+[build-system]
+requires = ["setuptools", "wheel"]
+
+[project]
+name = "notes"
+version = "0.1.0"
+description = "CLI для заметок"
+authors = [{ name="Your Name", email="your.email@example.com" }]
+license = { file="LICENSE" }
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+]
+dependencies = ["argparse", "json", "os"]
+
+[project.scripts]
+notes = "notes.cli:main"
