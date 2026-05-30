@@ -1,0 +1,41 @@
+{
+  "scenario": "notes_cli",
+  "pass_score": 2,
+  "pass_max": 8,
+  "criteria": {
+    "package": {
+      "passed": false,
+      "detail": "0 непустых .py-файла(ов) с исходным кодом"
+    },
+    "four_commands": {
+      "passed": false,
+      "detail": "нет упоминания: ['add', 'list', 'search', 'delete']"
+    },
+    "json_storage": {
+      "passed": false,
+      "detail": "json.dump/load=False, .json-путь=False"
+    },
+    "tests_present": {
+      "passed": false,
+      "detail": "тест-файлов не найдено (tests/ exists=True)"
+    },
+    "docs": {
+      "passed": true,
+      "detail": "README найден (README.md)"
+    },
+    "installable": {
+      "passed": true,
+      "detail": "проект ставится как пакет"
+    },
+    "tests_pass": {
+      "passed": false,
+      "detail": "pytest упал (rc=5): no tests ran in 0.00s"
+    },
+    "acceptance": {
+      "passed": false,
+      "detail": "нет точки входа CLI (__main__/argparse) — не запускается как CLI"
+    }
+  },
+  "ended_reason": "user_gave_up",
+  "mechanical_solved": false
+}

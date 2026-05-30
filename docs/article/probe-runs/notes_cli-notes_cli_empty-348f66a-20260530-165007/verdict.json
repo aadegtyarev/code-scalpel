@@ -1,0 +1,41 @@
+{
+  "scenario": "notes_cli",
+  "pass_score": 7,
+  "pass_max": 8,
+  "criteria": {
+    "package": {
+      "passed": true,
+      "detail": "1 непустых .py-файла(ов) с исходным кодом"
+    },
+    "four_commands": {
+      "passed": true,
+      "detail": "все 4 команды упомянуты"
+    },
+    "json_storage": {
+      "passed": true,
+      "detail": "json-сериализация + .json-хранилище найдены"
+    },
+    "tests_present": {
+      "passed": true,
+      "detail": "1 тест-файл(ов)"
+    },
+    "docs": {
+      "passed": true,
+      "detail": "README найден (README.md)"
+    },
+    "installable": {
+      "passed": true,
+      "detail": "проект ставится как пакет"
+    },
+    "tests_pass": {
+      "passed": false,
+      "detail": "pytest упал (rc=1): ...F\n=================================== FAILURES ===================================\n_______________________________ test_delete_note _______________________________\ntests/test_notes.py:31: in test_delete_note\n    assert len(notes) == 0\nE   AssertionError: assert 3 == 0\nE    +  where 3 = len([{'id': 2, 'text': 'Test note 2'}, {'id': 3, 'text': 'Test note 3'}, {'id': 4, 'text': 'Test note 4'}])\n=========================== short test summary info ============================\nFAILED tests/test_notes.py::test_delete_note - AssertionError: assert 3 == 0\n!!!!!!!!!!!!!!!!!!!!!!!!!! stopping after 1 failures !!!!!!!!!!!!!!!!!!!!!!!!!!!"
+    },
+    "acceptance": {
+      "passed": true,
+      "detail": "CLI работает: add→list через `main.py`"
+    }
+  },
+  "ended_reason": "user_gave_up",
+  "mechanical_solved": false
+}
