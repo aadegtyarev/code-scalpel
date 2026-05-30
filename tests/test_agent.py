@@ -1297,6 +1297,59 @@ async def test_code_with_retry_no_progress_guard_breaks_thrash(project: Path) ->
 
 
 @pytest.mark.asyncio
+async def test_code_with_retry_no_progress_per_file_guard(project: Path) -> None:
+    """Per-file repeat detection: same (path, content) across different turns
+    triggers no_progress even when other files differ between turns.
+
+    Scenario: turn 1 writes broken.toml + ok.py; turn 2 writes broken.toml
+    only. Whole-turn signatures differ (ok.py absent in turn 2) but
+    broken.toml content is identical — per-file guard must fire."""
+    import json
+
+    from code_scalpel.llm.adapter import NativeToolCall
+    from code_scalpel.tools.shell import ShellResult
+    from tests.mocks import MockShellRunner
+
+    broken_toml = "authors = [{'name': 'x'}]"
+
+    def _wf_call(path: str, content: str) -> NativeToolCall:
+        return NativeToolCall(
+            id=f"tc_{path}",
+            name="write_file",
+            arguments=json.dumps({"path": path, "content": content}),
+        )
+
+    # ask() #1: writes pyproject.toml + ok.py together (whole-turn sig A)
+    # ask() #2: writes pyproject.toml only (whole-turn sig B ≠ A) —
+    # whole-turn guard misses it, but per-file guard catches the repeat.
+    llm = MockLLMAdapter(
+        [
+            ("", [_wf_call("pyproject.toml", broken_toml), _wf_call("ok.py", "x=1\n")]),
+            ("done", []),  # ask() #1 stops here
+            ("", [_wf_call("pyproject.toml", broken_toml)]),  # ask() #2: only toml
+            ("done", []),
+        ]
+    )
+    shell = MockShellRunner([ShellResult("TOML error", 1)] * 8)
+    agent = StepAgent(
+        llm=llm,
+        cwd=project,
+        config=_retry_config(max_debug_attempts=3),
+        shell_runner=shell,
+    )
+
+    cards: list[tuple[str, str]] = []
+    await agent.code_with_retry(
+        "fix config",
+        on_tool_executed=lambda c, r: cards.append((c.name, r.output)),
+    )
+
+    no_progress_cards = [out for name, out in cards if name == "no_progress"]
+    assert no_progress_cards, "per-file guard должен был сработать"
+    assert any("pyproject.toml" in msg for msg in no_progress_cards)
+
+
+@pytest.mark.asyncio
 async def test_code_with_retry_disabled_flag_falls_back_to_ask(project: Path) -> None:
     """When iterative_patch_loop=False, code_with_retry is a pass-through to
     ask() — no tests run, no auto-retry, existing behavior preserved."""

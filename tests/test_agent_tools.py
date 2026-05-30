@@ -531,6 +531,26 @@ async def test_map_file_rejects_symlink_escape(tmp_path: Path) -> None:
     assert "inside the project" in result.output
 
 
+# ── shell_exec workdir path stripping ────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_shell_exec_strips_workdir_from_output(tmp_path: Path) -> None:
+    """Absolute workdir path in error output is replaced so the model sees
+    relative paths, not opaque probe-run / temp-dir paths."""
+    from code_scalpel.tools.shell import ShellResult
+    from tests.mocks import MockShellRunner
+
+    error_msg = f"ERROR: {tmp_path}/pyproject.toml: Expected '=' at line 9"
+    runner = MockShellRunner([ShellResult(error_msg + "\n", 1)])
+    call = ToolCall(name="shell_exec", body='{"command": "pytest"}')
+
+    result = await execute(call, tmp_path, runner=runner, trust="yolo")
+
+    assert str(tmp_path) not in result.output
+    assert "pyproject.toml: Expected '='" in result.output
+
+
 # ── shell_exec dispatch ──────────────────────────────────────────────────────
 
 
