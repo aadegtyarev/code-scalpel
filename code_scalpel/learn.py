@@ -14,12 +14,25 @@ from __future__ import annotations
 
 import re
 from pathlib import Path
-from typing import Literal
+from typing import TYPE_CHECKING, Any, Literal, Protocol, runtime_checkable
 
 from code_scalpel.fetch import fetch_markdown
-from code_scalpel.runtime import Runtime
+
+if TYPE_CHECKING:
+    from code_scalpel.runtime import Runtime
 
 Kind = Literal["recipe", "skill"]
+
+
+@runtime_checkable
+class LearnRuntime(Protocol):
+    """Minimal interface `learn()` needs — satisfied by both Runtime and StepAgent."""
+
+    @property
+    def cwd(self) -> Path: ...
+
+    async def ask(self, text: str, *, mode: str = "ask") -> Any: ...
+
 
 _RECIPE_PROMPT = """\
 Generate a code-scalpel recipe for `{name}`. A recipe captures knowledge
@@ -127,7 +140,7 @@ def _target_dir(cwd: Path, kind: Kind) -> Path:
 
 
 async def learn(
-    runtime: Runtime,
+    runtime: Runtime | LearnRuntime,
     name: str,
     *,
     kind: Kind = "recipe",
@@ -151,9 +164,10 @@ async def learn(
         content = await fetch_markdown(url)
         prompt = _URL_PREAMBLE.format(url=url, content=content) + "\n" + prompt
     result = await runtime.ask(prompt, mode="ask")
-    body = _strip_fences(result.reply)
+    reply: str = result.reply if hasattr(result, "reply") else str(result)
+    body = _strip_fences(reply)
     if not body.strip() or _FRONTMATTER_FENCE not in body:
-        raise RuntimeError(f"Model returned no usable {kind} body — got {result.reply[:120]!r}")
+        raise RuntimeError(f"Model returned no usable {kind} body — got {reply[:120]!r}")
     target_dir = _target_dir(runtime.cwd, kind)
     target_dir.mkdir(parents=True, exist_ok=True)
     target = target_dir / f"{_safe_filename(name)}.md"

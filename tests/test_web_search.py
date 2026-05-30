@@ -56,3 +56,30 @@ async def test_web_search_tool_dispatch_unknown_query(tmp_path: Path) -> None:
     result = await execute(call, tmp_path)
     assert result.ok is False
     assert "query" in result.output.lower()
+
+
+def test_top_result_extracts_first_url() -> None:
+    from code_scalpel.tools.web_search import _top_result
+
+    html = """
+    <tr><td><a href='https://docs.python.org/pyproject' class='result-link'>Python Packaging</a></td></tr>
+    <tr><td><a href='https://other.com' class='result-link'>Other</a></td></tr>
+    """
+    result = _top_result(html)
+    assert result is not None
+    title, url = result
+    assert url == "https://docs.python.org/pyproject"
+    assert "Python" in title
+
+
+def test_top_result_returns_none_when_empty() -> None:
+    from code_scalpel.tools.web_search import _top_result
+
+    assert _top_result("<html></html>") is None
+
+
+def test_query_to_recipe_name() -> None:
+    from code_scalpel.agent import _query_to_recipe_name
+
+    assert _query_to_recipe_name("pyproject.toml TOML syntax") == "pyproject-toml-toml-syntax"
+    assert _query_to_recipe_name("  ") == "web-recipe"

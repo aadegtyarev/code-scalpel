@@ -426,6 +426,14 @@ def _successful_write_paths(tool_results: tuple[ToolExecuted, ...]) -> list[str]
     return paths
 
 
+def _query_to_recipe_name(query: str) -> str:
+    """Slugify a search query into a recipe filename stem."""
+    import re as _re
+
+    slug = _re.sub(r"[^a-z0-9]+", "-", query.lower()).strip("-")
+    return slug[:60] or "web-recipe"
+
+
 def _attempt_signature(result: StepResult) -> str:
     """Стабильный хэш мутаций этой попытки — write_file (path+content)
     и SEARCH/REPLACE edits. Пустая строка, если попытка ничего не
@@ -1287,6 +1295,12 @@ class StepAgent:
             original_text = tasks_path.read_text()
             initial_hash = _hash_text(original_text)
 
+        # Auto-learn: for each skill in the plan that has no local recipe,
+        # run web_learn once before the first task starts. Best-effort —
+        # a network failure silently skips that skill rather than aborting.
+        if self._config.agent.auto_annotate_plan:
+            await self._auto_learn_missing_recipes(tasks, on_tool_executed)
+
         outcomes: list[TaskOutcome] = []
         consecutive_failures = 0
         # Skips отдельно от failures: skip почти всегда безвреден —
@@ -1829,6 +1843,51 @@ class StepAgent:
             with suppress(Exception):
                 on_tool_executed(call_view, ToolResult(call_view, output=output, ok=True))
 
+    async def _auto_learn_missing_recipes(
+        self,
+        tasks: tuple[Task, ...],
+        on_tool_executed: Callable[[ToolCall, ToolResult], None] | None,
+    ) -> None:
+        """For each unique skill in the plan, if no recipe exists yet,
+        run web_learn to fetch one. Runs once before the task loop, so
+        every subsequent task has documentation available in context.
+
+        Best-effort: network / model errors are suppressed per skill.
+        """
+        from code_scalpel.recipes import discover_recipes
+
+        # Match by both recipe name (frontmatter) and filename stem.
+        recipes = discover_recipes(self._cwd)
+        existing = {r.name.lower() for r in recipes}
+        # Also collect file stems from the project recipes dir.
+        recipes_dir = self._cwd / ".code-scalpel" / "recipes"
+        if recipes_dir.is_dir():
+            for f in recipes_dir.glob("*.md"):
+                existing.add(f.stem.lower())
+        seen: set[str] = set()
+
+        for task in tasks:
+            for skill_name in _parse_task_skills(task):
+                if skill_name in seen or skill_name.lower() in existing:
+                    continue
+                seen.add(skill_name)
+                call = ToolCall(name="web_learn", body=f'{{"query": "{skill_name}"}}')
+                if on_tool_executed is not None:
+                    with suppress(Exception):
+                        on_tool_executed(
+                            call,
+                            ToolResult(
+                                call,
+                                output=f"Learning {skill_name!r} recipe…",
+                                ok=True,
+                            ),
+                        )
+                with suppress(Exception):
+                    result = await self._tool_web_learn(call)
+                    if on_tool_executed is not None:
+                        with suppress(Exception):
+                            on_tool_executed(call, result)
+
     async def annotate_plan(self) -> bool:
         """Public entry-point for `/annotate`. Reads TASKS.md, runs the
         skill-annotation pass, writes the result back. Returns True if
@@ -1952,6 +2011,8 @@ class StepAgent:
             return self._tool_load_skill(call)
         if tc.name == "unload_skill":
             return self._tool_unload_skill(call)
+        if tc.name == "web_learn":
+            return await self._tool_web_learn(call)
         return await execute(
             call,
             self._cwd,
@@ -1961,6 +2022,42 @@ class StepAgent:
             shell_exec_timeout=self._config.agent.shell_exec_timeout,
             confirm_shell_exec=self._confirm_shell_exec,
             sandbox=self._config.agent.sandbox,
+        )
+
+    @property
+    def cwd(self) -> Path:
+        return self._cwd
+
+    async def _tool_web_learn(self, call: ToolCall) -> ToolResult:
+        """web_learn: search → fetch top URL → save as recipe via learn()."""
+        from code_scalpel.learn import learn as _learn
+        from code_scalpel.tools.agent_tools import _decode_args
+        from code_scalpel.tools.web_search import search_top_url
+
+        decoded = _decode_args(call.body)
+        query = str(decoded.get("query", decoded.get("_raw", ""))).strip()
+        if not query:
+            return ToolResult(call, output="error: query is required", ok=False)
+
+        try:
+            hit = await search_top_url(query)
+        except RuntimeError as e:
+            return ToolResult(call, output=str(e), ok=False)
+
+        if hit is None:
+            return ToolResult(call, output=f"No results found for: {query!r}", ok=False)
+
+        title, url = hit
+        name = _query_to_recipe_name(query)
+        try:
+            path = await _learn(self, name, url=url)
+        except RuntimeError as e:
+            return ToolResult(call, output=f"learn failed: {e}", ok=False)
+
+        return ToolResult(
+            call,
+            output=f"Recipe saved: {path.name}\nSource: {url}\nTitle: {title}",
+            ok=True,
         )
 
     def _tool_schemas(self) -> list[dict[str, Any]]:
