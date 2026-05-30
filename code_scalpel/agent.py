@@ -47,6 +47,7 @@ _APPLY_FAILED_PROMPT = _prompts.APPLY_FAILED
 _TESTS_FAILED_PROMPT = _prompts.TESTS_FAILED
 _MISSING_FILES_PROMPT = _prompts.MISSING_FILES
 _NO_PROGRESS_PROMPT = _prompts.NO_PROGRESS
+_SYNTAX_ERROR_PROMPT = _prompts.SYNTAX_ERROR
 _NEEDS_TESTS_PROMPT = _prompts.NEEDS_TESTS
 
 
@@ -444,6 +445,19 @@ def _attempt_signature(result: StepResult) -> str:
     if not parts:
         return ""
     return hashlib.sha256("\x01".join(sorted(parts)).encode("utf-8")).hexdigest()
+
+
+def _first_syntax_error(paths: list[str], cwd: Path) -> str | None:
+    """Первая синтаксическая ошибка среди записанных `.py` → готовый
+    retry-промпт с точным file:line:msg, либо None. Битый Python не
+    запустится и pytest не соберёт — ловим раньше тестов."""
+    from code_scalpel.checks import check_syntax
+
+    for p in paths:
+        issue = check_syntax(cwd / p)
+        if issue is not None:
+            return _SYNTAX_ERROR_PROMPT.format(file=p, line=issue.line, message=issue.message)
+    return None
 
 
 def _collect_write_file_diffs(tool_results: tuple[ToolExecuted, ...]) -> str:
@@ -884,6 +898,13 @@ class StepAgent:
                             # ORIGINAL content on rollback — but write_file is
                             # primarily for greenfield, where this is correct.
                             pre_loop_snapshot[target] = None
+                    # Syntax-guard: битый .py не запустится и pytest не
+                    # соберёт (rc=2) — ловим раньше тестов, тычем в точную
+                    # строку. Дешевле и прямее, чем collection-traceback.
+                    syntax_retry = _first_syntax_error(write_paths, self._cwd)
+                    if syntax_retry is not None and i < max_retries:
+                        prompt = syntax_retry
+                        continue
                     test_output, tests_passed = await self._run_tests()
                     synthetic_edits = tuple(
                         Edit(path=p, search="", replace="") for p in write_paths
@@ -949,6 +970,12 @@ class StepAgent:
                 if i == max_retries:
                     break
                 prompt = _APPLY_FAILED_PROMPT.format(error=err)
+                continue
+
+            # Syntax-guard (см. write_file-ветку): битый .py до тестов.
+            syntax_retry = _first_syntax_error([e.path for e in result.edits], self._cwd)
+            if syntax_retry is not None and i < max_retries:
+                prompt = syntax_retry
                 continue
 
             test_output, tests_passed = await self._run_tests()
