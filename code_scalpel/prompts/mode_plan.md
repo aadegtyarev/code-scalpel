@@ -30,7 +30,17 @@ Rules:
   the project always ships documentation even if the run stops early.
   For T001 use `files: ["README.md"]`, `test_command: null`,
   `acceptance` covering "README lists all requested commands with
-  usage".
+  usage". T001 must NOT create virtualenvs, install packages, or touch
+  any language tooling — documentation only.
+- **T002 MUST initialize the stack environment** when the project uses
+  a language runtime (python / go / js). This task creates the package
+  manifest (`pyproject.toml`, `go.mod`, `package.json`), the
+  virtualenv or module structure, and installs declared dependencies.
+  Give it `skills: ["python"]` (or the matching language skill).
+  Use `files: ["pyproject.toml", ".gitignore"]` (adjust per stack),
+  `test_command: null`.
+  Do NOT create the virtualenv or install packages in T001 or in any
+  later feature task — environment setup belongs here and only here.
 - Each task self-contained: a separate person could pick one up.
 - `files`: only paths THIS task itself creates or modifies. Files
   created by a later task belong to that task — don't list them
