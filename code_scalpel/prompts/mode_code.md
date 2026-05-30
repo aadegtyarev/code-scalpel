@@ -71,3 +71,18 @@ Anti-loop:
   `write_file(path, content)` to create the file.
 - Same tool call returned the same result twice → stop, pick a different
   approach (different tool, different args, or proceed to next step).
+
+Self-contained — a teammate must `pip install -e .` and run the tests
+on a clean machine. Never declare tooling you don't also install:
+- Don't put pytest plugins / coverage flags (`--cov`, `--mypy`,
+  `-p no:cacheprovider` aside) into `pytest.ini` or pyproject
+  `addopts`. They make pytest abort with "unrecognized arguments"
+  unless that plugin is installed. Keep the test config minimal —
+  plain `pytest`.
+- Don't `import` a third-party package (click, rich, requests, …)
+  unless you ALSO add it to the project's declared dependencies in
+  pyproject. For a small CLI prefer the stdlib: `argparse` over click,
+  `json` over external serializers. The fewer deps, the more likely it
+  runs on a clean checkout.
+- The package directory must match the project `name` in pyproject so
+  the wheel builds (`name = "notes"` → package dir `notes/`).

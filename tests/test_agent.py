@@ -736,6 +736,21 @@ async def test_plan_mode_addendum_in_system_prompt() -> None:
 
 
 @pytest.mark.asyncio
+async def test_code_mode_addendum_has_self_contained_rule(project: Path) -> None:
+    """Code mode injects the self-contained rule: don't declare tooling
+    you can't install (--cov plugin, click dep) — доминирующий
+    tests_pass-блокер на чистом checkout'е (rc=4 «unrecognized
+    arguments: --cov»)."""
+    llm = MockLLMAdapter(["ok"])
+    agent = StepAgent(llm=llm, cwd=project, config=_CONFIG)
+    await agent.ask("write some code", mode="code")
+    system = llm.calls[0][0]["content"]
+    assert "CODE mode" in system
+    assert "Self-contained" in system
+    assert "--cov" in system
+
+
+@pytest.mark.asyncio
 async def test_ask_mode_does_not_inject_plan_addendum(project: Path) -> None:
     """The plan-mode addendum must NOT leak into ask/code prompts."""
     llm = MockLLMAdapter(["ok"])
