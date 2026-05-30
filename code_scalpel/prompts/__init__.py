@@ -46,6 +46,7 @@ NEEDS_TESTS = _load("retry/needs_tests.md")
 NO_PROGRESS = _load("retry/no_progress.md")
 READ_BEFORE_SHOW = _load("retry/read_before_show.md")
 FORCE_ANSWER = _load("retry/force_answer.md")
+SYNTAX_ERROR = _load("retry/syntax_error.md")
 
 
 __all__ = [
@@ -67,6 +68,7 @@ __all__ = [
     "NO_PROGRESS",
     "PER_STEP_REVIEW",
     "READ_BEFORE_SHOW",
+    "SYNTAX_ERROR",
     "SYSTEM",
     "TESTS_FAILED",
     "TEST_SANITY",

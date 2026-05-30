@@ -15,12 +15,15 @@ from __future__ import annotations
 from code_scalpel.checks.empty_tests import EmptyTest, detect_empty_tests
 from code_scalpel.checks.import_graph import ImportIssue, check_imports
 from code_scalpel.checks.lint_pass import LintReport, lint_paths
+from code_scalpel.checks.syntax_check import SyntaxIssue, check_syntax
 
 __all__ = [
     "EmptyTest",
     "ImportIssue",
     "LintReport",
+    "SyntaxIssue",
     "check_imports",
+    "check_syntax",
     "detect_empty_tests",
     "lint_paths",
 ]

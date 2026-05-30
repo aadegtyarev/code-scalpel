@@ -1224,6 +1224,39 @@ def test_tests_failed_prompt_reconciles_test_and_code() -> None:
 
 
 @pytest.mark.asyncio
+async def test_code_with_retry_syntax_guard_retries_before_tests(project: Path) -> None:
+    """Битый .py ловится `ast.parse` ДО тестов: модель получает точный
+    syntax-промпт, чинит, тесты проходят. Кейс из живого прогона:
+    хвостовой `")` ломал и CLI, и сбор pytest (rc=2)."""
+    from code_scalpel.tools.shell import ShellResult
+    from tests.mocks import MockShellRunner
+
+    broken = (
+        "hello.py\n```python\n<<<<<<< SEARCH\ndef hello():\n    pass\n"
+        "=======\ndef hello(:\n    pass\n>>>>>>> REPLACE\n```\n"
+    )
+    fixed = (
+        "hello.py\n```python\n<<<<<<< SEARCH\ndef hello(:\n    pass\n"
+        "=======\ndef hello():\n    return 1\n>>>>>>> REPLACE\n```\n"
+    )
+    llm = MockLLMAdapter([broken, fixed])
+    shell = MockShellRunner([ShellResult("1 passed", 0)])
+    agent = StepAgent(
+        llm=llm, cwd=project, config=_retry_config(max_debug_attempts=2), shell_runner=shell
+    )
+
+    result = await agent.code_with_retry("fix it")
+
+    # Дошло до зелёного (attempt с fixed прошёл).
+    assert any(a.tests_passed for a in result.attempts)
+    # Тесты НЕ гонялись на битой attempt — только после фикса.
+    pytest_calls = [c for c in shell.calls if c and c[0] == "pytest"]
+    assert len(pytest_calls) == 1
+    # 2-й вызов модели получил syntax-промпт.
+    assert "syntax error" in str(llm.calls[1]).lower()
+
+
+@pytest.mark.asyncio
 async def test_code_with_retry_no_progress_guard_breaks_thrash(project: Path) -> None:
     """Модель повторяет ту же правку → no-progress guard: один раз
     эскалирует (промпт «смени подход»), при повторе — рвёт петлю.
