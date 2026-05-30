@@ -3006,7 +3006,9 @@ class StepAgent:
         # whitespace) and parses cleanly via the schema parser. The
         # model often wraps JSON in a ```json ... ``` fence despite
         # response_format=json_schema; strip the fence first.
-        stripped = reply.strip()
+        # Thinking models (qwen3, deepseek-r1) prepend a reasoning block
+        # before the JSON; strip it so the `{` check lands correctly.
+        stripped = re.sub(r"<think>.*?</think>", "", reply, flags=re.DOTALL).strip()
         if stripped.startswith("```"):
             # Drop the opening fence (` ```json ` or just ` ``` `).
             stripped = re.sub(r"^```\w*\s*", "", stripped)

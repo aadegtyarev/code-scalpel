@@ -208,6 +208,52 @@ Qwen3.5/3.6 dense → A3B target pairing.
 пор: coder-14b со спек = быстрее, gemma-4 без спек = качественнее,
 но не оба сразу.
 
+## Полный сценарий notes_cli — живые probe-прогоны (v0.6, 2026-05-31)
+
+Синтетический бенч измеряет правки. Probe-suite измеряет **полный
+рабочий цикл**: plan → go (code-loop с commit'ами) → механический
+чекер (8 критериев: package / four_commands / json_storage /
+tests_present / docs / installable / tests_pass / acceptance).
+
+Сценарий `notes_cli_empty`: пустой проект, одна реплика юзера
+(«хочу python-CLI для заметок: add, list, search, delete, json-storage,
+pytest»), агент сам планирует и реализует.
+
+| | **qwen2.5-coder-14b** | **gemma-4-26b-a4b** | **gpt-5.4-mini** |
+|---|---|---|---|
+| Счёт | 5/8 | 6/8 | **8/8** ✓ |
+| Mechanical solved | ✗ | ✗ | ✓ |
+| Запросы к LLM | 46 | 21 | 30 |
+| Prompt tokens | 546k | 240k | 335k |
+| Wall time | 172s | **591s** | **69s** |
+| Коммиты | 6 | 4 | 4 |
+
+**Что упало у каждой модели:**
+
+- **qwen**: installable ✗ (pyproject без пакета), tests_pass ✗
+  (тесты падают из-за глобального state в json-файле), acceptance ✗
+  (CLI не запускается).
+- **gemma**: installable ✗ (та же проблема с pyproject), acceptance ✗
+  (нет точки входа — `__main__`/argparse не сделаны). Тесты зелёные.
+  Остановилась на `max_failures` на T002/T003.
+- **gpt-5.4-mini**: все 8/8. README + слоистая архитектура (storage /
+  service / CLI), pytest зелёный, `pip install -e .` проходит.
+
+**Наблюдения:**
+
+- gpt-5.4-mini в 8× быстрее gemma при +40% токенов — быстрее именно
+  генерирует, а не меньше думает.
+- gemma использовала меньше всего запросов (21 vs 46 у qwen) — более
+  длинные ответы за один раунд, но медленные.
+- qwen сделал 46 запросов и 6 коммитов — много итераций, но не дошёл до
+  рабочего состояния. Bottleneck: не умеет починить pyproject (installable).
+- Все три модели сделали README и нашли все 4 команды — базовые критерии
+  тривиальны. Разрыв идёт на интеграционных: installable + tests_pass +
+  acceptance.
+- Для production-сценария (один пользователь → рабочий код) пока только
+  OpenAI надёжен. Gemma — потолок локальных моделей, qwen — компромисс
+  по скорости.
+
 ## Где проседают разные модели
 
 - **gpt-oss-20b** — на тривиальных кейсах (add_docstring, add_type_hints,
