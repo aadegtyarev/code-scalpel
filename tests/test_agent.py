@@ -1169,6 +1169,36 @@ async def test_code_with_retry_stops_at_max_attempts(project: Path) -> None:
     assert len(pytest_calls) == 3
 
 
+@pytest.mark.asyncio
+async def test_verify_task_test_command_lenient_on_uncollectable(project: Path) -> None:
+    """Per-task test_command, чей selector ещё не написан (pytest exit 5)
+    или тест-файла нет (exit 4 not found), НЕ валит задачу — это инверсия
+    порядка плана (план кладёт тесты в позднюю задачу, а impl-задачи уже
+    верифицируют `::test_add_note`), не баг кода. Реальный провал (exit 1)
+    валит. Причина max_failures на T003/T004 при зелёном suite'е."""
+    from code_scalpel.tools.shell import ShellResult
+    from tests.mocks import MockShellRunner
+
+    async def _verify(res: ShellResult, cmd: str = "pytest a::b") -> bool:
+        agent = StepAgent(
+            llm=MockLLMAdapter(["x"]),
+            cwd=project,
+            config=_retry_config(),
+            shell_runner=MockShellRunner([res]),
+        )
+        return await agent._verify_task_test_command(cmd)
+
+    assert await _verify(ShellResult("no tests ran", 5)) is True
+    assert (
+        await _verify(
+            ShellResult("ERROR: file or directory not found: tests/x.py", 4), "pytest tests/x.py"
+        )
+        is True
+    )
+    assert await _verify(ShellResult("1 failed, 0 passed", 1)) is False
+    assert await _verify(ShellResult("1 passed", 0)) is True
+
+
 def test_tests_failed_prompt_reconciles_test_and_code() -> None:
     """retry/tests_failed.md: красный тест = тест и код расходятся,
     решать по ТРЕБОВАНИЮ, кто неправ — чинить можно любую сторону.

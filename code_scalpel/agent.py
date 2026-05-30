@@ -1519,7 +1519,19 @@ class StepAgent:
             shell_exec_timeout=self._config.agent.shell_exec_timeout,
             sandbox=self._config.agent.sandbox,
         )
-        return result.ok
+        if result.ok:
+            return True
+        # Не-ноль ≠ всегда провал кода. План сплошь кладёт в impl-задачи
+        # test_command вида `pytest …::test_add_note`, а сами тесты
+        # пишет в поздней задаче — на момент верификации T003 selector
+        # не собирается (pytest exit 5) или тест-файла ещё нет (exit 4
+        # «not found»). Это инверсия порядка, не баг кода: полный прогон
+        # в code_with_retry уже установил состояние suite'а. Валим
+        # задачу только на НАСТОЯЩЕМ провале теста (exit 1).
+        out = result.output.lower()
+        if "exit code: 5" in out:
+            return True
+        return "exit code: 4" in out and ("not found" in out or "no tests ran" in out)
 
     async def _run_plan_shell(self, command: str) -> tuple[str, bool]:
         """Run a plan-owned shell command (`git init`, `git commit`, etc.).
