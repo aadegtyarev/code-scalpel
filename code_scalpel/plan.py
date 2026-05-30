@@ -141,11 +141,13 @@ def serialize_tasks(tasks: tuple[Task, ...], original_text: str) -> str:
 # files-only-for-this-task, null vs "manual") live in `mode_plan.md`.
 PLAN_JSON_SCHEMA: dict[str, object] = {
     "type": "object",
+    "additionalProperties": False,
     "properties": {
         "tasks": {
             "type": "array",
             "items": {
                 "type": "object",
+                "additionalProperties": False,
                 "properties": {
                     "id": {"type": "string"},
                     "title": {"type": "string"},

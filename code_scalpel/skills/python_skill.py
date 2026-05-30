@@ -43,11 +43,15 @@ class PythonSkill(Skill):
         return ["ruff", "check", "."]
 
     def lint_file_cmd(self, path: Path) -> list[str] | None:
+        # E9 = syntax/runtime errors (SyntaxError, undefined names via pyflakes
+        # overlap); F = pyflakes (unused imports, undefined names, etc.).
+        # Deliberately excludes E1-E5 style rules (line length, whitespace) —
+        # those are fixable by formatter, not actionable mid-task for the model.
         return [
             "ruff",
             "check",
             "--select",
-            "E,F",
+            "E9,F",
             "--no-fix",
             "--output-format=concise",
             str(path),
