@@ -134,6 +134,7 @@ class ProbeDaemon:
             max_tokens=reconcile_output_cap(
                 self.config.agent.max_output_tokens, profile.context_tokens
             ),
+            use_completion_tokens=profile.provider == "openai",
         )
         self.logging_adapter = LoggingLLMAdapter(base_llm, self.paths.chat_jsonl)
 
