@@ -751,6 +751,8 @@ async def test_code_mode_addendum_has_self_contained_rule(project: Path) -> None
     # Runnable-CLI rule: точка входа, не только функции (acceptance-true).
     assert "__main__" in system
     assert "Runnable" in system
+    # Test-isolation rule: тесты не делят persistent state (assert 8==0).
+    assert "Isolate test state" in system
 
 
 @pytest.mark.asyncio
