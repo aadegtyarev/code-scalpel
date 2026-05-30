@@ -1,0 +1,41 @@
+{
+  "scenario": "notes_cli",
+  "pass_score": 5,
+  "pass_max": 8,
+  "criteria": {
+    "package": {
+      "passed": true,
+      "detail": "2 непустых .py-файла(ов) с исходным кодом"
+    },
+    "four_commands": {
+      "passed": true,
+      "detail": "все 4 команды упомянуты"
+    },
+    "json_storage": {
+      "passed": true,
+      "detail": "json-сериализация + .json-хранилище найдены"
+    },
+    "tests_present": {
+      "passed": true,
+      "detail": "2 тест-файл(ов)"
+    },
+    "docs": {
+      "passed": true,
+      "detail": "README найден (README.md)"
+    },
+    "installable": {
+      "passed": false,
+      "detail": "editable/requirements install не прошёл: o/latest/config/build/\n      \n      As an example, if you intend to ship a directory named `foo` that resides within a `src` directory located at the root of your project, you can define the following:\n      \n      [tool.hatch.build.targets.wheel]\n      packages = [\"src/foo\"]\n      [end of output]\n  \n  note: This error originates from a subprocess, and is likely not a problem with pip.\nerror: metadata-generation-failed\n\n× Encountered error while generating package metadata.\n╰─> See above for output.\n\nnote: This is an issue with the package mentioned above, not pip.\nhint: See above for details."
+    },
+    "tests_pass": {
+      "passed": false,
+      "detail": "pytest упал (rc=2): find_and_load\n    ???\n<frozen importlib._bootstrap>:1331: in _find_and_load_unlocked\n    ???\n<frozen importlib._bootstrap>:935: in _load_unlocked\n    ???\n.check-venv/lib/python3.12/site-packages/_pytest/assertion/rewrite.py:197: in exec_module\n    exec(co, module.__dict__)\ntests/test_cli.py:5: in <module>\n    from cli import main\nE     File \"/tmp/claude-1000/probe-check-eskv92s7/proj/cli.py\", line 13\nE       print(\"Использование: python cli.py add \\\"Заметка\\\"\")\")\nE                                                            ^\nE   SyntaxError: unterminated string literal (detected at line 13)\n=========================== short test summary info ============================\nERROR tests/test_cli.py\n!!!!!!!!!!!!!!!!!!!! Interrupted: 1 error during collection !!!!!!!!!!!!!!!!!!!!\n1 error in 0.16s"
+    },
+    "acceptance": {
+      "passed": false,
+      "detail": "точка входа есть, но add/list не сработали (1 кандидат(ов))"
+    }
+  },
+  "ended_reason": "user_gave_up",
+  "mechanical_solved": false
+}

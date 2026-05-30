@@ -1,0 +1,37 @@
+{
+  "scenario": "notes_cli",
+  "pass_score": 0,
+  "pass_max": 7,
+  "criteria": {
+    "package": {
+      "passed": false,
+      "detail": "0 непустых .py-файла(ов) с исходным кодом"
+    },
+    "four_commands": {
+      "passed": false,
+      "detail": "нет упоминания: ['add', 'list', 'search', 'delete']"
+    },
+    "json_storage": {
+      "passed": false,
+      "detail": "json.dump/load=False, .json-путь=False"
+    },
+    "tests_present": {
+      "passed": false,
+      "detail": "тест-файлов не найдено (tests/ exists=True)"
+    },
+    "docs": {
+      "passed": false,
+      "detail": "ни README, ни докстрингов"
+    },
+    "installable": {
+      "passed": false,
+      "detail": "editable/requirements install не прошёл: o/latest/config/build/\n      \n      As an example, if you intend to ship a directory named `foo` that resides within a `src` directory located at the root of your project, you can define the following:\n      \n      [tool.hatch.build.targets.wheel]\n      packages = [\"src/foo\"]\n      [end of output]\n  \n  note: This error originates from a subprocess, and is likely not a problem with pip.\nerror: metadata-generation-failed\n\n× Encountered error while generating package metadata.\n╰─> See above for output.\n\nnote: This is an issue with the package mentioned above, not pip.\nhint: See above for details."
+    },
+    "tests_pass": {
+      "passed": false,
+      "detail": "pytest упал (rc=5): no tests ran in 0.00s"
+    }
+  },
+  "ended_reason": "user_gave_up",
+  "mechanical_solved": false
+}

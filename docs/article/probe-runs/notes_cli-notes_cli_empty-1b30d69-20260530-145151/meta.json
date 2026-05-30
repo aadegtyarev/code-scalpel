@@ -1,0 +1,19 @@
+{
+  "run_id": "notes_cli-notes_cli_empty-1b30d69-20260530-145151",
+  "scenario": "notes_cli",
+  "project": "notes_cli_empty",
+  "version_tag": "main_1b30d69",
+  "git_sha": "1b30d69a18d50fe7037d4cdcfdff2fe5eac1c20a",
+  "git_dirty": true,
+  "git_commit_url": "https://github.com/aadegtyarev/code-scalpel/commit/1b30d69a18d50fe7037d4cdcfdff2fe5eac1c20a",
+  "git_checkout_cmd": "git checkout 1b30d69a18d50fe7037d4cdcfdff2fe5eac1c20a",
+  "model_name_expected": "qwen/qwen2.5-coder-14b",
+  "model_name_actual": "qwen/qwen2.5-coder-14b",
+  "model_base_url": "http://192.168.2.105:1234/v1",
+  "upstream_model": null,
+  "started_at": "2026-05-30T14:51:51Z",
+  "ended_at": "2026-05-30T14:53:55Z",
+  "ended_reason": "user_gave_up",
+  "user_role": "claude-acting-as-user-per-tone-of-voice.md",
+  "command": "probe start notes_cli notes_cli_empty"
+}

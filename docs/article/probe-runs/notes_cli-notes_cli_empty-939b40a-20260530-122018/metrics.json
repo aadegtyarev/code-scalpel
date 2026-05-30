@@ -1,12 +1,18 @@
 {
-  "user_turns": 0,
-  "agent_llm_requests": 0,
-  "prompt_tokens_total": 0,
-  "completion_tokens_total": 0,
-  "prompt_tokens_peak": 0,
-  "tool_calls_total": 0,
-  "tool_calls_by_name": {},
+  "user_turns": 1,
+  "agent_llm_requests": 20,
+  "prompt_tokens_total": 155399,
+  "completion_tokens_total": 3726,
+  "prompt_tokens_peak": 11031,
+  "tool_calls_total": 15,
+  "tool_calls_by_name": {
+    "annotate_plan": 2,
+    "write_file": 7,
+    "shell_exec": 1,
+    "auto_load_skill": 1,
+    "read_file": 4
+  },
   "retries": 0,
   "commits_landed": 0,
-  "wall_time_sec": 0.0
+  "wall_time_sec": 3844.64
 }
