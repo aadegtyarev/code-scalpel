@@ -87,6 +87,67 @@ async def test_openai_adapter_chat() -> None:
 
 
 @pytest.mark.asyncio
+async def test_openai_adapter_raises_on_empty_completion() -> None:
+    """Ответ без content и без tool_calls → EmptyCompletionError, а не
+    молчаливый content=''. Это защита от деградации/зависания сервера:
+    раньше пустой ответ тихо превращался в пустой план."""
+    from code_scalpel.llm.adapter import EmptyCompletionError
+
+    mock_message = MagicMock()
+    mock_message.content = None
+    mock_message.tool_calls = None
+    mock_choice = MagicMock()
+    mock_choice.message = mock_message
+    mock_completion = MagicMock()
+    mock_completion.choices = [mock_choice]
+    mock_completion.usage = None
+
+    with patch("code_scalpel.llm.adapter.AsyncOpenAI") as mock_cls:
+        mock_client = MagicMock()
+        mock_client.chat.completions.create = AsyncMock(return_value=mock_completion)
+        mock_cls.return_value = mock_client
+        adapter = OpenAICompatibleAdapter(base_url="x", api_key="k", model="m")
+        with pytest.raises(EmptyCompletionError):
+            await adapter.chat([{"role": "user", "content": "hi"}])
+
+
+@pytest.mark.asyncio
+async def test_openai_adapter_passes_max_tokens() -> None:
+    """max_tokens (runaway-кап) уходит в запрос — модель физически не
+    может генерить вечно."""
+    mock_message = MagicMock()
+    mock_message.content = "ok"
+    mock_message.tool_calls = None
+    mock_choice = MagicMock()
+    mock_choice.message = mock_message
+    mock_completion = MagicMock()
+    mock_completion.choices = [mock_choice]
+    mock_completion.usage = None
+
+    with patch("code_scalpel.llm.adapter.AsyncOpenAI") as mock_cls:
+        mock_client = MagicMock()
+        mock_client.chat.completions.create = AsyncMock(return_value=mock_completion)
+        mock_cls.return_value = mock_client
+        adapter = OpenAICompatibleAdapter(base_url="x", api_key="k", model="m", max_tokens=1234)
+        await adapter.chat([{"role": "user", "content": "hi"}])
+        kwargs = mock_client.chat.completions.create.call_args.kwargs
+        assert kwargs["max_tokens"] == 1234
+
+
+def test_reconcile_output_cap() -> None:
+    from code_scalpel.config import reconcile_output_cap
+
+    # окно неизвестно → абсолютный кап
+    assert reconcile_output_cap(8192, None) == 8192
+    # выход не больше половины окна
+    assert reconcile_output_cap(8192, 8000) == 4000
+    # большое окно → абсолютный кап (ceiling)
+    assert reconcile_output_cap(8192, 100000) == 8192
+    # битое окно → абсолютный кап
+    assert reconcile_output_cap(8192, 0) == 8192
+
+
+@pytest.mark.asyncio
 async def test_openai_adapter_stream() -> None:
     def make_chunk(content: str | None) -> MagicMock:
         chunk = MagicMock()

@@ -1,0 +1,14 @@
+[
+    {
+        "id": 1,
+        "content": "Test note 1"
+    },
+    {
+        "id": 2,
+        "content": "Another test note"
+    },
+    {
+        "id": 3,
+        "content": "Irrelevant note"
+    }
+]

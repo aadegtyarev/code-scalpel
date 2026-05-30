@@ -1178,6 +1178,15 @@ class StepAgent:
 
         outcomes: list[TaskOutcome] = []
         consecutive_failures = 0
+        # Skips отдельно от failures: skip почти всегда безвреден —
+        # модель строит холистически (все команды в одном notes.py за
+        # T002-T003), и поздние «реализуй list/delete» задачи становятся
+        # no-op'ами. Считать их как failure → max_failures убивает прогон
+        # до завершения плана (наблюдалось: T004 skip + T005 fail = abort
+        # до зелёного suite'а). Порог для skip мягче — ловим только
+        # тотальный giveup (модель не делает ничего подряд).
+        consecutive_skips = 0
+        skip_giveup_threshold = stop_after_failures + 2
         # Mutable list so we can flip individual tasks done without
         # rebuilding the tuple every iteration.
         live_tasks: list[Task] = list(tasks)
@@ -1458,22 +1467,23 @@ class StepAgent:
                 _atomic_write(tasks_path, new_text)
                 initial_hash = _hash_text(new_text)
                 consecutive_failures = 0
+                consecutive_skips = 0
             elif outcome.status == "failed":
+                # Реальный провал (модель пробовала и сломала) — строгий
+                # порог. Failed рвёт skip-streak: была активность.
                 consecutive_failures += 1
+                consecutive_skips = 0
                 if consecutive_failures >= stop_after_failures:
                     stopped_reason = "max_failures"
                     break
             else:
-                # "skipped" — model produced no patch and no write_file
-                # for this task. Single skip moves on: a common pattern
-                # is T001 "analyze the structure" (no action) followed by
-                # T002+ with real Files. Halting on T001 left every
-                # historical-series run stranded at L3 — see article
-                # ch. 36/37. We still stop if `stop_after_failures`
-                # consecutive tasks didn't finish; that catches the
-                # "model giving up across the board" case.
-                consecutive_failures += 1
-                if consecutive_failures >= stop_after_failures:
+                # "skipped" — модель не тронула workspace для задачи.
+                # Чаще всего работа уже сделана в ранней задаче (модель
+                # строит холистически) — это НЕ провал, не считаем к
+                # max_failures. Мягкий отдельный порог ловит только
+                # тотальный giveup (ничего не делает подряд).
+                consecutive_skips += 1
+                if consecutive_skips >= skip_giveup_threshold:
                     stopped_reason = "task_not_done"
                     break
 
@@ -1519,7 +1529,19 @@ class StepAgent:
             shell_exec_timeout=self._config.agent.shell_exec_timeout,
             sandbox=self._config.agent.sandbox,
         )
-        return result.ok
+        if result.ok:
+            return True
+        # Не-ноль ≠ всегда провал кода. План сплошь кладёт в impl-задачи
+        # test_command вида `pytest …::test_add_note`, а сами тесты
+        # пишет в поздней задаче — на момент верификации T003 selector
+        # не собирается (pytest exit 5) или тест-файла ещё нет (exit 4
+        # «not found»). Это инверсия порядка, не баг кода: полный прогон
+        # в code_with_retry уже установил состояние suite'а. Валим
+        # задачу только на НАСТОЯЩЕМ провале теста (exit 1).
+        out = result.output.lower()
+        if "exit code: 5" in out:
+            return True
+        return "exit code: 4" in out and ("not found" in out or "no tests ran" in out)
 
     async def _run_plan_shell(self, command: str) -> tuple[str, bool]:
         """Run a plan-owned shell command (`git init`, `git commit`, etc.).

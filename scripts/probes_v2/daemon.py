@@ -25,7 +25,7 @@ from pathlib import Path
 from typing import Any
 
 from code_scalpel.agent import ToolExecuted
-from code_scalpel.config import ModelProfile, load_config
+from code_scalpel.config import ModelProfile, load_config, reconcile_output_cap
 from code_scalpel.runtime import Runtime
 from code_scalpel.tools.agent_tools import ToolCall, ToolResult
 from scripts.probes_v2.ipc import send_response, serve_request
@@ -131,6 +131,9 @@ class ProbeDaemon:
             model=profile.model,
             timeout=float(self.config.agent.llm_timeout),
             cost_per_1k=profile.cost_per_1k,
+            max_tokens=reconcile_output_cap(
+                self.config.agent.max_output_tokens, profile.context_tokens
+            ),
         )
         self.logging_adapter = LoggingLLMAdapter(base_llm, self.paths.chat_jsonl)
 
