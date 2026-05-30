@@ -748,6 +748,9 @@ async def test_code_mode_addendum_has_self_contained_rule(project: Path) -> None
     assert "CODE mode" in system
     assert "Self-contained" in system
     assert "--cov" in system
+    # Runnable-CLI rule: точка входа, не только функции (acceptance-true).
+    assert "__main__" in system
+    assert "Runnable" in system
 
 
 @pytest.mark.asyncio

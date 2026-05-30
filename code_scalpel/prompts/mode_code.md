@@ -86,3 +86,15 @@ on a clean machine. Never declare tooling you don't also install:
   runs on a clean checkout.
 - The package directory must match the project `name` in pyproject so
   the wheel builds (`name = "notes"` → package dir `notes/`).
+
+Runnable, not just functions — if the task is a CLI / app / tool, it
+must actually RUN, not only expose functions a test imports:
+- A CLI needs a real entry point: an `if __name__ == "__main__":` block
+  (or a `[project.scripts]` console entry) that parses argv with
+  `argparse` and dispatches the sub-commands. `def add(text): ...`
+  alone is NOT a CLI — `python notes.py add "x"` must actually add a
+  note. Wire the commands the user asked for (add / list / search /
+  delete) to the command line, not just to your test file.
+- Sanity-check it the way the user will: `python <entry> add "hello"`
+  then `python <entry> list` should show it. If nothing happens, you
+  built a library, not the CLI that was requested.
