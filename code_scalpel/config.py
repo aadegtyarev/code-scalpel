@@ -21,6 +21,12 @@ _PROVIDER_BASE_URLS: dict[str, str] = {
 
 class AgentConfig(BaseModel):
     llm_timeout: int = 120
+    # Hard cap on tokens the model may generate per call. Protects against
+    # runaway generation: a weak local model can loop and emit tokens
+    # forever — the request timeout doesn't fire while tokens keep
+    # flowing, so a token cap is the real stop. 8192 fits a plan or a
+    # patch for a small file with room to spare; raise for big rewrites.
+    max_output_tokens: int = 8192
     test_timeout: int = 60
     git_timeout: int = 10
     max_files: int = 3
@@ -515,6 +521,20 @@ async def resolve_model_name(profile: ModelProfile) -> str:
         return profile.model
     detected = await autodetect_model_name(profile)
     return detected if detected else profile.model
+
+
+def reconcile_output_cap(max_output_tokens: int, context_tokens: int | None) -> int:
+    """Согласовать кап генерации с контекстным бюджетом.
+
+    Выход не должен превышать половину окна — вторая половина под
+    промпт + историю (держит ход под warn-порогом 0.70). Если окно
+    неизвестно — отдаём абсолютный кап (он всё равно ловит runaway-
+    генерацию). Это защита от «вечной генерации»: пока токены текут,
+    request-таймаут не срабатывает, а token-кап — срабатывает.
+    """
+    if context_tokens is None or context_tokens <= 0:
+        return max_output_tokens
+    return min(max_output_tokens, context_tokens // 2)
 
 
 async def resolve_context_tokens(profile: ModelProfile) -> int:

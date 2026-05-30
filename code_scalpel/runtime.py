@@ -21,7 +21,7 @@ from collections.abc import AsyncIterator
 from pathlib import Path
 
 from code_scalpel.agent import StepAgent, StepResult, StreamItem
-from code_scalpel.config import AppConfig
+from code_scalpel.config import AppConfig, reconcile_output_cap
 from code_scalpel.fork import (
     ChoiceUIHook,
     ForkOption,
@@ -81,6 +81,9 @@ class Runtime:
                 model=profile.model,
                 timeout=float(config.agent.llm_timeout),
                 cost_per_1k=profile.cost_per_1k,
+                max_tokens=reconcile_output_cap(
+                    config.agent.max_output_tokens, profile.context_tokens
+                ),
             )
         self.llm = llm
         self.memory: MemoryStore | None = MemoryStore(root=cwd) if with_memory else None

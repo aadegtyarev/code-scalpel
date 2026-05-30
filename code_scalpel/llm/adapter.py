@@ -8,6 +8,14 @@ from openai import AsyncOpenAI, AsyncStream
 from openai.types.chat import ChatCompletion, ChatCompletionChunk
 
 
+class EmptyCompletionError(RuntimeError):
+    """Модель вернула пустой ответ — ни текста, ни tool-call'а. Почти
+    всегда инфраструктура, не «модель так решила»: сервер деградировал,
+    модель вытеснена из VRAM, или request оборвался по таймауту (на
+    слабом железе генерация может зависнуть). Поднимаем громко, чтобы
+    probe/TUI показали явную ошибку, а не молча получили пустой план."""
+
+
 @dataclass(frozen=True)
 class NativeToolCall:
     """A tool call emitted by the model through the function-calling API."""
@@ -75,6 +83,7 @@ class OpenAICompatibleAdapter:
         model: str,
         timeout: float = 120.0,
         cost_per_1k: dict[str, float] | None = None,
+        max_tokens: int | None = None,
     ) -> None:
         self._client = AsyncOpenAI(
             base_url=base_url,
@@ -83,6 +92,10 @@ class OpenAICompatibleAdapter:
         )
         self._model = model
         self._cost_per_1k = cost_per_1k
+        # Hard cap on generated tokens — runaway-generation protection.
+        # See config.reconcile_output_cap (согласовано с контекстным
+        # бюджетом). None → провайдерский дефолт (без капа).
+        self._max_tokens = max_tokens
 
     def set_model(self, model: str) -> None:
         """Swap the model id used for subsequent requests. Called by the TUI
@@ -100,6 +113,8 @@ class OpenAICompatibleAdapter:
         params: dict[str, Any] = dict(kwargs)
         if tools:
             params["tools"] = tools
+        if self._max_tokens is not None:
+            params.setdefault("max_tokens", self._max_tokens)
         response = cast(
             ChatCompletion,
             await self._client.chat.completions.create(
@@ -109,6 +124,10 @@ class OpenAICompatibleAdapter:
                 **params,
             ),
         )
+        if not response.choices:
+            raise EmptyCompletionError(
+                "LLM вернула ответ без choices — сервер недоступен / перегружен"
+            )
         msg = response.choices[0].message
         tool_calls: list[NativeToolCall] = []
         if msg.tool_calls:
@@ -123,9 +142,16 @@ class OpenAICompatibleAdapter:
                         arguments=fn.arguments or "{}",
                     )
                 )
+        content = msg.content or ""
+        if not content and not tool_calls:
+            raise EmptyCompletionError(
+                "LLM вернула пустой ответ (ни текста, ни tool-call'а). "
+                "Вероятно сервер деградировал / модель вытеснена из VRAM / "
+                "генерация зависла по таймауту."
+            )
         usage = response.usage
         return ChatResponse(
-            content=msg.content or "",
+            content=content,
             prompt_tokens=usage.prompt_tokens if usage else 0,
             completion_tokens=usage.completion_tokens if usage else 0,
             cost=self._calc_cost(usage),
@@ -142,6 +168,8 @@ class OpenAICompatibleAdapter:
         params: dict[str, Any] = dict(kwargs)
         if tools:
             params["tools"] = tools
+        if self._max_tokens is not None:
+            params.setdefault("max_tokens", self._max_tokens)
         # Ask for a final usage chunk so the caller can stop estimating tokens
         # from char counts. LM Studio honours stream_options; OpenAI does too.
         params.setdefault("stream_options", {"include_usage": True})
@@ -158,6 +186,7 @@ class OpenAICompatibleAdapter:
         # arguments come incrementally).
         buf: dict[int, dict[str, str]] = {}
         usage_chunk: StreamUsage | None = None
+        produced = False  # any text delta or tool call seen — для empty-guard
         async for chunk in response:
             # The usage chunk arrives with empty choices; pick it up before
             # the early-continue below.
@@ -171,8 +200,10 @@ class OpenAICompatibleAdapter:
                 continue
             delta = chunk.choices[0].delta
             if delta.content:
+                produced = True
                 yield StreamChunk(text=delta.content)
             if delta.tool_calls:
+                produced = True
                 for tc in delta.tool_calls:
                     idx = tc.index
                     slot = buf.setdefault(idx, {"id": "", "name": "", "args": ""})
@@ -195,6 +226,11 @@ class OpenAICompatibleAdapter:
                 )
         if usage_chunk is not None:
             yield StreamChunk(usage=usage_chunk)
+        if not produced:
+            raise EmptyCompletionError(
+                "LLM-стрим не выдал ничего (ни текста, ни tool-call'а). "
+                "Вероятно сервер деградировал / генерация зависла."
+            )
 
     def _calc_cost(self, usage: Any) -> float | None:
         if usage is None:
