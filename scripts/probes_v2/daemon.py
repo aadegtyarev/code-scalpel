@@ -165,6 +165,8 @@ class ProbeDaemon:
 
         runtime = self._build_runtime_compat(upstream_profile=upstream_profile)
         self.runtime = runtime
+        if detected_ctx:
+            runtime.agent.set_context_limit(detected_ctx)
 
     def _build_runtime_compat(self, *, upstream_profile: Any) -> Runtime:
         """Пытаемся построить Runtime с современным набором

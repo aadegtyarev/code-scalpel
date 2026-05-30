@@ -128,12 +128,11 @@ class Runtime:
         work with the same real window size instead of a None-fallback.
         """
         profile = self.config.current_profile
-        if profile.context_tokens is not None:
-            return
-        detected = await autodetect_context_tokens(profile)
+        detected = profile.context_tokens or await autodetect_context_tokens(profile)
         if detected:
             cap = reconcile_output_cap(self.config.agent.max_output_tokens, detected)
             self.llm.set_max_tokens(cap)
+            self.agent.set_context_limit(detected)
 
     async def stream(
         self,

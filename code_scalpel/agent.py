@@ -797,6 +797,10 @@ class StepAgent:
         # task transitions so a crash resumes near where we stopped.
         # Headless callers leave it None — saves become no-ops.
         self._state = state
+        # Context window size for the sliding-window guard. Set by
+        # Runtime.resolve_context() after autodetect; _state.context_limit
+        # is used as a fallback so the TUI path works without an extra call.
+        self._context_limit: int = 0
 
     @property
     def history(self) -> list[dict[str, Any]]:
@@ -805,6 +809,11 @@ class StepAgent:
     def clear_history(self) -> None:
         self._history.clear()
         self._read_files_history.clear()
+
+    def set_context_limit(self, tokens: int) -> None:
+        """Set the known context window size. Called by Runtime.resolve_context()
+        after autodetect so the sliding-window guard works in headless mode too."""
+        self._context_limit = tokens
 
     def slide_history_window(self, keep_turns: int) -> int:
         """Drop oldest turns from history keeping only the last `keep_turns`
@@ -1788,6 +1797,17 @@ class StepAgent:
         will just run without commits.
         """
         if (self._cwd / ".git").exists():
+            # Repo exists — still ensure .venv/ is gitignored so the model
+            # doesn't accidentally commit it. Append only when missing.
+            gitignore = self._cwd / ".gitignore"
+            with suppress(OSError):
+                existing = gitignore.read_text() if gitignore.exists() else ""
+                if ".venv" not in existing:
+                    with gitignore.open("a") as f:
+                        f.write(
+                            ("\n" if existing and not existing.endswith("\n") else "")
+                            + ".venv/\n__pycache__/\n*.pyc\n.pytest_cache/\n"
+                        )
             return
         await self._run_plan_shell("git init -q")
         # Best-effort author so the very first commit doesn't blow up on
@@ -2861,7 +2881,9 @@ class StepAgent:
             )
             slide_turns = self._config.agent.context_slide_turns
             if slide_turns > 0:
-                ctx_limit = getattr(self._state, "context_limit", 0) if self._state else 0
+                ctx_limit = self._context_limit or (
+                    getattr(self._state, "context_limit", 0) if self._state else 0
+                )
                 if ctx_limit > 0:
                     pct = prompt_total / ctx_limit
                     if pct >= self._config.agent.context_budget_critical:
