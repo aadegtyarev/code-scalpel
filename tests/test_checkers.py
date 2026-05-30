@@ -59,6 +59,29 @@ def _working_notes_tree(tree: Path) -> None:
             data = _load()
             del data[i]
             json.dump(data, STORE.open("w"))
+
+        def main():
+            import argparse
+            p = argparse.ArgumentParser()
+            sub = p.add_subparsers(dest="cmd")
+            a = sub.add_parser("add"); a.add_argument("text")
+            sub.add_parser("list")
+            s = sub.add_parser("search"); s.add_argument("q")
+            d = sub.add_parser("delete"); d.add_argument("i", type=int)
+            args = p.parse_args()
+            if args.cmd == "add":
+                add(args.text)
+            elif args.cmd == "list":
+                for n in list():
+                    print(n)
+            elif args.cmd == "search":
+                for n in search(args.q):
+                    print(n)
+            elif args.cmd == "delete":
+                delete(args.i)
+
+        if __name__ == "__main__":
+            main()
         """,
     )
     _write(tree, "notes/__init__.py", "")
@@ -190,6 +213,57 @@ def test_structural_only_is_not_solved(tmp_path: Path) -> None:
     _working_notes_tree(tmp_path)
     res = check_notes_cli(tmp_path, run_tests=False)
     assert res.solved is False
+
+
+# ── acceptance: CLI реально запускается ──────────────────────────
+
+
+def test_acceptance_fails_without_cli_entry(tmp_path: Path) -> None:
+    """Функции add/list/… есть, но нет __main__/argparse → не CLI.
+    Ловит ложный solved (acbe16d: `python notes.py add x` ничего не
+    делал, а solved был True по тестам модели)."""
+    from scripts.probes_v2.checkers import check_cli_acceptance
+
+    _write(
+        tmp_path,
+        "notes.py",
+        "import json\ndef add(t): json.dump([t], open('s.json','w'))\ndef list(): ...\n",
+    )
+    res = check_cli_acceptance(tmp_path)
+    assert not res.passed
+    assert "точк" in res.detail.lower()
+
+
+def test_acceptance_passes_on_working_cli(tmp_path: Path) -> None:
+    """Реальный argparse-CLI: add→list через `python notes.py` → pass."""
+    from scripts.probes_v2.checkers import check_cli_acceptance
+
+    _write(
+        tmp_path,
+        "notes.py",
+        "import sys, json, argparse\n"
+        "STORE='storage.json'\n"
+        "def _load():\n"
+        "    try: return json.load(open(STORE))\n"
+        "    except FileNotFoundError: return []\n"
+        "def main():\n"
+        "    p=argparse.ArgumentParser(); sub=p.add_subparsers(dest='cmd')\n"
+        "    a=sub.add_parser('add'); a.add_argument('text')\n"
+        "    sub.add_parser('list')\n"
+        "    args=p.parse_args(); n=_load()\n"
+        "    if args.cmd=='add': n.append(args.text); json.dump(n, open(STORE,'w'))\n"
+        "    elif args.cmd=='list':\n"
+        "        [print(x) for x in n]\n"
+        "if __name__=='__main__': main()\n",
+    )
+    res = check_cli_acceptance(tmp_path)
+    assert res.passed, res.detail
+
+
+def test_acceptance_is_gating(tmp_path: Path) -> None:
+    """acceptance входит в gating: рабочий код+тесты без CLI ≠ solved."""
+    res = check_notes_cli(tmp_path, run_tests=False)
+    assert "acceptance" in res.gating
 
 
 # ── реестр ───────────────────────────────────────────────────────
