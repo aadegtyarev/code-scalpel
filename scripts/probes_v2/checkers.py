@@ -189,6 +189,78 @@ def _has_tests(tree: Path) -> Criterion:
     )
 
 
+_ACC_TOKEN = "ACC_PROBE_NOTE_7Q2"
+
+
+def _find_cli_launchers(tree: Path) -> list[list[str]]:
+    """Способы запустить проект КАК CLI, drift-устойчиво к имени/структуре.
+    `python -m <pkg>` для пакетов с `__main__.py`; `python <file>` для
+    модулей с реальной точкой входа (`__main__` + argparse/sys.argv/
+    click/typer). Модуль без точки входа сюда НЕ попадёт — это и ловит
+    «функции есть, а CLI нет»."""
+    launchers: list[list[str]] = []
+    for main in tree.rglob("__main__.py"):
+        if {"tests", "__pycache__"} & set(main.parts):
+            continue
+        mod = ".".join(main.parent.relative_to(tree).parts)
+        if mod:
+            launchers.append([sys.executable, "-m", mod])
+    entry_re = re.compile(r"__main__|argparse|sys\.argv|\bclick\b|\btyper\b")
+    for py in _source_py_files(tree):
+        text = py.read_text("utf-8", "replace")
+        if "__main__" in text and entry_re.search(text):
+            launchers.append([sys.executable, str(py.relative_to(tree))])
+    return launchers
+
+
+def _json_storage_has(tree: Path, token: str) -> bool:
+    for j in tree.rglob("*.json"):
+        if "__pycache__" in j.parts:
+            continue
+        try:
+            if token in j.read_text("utf-8", "replace"):
+                return True
+        except OSError:
+            continue
+    return False
+
+
+def check_cli_acceptance(tree: Path) -> Criterion:
+    """Авторитетный поведенческий гейт: запускается ли проект КАК CLI
+    и реально добавляет/показывает заметку. Независим от тестов модели
+    (те циркулярны — модель проверяет сама себя). Ловит ложный solved,
+    где `add/list/search/delete` есть функциями + зелёные тесты, но
+    `python notes.py add x` не делает ничего (нет argparse-точки входа).
+    Контракт интерфейса задаёт сценарий: субкоманды add/list/…, текст
+    заметки — позиционный аргумент."""
+    with tempfile.TemporaryDirectory(prefix="probe-acc-") as tmp:
+        work = Path(tmp) / "proj"
+        shutil.copytree(
+            tree,
+            work,
+            ignore=shutil.ignore_patterns(
+                "__pycache__", "*.pyc", ".git", ".venv", "venv", ".pytest_cache", "*.json"
+            ),
+        )
+        launchers = _find_cli_launchers(work)
+        if not launchers:
+            return Criterion(
+                False, "нет точки входа CLI (__main__/argparse) — не запускается как CLI"
+            )
+        for launcher in launchers:
+            rc, _out = _run([*launcher, "add", _ACC_TOKEN], work, 30)
+            added = _json_storage_has(work, _ACC_TOKEN)
+            if rc != 0 and not added:
+                continue
+            _, list_out = _run([*launcher, "list"], work, 30)
+            if _ACC_TOKEN in list_out or added:
+                label = " ".join(launcher[1:]) or launcher[0]
+                return Criterion(True, f"CLI работает: add→list через `{label}`")
+        return Criterion(
+            False, f"точка входа есть, но add/list не сработали ({len(launchers)} кандидат(ов))"
+        )
+
+
 def _run(cmd: list[str], cwd: Path, timeout: int) -> tuple[int, str]:
     """Запуск процесса с таймаутом. Возвращает (returncode, tail-вывод).
     Таймаут/ошибка запуска → returncode 124/127 и текст в выводе."""
@@ -286,16 +358,17 @@ def check_notes_cli(tree: Path, *, run_tests: bool = True) -> CheckResult:
         "tests_present": _has_tests(tree),
         "docs": _has_docs(tree),
     }
-    # Gating = «рабочий проект с документацией»: поведение (tests_pass)
-    # + полнота (4 команды) + хранилище (json) + docs. `tests_pass`
-    # без `run_tests` в criteria нет, и solved останется False:
-    # структурно «похоже», но поведенчески не проверено — честнее, чем
-    # зачесть. `pass_score` — диагностика, не оценка; итог binary.
-    gating = ("four_commands", "json_storage", "docs", "tests_pass")
+    # Gating = «рабочий проект с документацией, который реально
+    # запускается как CLI». `acceptance` — авторитетный поведенческий
+    # гейт (дёргает CLI), независим от тестов модели (циркулярных).
+    # `tests_pass`/`acceptance` без `run_tests` в criteria нет, и solved
+    # останется False — поведение не проверено. pass_score — диагностика.
+    gating = ("four_commands", "json_storage", "docs", "tests_pass", "acceptance")
     if run_tests:
         installable, tests_pass = _install_and_test(tree)
         criteria["installable"] = installable
         criteria["tests_pass"] = tests_pass
+        criteria["acceptance"] = check_cli_acceptance(tree)
     return CheckResult(criteria=criteria, gating=gating)
 
 
