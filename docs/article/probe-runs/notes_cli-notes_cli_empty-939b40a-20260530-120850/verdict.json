@@ -1,0 +1,37 @@
+{
+  "scenario": "notes_cli",
+  "pass_score": 6,
+  "pass_max": 7,
+  "criteria": {
+    "package": {
+      "passed": true,
+      "detail": "3 непустых .py-файла(ов) с исходным кодом"
+    },
+    "four_commands": {
+      "passed": true,
+      "detail": "все 4 команды упомянуты"
+    },
+    "json_storage": {
+      "passed": true,
+      "detail": "json-сериализация + .json-хранилище найдены"
+    },
+    "tests_present": {
+      "passed": true,
+      "detail": "1 тест-файл(ов)"
+    },
+    "docs": {
+      "passed": true,
+      "detail": "README найден (README.md)"
+    },
+    "installable": {
+      "passed": true,
+      "detail": "проект ставится как пакет"
+    },
+    "tests_pass": {
+      "passed": false,
+      "detail": "pytest упал (rc=1): ____________\n\n    def test_delete():\n        storage = JSONStorage('test_notes.json')\n        note = storage.add('Note to delete')\n        storage.delete(note.id)\n        notes = storage.get_all()\n>       assert len(notes) == 0\nE       assert 4 == 0\nE        +  where 4 = len([<notes_cli.note.Note object at 0x7961c4a6c860>, <notes_cli.note.Note object at 0x7961c4a6c3e0>, <notes_cli.note.Note object at 0x7961c4a6c410>, <notes_cli.note.Note object at 0x7961c4a6c560>])\n\ntests/test_notes_cli.py:41: AssertionError\n=========================== short test summary info ============================\nFAILED tests/test_notes_cli.py::test_list - assert 3 == 2\nFAILED tests/test_notes_cli.py::test_search - assert 2 == 1\nFAILED tests/test_notes_cli.py::test_delete - assert 4 == 0\n3 failed, 1 passed in 0.03s"
+    }
+  },
+  "ended_reason": "user_gave_up",
+  "mechanical_solved": false
+}
