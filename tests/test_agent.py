@@ -1169,6 +1169,27 @@ async def test_code_with_retry_stops_at_max_attempts(project: Path) -> None:
     assert len(pytest_calls) == 3
 
 
+def test_tests_failed_prompt_reconciles_test_and_code() -> None:
+    """retry/tests_failed.md: красный тест = тест и код расходятся,
+    решать по ТРЕБОВАНИЮ, кто неправ — чинить можно любую сторону.
+    Балансирует два сбоя: слабая модель только переписывала тест по
+    кругу (test_delete.py 5×); но и слепо доверять model-generated
+    тесту как спеке нельзя — тест это догадка, не авторитет."""
+    from code_scalpel import prompts as _prompts
+
+    text = _prompts.TESTS_FAILED
+    assert "{output}" in text
+    # решаем по требованию, а не рефлекторно доверяя тесту
+    assert "REQUIREMENT" in text
+    # обе стороны чинимы
+    assert "production module" in text
+    assert "fix the TEST" in text
+    # явный контр-луп против наблюдаемого «переписать тот же тест»
+    assert "same content again" in text
+    # старая уводившая формулировка ушла
+    assert "fixes the failing test" not in text
+
+
 @pytest.mark.asyncio
 async def test_code_with_retry_no_progress_guard_breaks_thrash(project: Path) -> None:
     """Модель повторяет ту же правку → no-progress guard: один раз
