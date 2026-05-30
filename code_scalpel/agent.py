@@ -1797,6 +1797,17 @@ class StepAgent:
         will just run without commits.
         """
         if (self._cwd / ".git").exists():
+            # Repo exists — still ensure .venv/ is gitignored so the model
+            # doesn't accidentally commit it. Append only when missing.
+            gitignore = self._cwd / ".gitignore"
+            with suppress(OSError):
+                existing = gitignore.read_text() if gitignore.exists() else ""
+                if ".venv" not in existing:
+                    with gitignore.open("a") as f:
+                        f.write(
+                            ("\n" if existing and not existing.endswith("\n") else "")
+                            + ".venv/\n__pycache__/\n*.pyc\n.pytest_cache/\n"
+                        )
             return
         await self._run_plan_shell("git init -q")
         # Best-effort author so the very first commit doesn't blow up on
