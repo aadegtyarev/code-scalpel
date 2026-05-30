@@ -1,0 +1,41 @@
+{
+  "scenario": "notes_cli",
+  "pass_score": 4,
+  "pass_max": 8,
+  "criteria": {
+    "package": {
+      "passed": true,
+      "detail": "1 непустых .py-файла(ов) с исходным кодом"
+    },
+    "four_commands": {
+      "passed": false,
+      "detail": "нет упоминания: ['search', 'delete']"
+    },
+    "json_storage": {
+      "passed": true,
+      "detail": "json-сериализация + .json-хранилище найдены"
+    },
+    "tests_present": {
+      "passed": true,
+      "detail": "1 тест-файл(ов)"
+    },
+    "docs": {
+      "passed": true,
+      "detail": "README найден (README.md)"
+    },
+    "installable": {
+      "passed": false,
+      "detail": "editable/requirements install не прошёл: o/latest/config/build/\n      \n      As an example, if you intend to ship a directory named `foo` that resides within a `src` directory located at the root of your project, you can define the following:\n      \n      [tool.hatch.build.targets.wheel]\n      packages = [\"src/foo\"]\n      [end of output]\n  \n  note: This error originates from a subprocess, and is likely not a problem with pip.\nerror: metadata-generation-failed\n\n× Encountered error while generating package metadata.\n╰─> See above for output.\n\nnote: This is an issue with the package mentioned above, not pip.\nhint: See above for details."
+    },
+    "tests_pass": {
+      "passed": false,
+      "detail": "pytest упал (rc=2): odule '/tmp/claude-1000/probe-check-67duueqj/proj/tests/test_commands.py'.\nHint: make sure your test modules/packages have valid Python names.\nTraceback:\n/usr/lib/python3.12/importlib/__init__.py:90: in import_module\n    return _bootstrap._gcd_import(name[level:], package, level)\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\ntests/test_commands.py:3: in <module>\n    from notes.commands import add, list_notes, search_notes, delete_note\nE   ImportError: cannot import name 'search_notes' from 'notes.commands' (/tmp/claude-1000/probe-check-67duueqj/proj/notes/commands.py)\n=========================== short test summary info ============================\nERROR tests/test_commands.py\n!!!!!!!!!!!!!!!!!!!! Interrupted: 1 error during collection !!!!!!!!!!!!!!!!!!!!\n1 error in 0.07s"
+    },
+    "acceptance": {
+      "passed": false,
+      "detail": "нет точки входа CLI (__main__/argparse) — не запускается как CLI"
+    }
+  },
+  "ended_reason": "user_gave_up",
+  "mechanical_solved": false
+}

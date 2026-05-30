@@ -1,0 +1,41 @@
+{
+  "scenario": "notes_cli",
+  "pass_score": 6,
+  "pass_max": 8,
+  "criteria": {
+    "package": {
+      "passed": true,
+      "detail": "2 непустых .py-файла(ов) с исходным кодом"
+    },
+    "four_commands": {
+      "passed": true,
+      "detail": "все 4 команды упомянуты"
+    },
+    "json_storage": {
+      "passed": true,
+      "detail": "json-сериализация + .json-хранилище найдены"
+    },
+    "tests_present": {
+      "passed": true,
+      "detail": "1 тест-файл(ов)"
+    },
+    "docs": {
+      "passed": true,
+      "detail": "README найден (README.md)"
+    },
+    "installable": {
+      "passed": true,
+      "detail": "проект ставится как пакет"
+    },
+    "tests_pass": {
+      "passed": false,
+      "detail": "pytest упал (rc=1): note(0)\n        notes = list_notes()\n>       assert len(notes) == 0\n               ^^^^^^^^^^\nE       TypeError: object of type 'NoneType' has no len()\n\ntests/test_notes.py:32: TypeError\n----------------------------- Captured stdout call -----------------------------\nNote added: ToDelete Note\nNote deleted: First Note\n0: First Note\n1: Second Note\n2: Test Note\n3: ToDelete Note\n=========================== short test summary info ============================\nFAILED tests/test_notes.py::test_add_note - TypeError: object of type 'NoneTy...\nFAILED tests/test_notes.py::test_list_notes - TypeError: object of type 'None...\nFAILED tests/test_notes.py::test_search_notes - TypeError: object of type 'No...\nFAILED tests/test_notes.py::test_delete_note - TypeError: object of type 'Non...\n4 failed in 0.02s"
+    },
+    "acceptance": {
+      "passed": false,
+      "detail": "точка входа есть, но add/list не сработали (1 кандидат(ов))"
+    }
+  },
+  "ended_reason": "user_gave_up",
+  "mechanical_solved": false
+}

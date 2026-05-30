@@ -3250,6 +3250,22 @@ notes.py add/list/search` реально работают, тесты зелён
 Открыто: воспроизводимость (N-замер acceptance-true solved-rate);
 усиление acceptance до полного CRUD-цикла.
 
+### N=10 acceptance-true (2026-05-30, sha 9a636ab)
+
+**solved 0/10.** Scores: 7,4,4,6,6,5,3,3,5,7. Честный solved 2c0cb1e
+**не воспроизвёлся** — был удачей sampler'а. Гистограмма:
+- docs 10/10, package 10/10 (надёжно);
+- json 8/10, installable 7/10, four_commands 7/10, tests_present 5/10;
+- **acceptance 2/10** (CLI реально запускается редко);
+- **tests_pass 1/10** (тесты модели зелёные редко).
+
+Два поведенческих гейта (работает + протестировано) берутся по
+~10-20%, их конъюнкция → ~0. Структура строится стабильно, поведение
+— нет. Правила сессии (runnable-CLI / syntax-guard / test-isolation)
+подняли пол и дали единичный честный solved, но не сделали его
+воспроизводимым. Следующее — поднимать именно acceptance/tests_pass
+hit-rate (не структуру), и/или re-litigate модель (gemma-26b?).
+
 Возможные направления для consistency:
 - **a) Усилить prompt в mode_plan.md** — модель часто оставляет
   files/acceptance пустыми (schema их optional). Принудить
