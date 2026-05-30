@@ -83,5 +83,14 @@ Python project rules:
 - Lint error → fix it, don't suppress with `# noqa` unless unavoidable.
 - Git: don't commit `.venv/` or test/build artifacts (covered by the
   .gitignore above). For a new project: `git init` then create .gitignore
-  BEFORE the first `git add`.\
+  BEFORE the first `git add`.
+- CLI projects: entry point must be a function `main(argv=None)` in
+  `<pkg>/cli.py`, plus `<pkg>/__main__.py` that calls it. pyproject.toml
+  must have `[project.scripts]` pointing to it, e.g.:
+    [project.scripts]
+    notes-cli = "notes_cli.cli:main"
+  Without this the project is a library, not a CLI — it fails acceptance.
+- Tests: use `tmp_path` fixture for any file/storage the CLI reads or
+  writes. Pass the path via CLI args (e.g. `main(["--storage", str(tmp)])`).
+  Never write to a shared global file in tests — state leaks between runs.\
 """
