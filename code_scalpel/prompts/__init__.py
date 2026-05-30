@@ -43,6 +43,7 @@ APPLY_FAILED = _load("retry/apply_failed.md")
 TESTS_FAILED = _load("retry/tests_failed.md")
 MISSING_FILES = _load("retry/missing_files.md")
 NEEDS_TESTS = _load("retry/needs_tests.md")
+NO_PROGRESS = _load("retry/no_progress.md")
 READ_BEFORE_SHOW = _load("retry/read_before_show.md")
 FORCE_ANSWER = _load("retry/force_answer.md")
 
@@ -63,6 +64,7 @@ __all__ = [
     "MODE_PLAN",
     "MODE_REVIEW",
     "NEEDS_TESTS",
+    "NO_PROGRESS",
     "PER_STEP_REVIEW",
     "READ_BEFORE_SHOW",
     "SYSTEM",
