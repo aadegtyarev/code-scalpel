@@ -3015,6 +3015,16 @@ class StepAgent:
                 stripped = stripped[:-3]
             stripped = stripped.strip()
         if stripped.startswith("{"):
+            # Guard against duplicate streamed JSON objects (e.g. gpt-5.4-mini
+            # occasionally emits two complete objects back-to-back). Take only
+            # the first complete object — raw_decode stops at the end of it.
+            import json as _json
+
+            try:
+                first_obj, _ = _json.JSONDecoder().raw_decode(stripped)
+                stripped = _json.dumps(first_obj)
+            except (ValueError, KeyError):
+                pass
             tasks = parse_tasks_json(stripped)
             if tasks:
                 try:
