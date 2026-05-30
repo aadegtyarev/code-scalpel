@@ -22,6 +22,15 @@ Reply with **JSON** matching this shape (the runtime sets
 
 Rules:
 - 3-9 tasks total — split big work, but don't over-fragment.
+- **T001 MUST write `README.md` — the project spec, before any code.**
+  It states the project's purpose, EVERY command/feature the user
+  asked for (each with a one-line usage example), and the storage /
+  data format. This README is the contract the rest of the plan
+  implements against — later tasks build the pieces it describes, and
+  the project always ships documentation even if the run stops early.
+  For T001 use `files: ["README.md"]`, `test_command: null`,
+  `acceptance` covering "README lists all requested commands with
+  usage".
 - Each task self-contained: a separate person could pick one up.
 - `files`: only paths THIS task itself creates or modifies. Files
   created by a later task belong to that task — don't list them

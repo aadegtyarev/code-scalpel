@@ -17,7 +17,7 @@ import tempfile
 from pathlib import Path
 
 from code_scalpel.agent import StepAgent
-from code_scalpel.config import AgentConfig, AppConfig, ModelProfile
+from code_scalpel.config import AgentConfig, AppConfig, ModelProfile, ModeTemperatures
 from code_scalpel.llm.adapter import OpenAICompatibleAdapter
 
 _CONFIG = AppConfig(
@@ -25,7 +25,9 @@ _CONFIG = AppConfig(
         "local": ModelProfile(
             provider="lmstudio",
             model="qwen/qwen2.5-coder-14b",
-            temperature=0.2,  # code mode default
+            # 0.2 во всех режимах — эквивалент float-shorthand, но
+            # типизировано (mypy не видит coerce-валидатор).
+            temperature=ModeTemperatures(ask=0.2, plan=0.2, code=0.2, review=0.2, debug=0.2),
             seed=42,
         )
     },

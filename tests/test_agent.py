@@ -728,6 +728,11 @@ async def test_plan_mode_addendum_in_system_prompt() -> None:
     assert "acceptance" in system
     # write_file explicitly forbidden in plan mode (planning, not coding)
     assert "NO write_file" in system
+    # README-first: T001 must spec the project as docs before code, so
+    # the project always ships documentation (the dominant gap — docs
+    # failed 25/31 historical runs). See checkers.py docs criterion.
+    assert "README.md" in system
+    assert "T001" in system
 
 
 @pytest.mark.asyncio

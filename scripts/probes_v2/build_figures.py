@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from typing import Any
 
 import matplotlib.pyplot as plt
 from matplotlib.patches import Patch
@@ -65,16 +66,16 @@ COL_REGRESS = "#d62728"
 COL_GREY = "#7f7f7f"
 
 
-def load_metrics() -> dict[str, dict]:
-    out: dict[str, dict] = {}
+def load_metrics() -> dict[str, dict[str, Any]]:
+    out: dict[str, dict[str, Any]] = {}
     for tag, run_id in RUN_BY_TAG.items():
         m = json.loads((RUNS / run_id / "metrics.json").read_text())
         out[tag] = m
     return out
 
 
-def load_legacy() -> dict[str, dict]:
-    out: dict[str, dict] = {}
+def load_legacy() -> dict[str, dict[str, Any]]:
+    out: dict[str, dict[str, Any]] = {}
     for tag in TAGS:
         leg_tag = "main" if tag == "main" else tag
         path = RUNS / "legacy" / leg_tag / "summary.json"
@@ -93,14 +94,14 @@ def load_legacy() -> dict[str, dict]:
     return out
 
 
-def style_axes(ax):
+def style_axes(ax: Any) -> None:
     ax.spines["top"].set_visible(False)
     ax.spines["right"].set_visible(False)
     ax.grid(axis="y", linestyle=":", linewidth=0.6, alpha=0.7)
     ax.set_axisbelow(True)
 
 
-def fig_reached_level(metrics: dict[str, dict]) -> None:
+def fig_reached_level(metrics: dict[str, dict[str, Any]]) -> None:
     fig, ax = plt.subplots(figsize=(10, 4.5))
     xs = list(range(len(TAGS)))
     ys = [LEVELS[t] for t in TAGS]
@@ -151,7 +152,7 @@ def fig_reached_level(metrics: dict[str, dict]) -> None:
     print(f"wrote {out.name}")
 
 
-def fig_live_activity(metrics: dict[str, dict]) -> None:
+def fig_live_activity(metrics: dict[str, dict[str, Any]]) -> None:
     """Two-panel: write_file count + wall_sec."""
     fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(12, 4.5))
     xs = list(range(len(TAGS)))
@@ -197,7 +198,7 @@ def fig_live_activity(metrics: dict[str, dict]) -> None:
     print(f"wrote {out.name}")
 
 
-def fig_tokens(metrics: dict[str, dict]) -> None:
+def fig_tokens(metrics: dict[str, dict[str, Any]]) -> None:
     fig, ax = plt.subplots(figsize=(10, 4.5))
     xs = list(range(len(TAGS)))
     total = [metrics[t]["prompt_tokens_total"] / 1000 for t in TAGS]
@@ -246,7 +247,7 @@ def fig_tokens(metrics: dict[str, dict]) -> None:
     print(f"wrote {out.name}")
 
 
-def fig_legacy_probes(legacy: dict[str, dict]) -> None:
+def fig_legacy_probes(legacy: dict[str, dict[str, Any]]) -> None:
     fig, ax = plt.subplots(figsize=(11, 5))
     xs = list(range(len(TAGS)))
 
@@ -259,7 +260,7 @@ def fig_legacy_probes(legacy: dict[str, dict]) -> None:
 
     # We'll plot each probe as % of its max so they all live on one [0,100]% axis
     for probe, _max_label, color, marker, ls in series:
-        ys = []
+        ys: list[float | None] = []
         for tag in TAGS:
             v = legacy[tag].get(probe)
             if v is None:
@@ -326,7 +327,7 @@ def fig_legacy_probes(legacy: dict[str, dict]) -> None:
     print(f"wrote {out.name}")
 
 
-def fig_tool_calls_breakdown(metrics: dict[str, dict]) -> None:
+def fig_tool_calls_breakdown(metrics: dict[str, dict[str, Any]]) -> None:
     fig, ax = plt.subplots(figsize=(11, 5))
     xs = list(range(len(TAGS)))
 

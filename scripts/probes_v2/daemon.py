@@ -20,16 +20,32 @@ import os
 import socket
 import sys
 import time
+from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
 from code_scalpel.agent import ToolExecuted
-from code_scalpel.config import load_config
+from code_scalpel.config import ModelProfile, load_config
 from code_scalpel.runtime import Runtime
 from code_scalpel.tools.agent_tools import ToolCall, ToolResult
 from scripts.probes_v2.ipc import send_response, serve_request
 from scripts.probes_v2.logging_adapter import LoggingLLMAdapter
 from scripts.probes_v2.state import RunPaths, append_jsonl, update_json, utc_now
+
+
+def apply_probe_env(profile: ModelProfile, env: Mapping[str, str]) -> None:
+    """Применить probe-override'ы к профилю из переменных окружения.
+
+    Выделено из демона ради тестируемости: пин модели и base_url
+    приходят от `probe start` через env, чтобы прогон был
+    воспроизводимым и мог бить в удалённую LM Studio (`--base-url`).
+    """
+    pinned = env.get("PROBE_BASE_MODEL")
+    if pinned:
+        profile.model = pinned
+    base_url_override = env.get("PROBE_BASE_URL")
+    if base_url_override:
+        profile.base_url = base_url_override
 
 
 class ProbeDaemon:
@@ -82,12 +98,12 @@ class ProbeDaemon:
         возможность отсутствует — продолжаем без неё."""
         from code_scalpel.llm.adapter import OpenAICompatibleAdapter
 
-        # Пин основной модели. Mutation модели в pydantic-объекте
-        # допустима — модель не frozen.
-        pinned = os.environ.get("PROBE_BASE_MODEL")
+        # Пин модели + base_url override из env (`probe start`).
+        # Mutation pydantic-профиля допустима (не frozen). Без base_url
+        # агент пошёл бы на провайдерский дефолт (localhost:1234) —
+        # удалённая LM Studio была бы недостижима.
         profile = self.config.current_profile
-        if pinned:
-            profile.model = pinned
+        apply_probe_env(profile, os.environ)
 
         # Probe-runner работает headless: нет TUI, нет ChoiceCard,
         # нет confirmation handler для shell_exec. На trust=skeptic

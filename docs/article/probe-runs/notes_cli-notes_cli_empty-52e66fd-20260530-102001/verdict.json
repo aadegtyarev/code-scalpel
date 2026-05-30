@@ -1,0 +1,33 @@
+{
+  "scenario": "notes_cli",
+  "pass_score": 4,
+  "pass_max": 6,
+  "criteria": {
+    "package": {
+      "passed": true,
+      "detail": "2 непустых .py-файла(ов) с исходным кодом"
+    },
+    "four_commands": {
+      "passed": true,
+      "detail": "все 4 команды упомянуты"
+    },
+    "json_storage": {
+      "passed": true,
+      "detail": "json-сериализация + .json-хранилище найдены"
+    },
+    "tests_present": {
+      "passed": true,
+      "detail": "1 тест-файл(ов)"
+    },
+    "installable": {
+      "passed": false,
+      "detail": "editable/requirements install не прошёл: , 0.9.8, 0.9.9, 0.9.10, 0.10.0, 0.11.0, 0.11.1, 0.11.2, 0.11.3, 0.11.4, 0.11.5, 0.11.6, 0.11.7, 0.11.8, 0.11.9, 0.11.10, 0.11.11, 0.11.12, 0.11.13, 0.12.0, 0.12.1, 0.12.2, 0.12.3, 0.12.4, 0.12.5, 0.12.7, 0.12.8, 0.12.9, 0.12.10, 0.12.11, 0.12.12, 0.13.0, 0.13.1, 0.13.2, 0.13.3, 0.14.0, 0.14.1, 0.14.2, 0.14.3, 0.14.4, 0.14.5, 0.14.6, 0.14.7, 0.14.8, 0.14.9, 0.14.10, 0.14.11, 0.14.12, 0.14.13, 0.14.14, 0.15.0, 0.15.1, 0.15.2, 0.15.3, 0.15.4, 0.15.5, 0.15.6, 0.15.7, 0.15.8, 0.15.9, 0.15.10, 0.15.11, 0.15.12, 0.15.13, 0.15.14, 0.15.15)\nERROR: No matching distribution found for ruff<0.0.27,>=0.0.26"
+    },
+    "tests_pass": {
+      "passed": false,
+      "detail": "pytest упал (rc=1): .F                                                                       [100%]\n=================================== FAILURES ===================================\n_______________________________ test_list_notes ________________________________\n\n>   ???\nE   AssertionError: assert 40 == 2\nE    +  where 40 = len(['Test note', 'Test note', 'Test note', 'Test note', 'Test note', 'Note 1', ...])\n\n/home/adegtyarev/dev/code-scalpel/docs/article/probe-runs/notes_cli-notes_cli_empty-52e66fd-20260530-102001/.workdir/tests/test_app.py:14: AssertionError\n=========================== short test summary info ============================\nFAILED tests/test_app.py::test_list_notes - AssertionError: assert 40 == 2\n1 failed, 1 passed in 0.02s"
+    }
+  },
+  "ended_reason": "user_gave_up",
+  "mechanical_solved": false
+}

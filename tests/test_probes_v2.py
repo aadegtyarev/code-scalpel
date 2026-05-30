@@ -40,6 +40,34 @@ from scripts.probes_v2.state import (
 )
 
 
+def test_apply_probe_env_overrides_model_and_base_url() -> None:
+    from code_scalpel.config import ModelProfile
+    from scripts.probes_v2.daemon import apply_probe_env
+
+    profile = ModelProfile(provider="lmstudio", model="auto")
+    apply_probe_env(
+        profile,
+        {
+            "PROBE_BASE_MODEL": "qwen/qwen2.5-coder-14b",
+            "PROBE_BASE_URL": "http://192.168.2.105:1234",
+        },
+    )
+    assert profile.model == "qwen/qwen2.5-coder-14b"
+    assert profile.base_url == "http://192.168.2.105:1234"
+    # provider_base_url() должен отдать override приоритетно
+    assert profile.provider_base_url() == "http://192.168.2.105:1234"
+
+
+def test_apply_probe_env_noop_without_env() -> None:
+    from code_scalpel.config import ModelProfile
+    from scripts.probes_v2.daemon import apply_probe_env
+
+    profile = ModelProfile(provider="lmstudio", model="auto")
+    apply_probe_env(profile, {})
+    assert profile.model == "auto"
+    assert profile.base_url is None
+
+
 def test_make_run_id_shape() -> None:
     rid = make_run_id("c_fix_bug", "mini_cli", "abcdef1234567890")
     # `<scenario>-<project>-<sha7>-<timestamp>`
