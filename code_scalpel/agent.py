@@ -1871,7 +1871,8 @@ class StepAgent:
                 if skill_name in seen or skill_name.lower() in existing:
                     continue
                 seen.add(skill_name)
-                call = ToolCall(name="web_learn", body=f'{{"query": "{skill_name}"}}')
+                query = f"{skill_name} official documentation"
+                call = ToolCall(name="web_learn", body=json.dumps({"query": query}))
                 if on_tool_executed is not None:
                     with suppress(Exception):
                         on_tool_executed(

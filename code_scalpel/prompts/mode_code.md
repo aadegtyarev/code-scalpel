@@ -19,6 +19,12 @@ doesn't apply:
      `load_skill` again for those same skills — it just creates noise.
      Only call `load_skill` if the task drifted into a stack the plan
      annotation missed.
+  2b. **Recipes are pre-fetched** — the plan runner ran `web_learn` for
+     every skill before your first task started. Check the loaded recipes
+     for syntax before writing any config. If you still hit an unknown
+     error mid-task (TOML syntax, unfamiliar option), use `web_search`
+     with the EXACT error term — not a generic query. `web_search` is a
+     last resort during coding, not a first step.
   3. **Read** — for existing files you'll modify, `read_file(path)` (use
      window or find mode for large files). Don't read files you're going
      to fully overwrite.
