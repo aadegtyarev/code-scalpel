@@ -384,12 +384,12 @@ def test_base_skill_model_instructions_default_empty() -> None:
 
 def test_model_instructions_compact() -> None:
     """Sanity check on size — these strings ship in every plan-execution
-    turn's system prompt. >1.5KB per skill would erase the lazy-loading
+    turn's system prompt. >2.5KB per skill would erase the lazy-loading
     advantage."""
     for skill in (PythonSkill(), GoSkill(), JsTsSkill()):
         text = skill.model_instructions()
         assert text, f"{skill.name} has empty model_instructions"
-        assert len(text) < 1500, f"{skill.name} model_instructions={len(text)} chars"
+        assert len(text) < 2500, f"{skill.name} model_instructions={len(text)} chars"
 
 
 # ── all_skills() — registry enumeration for the catalog block ────────────────

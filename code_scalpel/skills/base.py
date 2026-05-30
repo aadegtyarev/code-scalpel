@@ -29,6 +29,7 @@ Design notes:
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
+from importlib.resources import files
 from pathlib import Path
 
 
@@ -95,14 +96,21 @@ class Skill(ABC):
         return None
 
     def model_instructions(self) -> str:
-        """Short model-facing block injected into the system prompt during plan execution.
+        """Model-facing block injected into the system prompt when the skill loads.
 
-        Override in subclasses to provide stack-specific knowledge: what
-        commands to run, what errors mean, what to do when tests fail.
-        Keep it to 5-10 lines — it goes into every task's context.
-        Default returns empty string (skill has no model-facing knowledge yet).
+        Loaded from `code_scalpel/prompts/skills/<name>.md` by convention.
+        Returns empty string when no file exists for this skill.
+        Subclasses can override if they need dynamic content.
         """
-        return ""
+        try:
+            return (
+                files("code_scalpel.prompts")
+                .joinpath(f"skills/{self.name}.md")
+                .read_text()
+                .rstrip("\n")
+            )
+        except (FileNotFoundError, TypeError):
+            return ""
 
     def token_cost(self) -> int:
         """Approximate token cost of exposing this skill's metadata.

@@ -128,6 +128,8 @@ def test_inference_kwargs_defaults_to_ask_temperature() -> None:
     # consistently bounced query-tasks with "Извините не могу найти"
     # instead of calling project_map; higher temperature breaks the
     # deterministic-refusal pattern.
+    # reasoning_effort="none" is always sent for lmstudio when supports_thinking=False
+    # (default) to suppress slow thinking tokens on thinking-capable models.
     assert kwargs == {"temperature": 0.7, "top_p": 0.9}
 
 
@@ -194,6 +196,28 @@ def test_provider_base_url_default() -> None:
 def test_provider_base_url_override() -> None:
     profile = ModelProfile(provider="lmstudio", model="qwen", base_url="http://custom:5678")
     assert profile.provider_base_url() == "http://custom:5678"
+
+
+def test_inference_kwargs_thinking_model_suppressed_by_default() -> None:
+    # qwen3 is auto-detected as a thinking model; default thinking_effort="off"
+    # maps to reasoning_effort="none" to suppress slow reasoning tokens.
+    profile = ModelProfile(provider="lmstudio", model="qwen/qwen3.6-35b-a3b")
+    kwargs = profile.inference_kwargs()
+    assert kwargs["reasoning_effort"] == "none"
+
+
+def test_inference_kwargs_thinking_model_levels() -> None:
+    profile = ModelProfile(provider="lmstudio", model="qwen/qwen3.6-35b-a3b")
+    assert profile.inference_kwargs(thinking_effort="low")["reasoning_effort"] == "low"
+    assert profile.inference_kwargs(thinking_effort="high")["reasoning_effort"] == "high"
+
+
+def test_inference_kwargs_thinking_model_explicit_off() -> None:
+    # Explicit supports_thinking=False overrides auto-detect → no reasoning_effort.
+    profile = ModelProfile(
+        provider="lmstudio", model="qwen/qwen3.6-35b-a3b", supports_thinking=False
+    )
+    assert "reasoning_effort" not in profile.inference_kwargs()
 
 
 @pytest.mark.asyncio
@@ -532,10 +556,12 @@ async def test_autodetect_thinking_uses_first_model_when_no_id_match() -> None:
 # ── inference_kwargs with thinking_effort ─────────────────────────────────────
 
 
-def test_inference_kwargs_thinking_effort_off_no_reasoning_param() -> None:
+def test_inference_kwargs_thinking_effort_off_suppresses_reasoning() -> None:
+    # thinking_effort="off" (default) maps to reasoning_effort="none" for
+    # thinking-capable models — explicitly suppresses slow reasoning tokens.
     profile = ModelProfile(provider="lmstudio", model="qwq-32b", supports_thinking=True)
     kwargs = profile.inference_kwargs("ask", thinking_effort="off")
-    assert "reasoning_effort" not in kwargs
+    assert kwargs["reasoning_effort"] == "none"
 
 
 def test_inference_kwargs_thinking_effort_adds_reasoning_effort() -> None:

@@ -47,11 +47,17 @@ class StreamUsage:
 class StreamChunk:
     """One event from a streaming chat: either a text delta, a fully-formed
     tool call (yielded once when accumulation completes), or a usage payload
-    (yielded once at the end of the stream)."""
+    (yielded once at the end of the stream).
+
+    `thinking` carries reasoning tokens from thinking models (qwen3,
+    deepseek-r1, …). Consumers that only care about the final answer
+    (agent accumulator, TUI stream view) skip it; a future "thinking"
+    panel in the TUI can render it separately."""
 
     text: str = ""
     tool_call: NativeToolCall | None = None
     usage: StreamUsage | None = None
+    thinking: str = ""
 
 
 @runtime_checkable
@@ -73,6 +79,8 @@ class LLMAdapter(Protocol):
     ) -> AsyncIterator[StreamChunk]: ...
 
     def set_model(self, model: str) -> None: ...
+
+    def set_max_tokens(self, max_tokens: int) -> None: ...
 
 
 class OpenAICompatibleAdapter:
@@ -106,6 +114,10 @@ class OpenAICompatibleAdapter:
         after autodetect resolves a placeholder name (`auto` / `local-model`)
         to the real id served by the provider."""
         self._model = model
+
+    def set_max_tokens(self, max_tokens: int) -> None:
+        """Update the output token cap after context window detection."""
+        self._max_tokens = max_tokens
 
     async def chat(
         self,
@@ -206,6 +218,12 @@ class OpenAICompatibleAdapter:
             if delta.content:
                 produced = True
                 yield StreamChunk(text=delta.content)
+            # Thinking models (qwen3, deepseek-r1, …) stream reasoning tokens
+            # in reasoning_content while content stays empty. Collect them so
+            # produced=True and the downstream plan parser can find JSON inside.
+            elif isinstance(rc := getattr(delta, "reasoning_content", None), str) and rc:
+                produced = True
+                yield StreamChunk(thinking=rc)
             if delta.tool_calls:
                 produced = True
                 for tc in delta.tool_calls:

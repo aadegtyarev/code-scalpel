@@ -21,7 +21,7 @@ from collections.abc import AsyncIterator
 from pathlib import Path
 
 from code_scalpel.agent import StepAgent, StepResult, StreamItem
-from code_scalpel.config import AppConfig, reconcile_output_cap
+from code_scalpel.config import AppConfig, autodetect_context_tokens, reconcile_output_cap
 from code_scalpel.fork import (
     ChoiceUIHook,
     ForkOption,
@@ -117,6 +117,23 @@ class Runtime:
             config=config.agent,
             upstream_queue=self.upstream_queue,
         )
+
+    async def resolve_context(self) -> None:
+        """Detect context window from the provider and patch the adapter's
+        max_tokens cap. Safe to call multiple times — no-op when profile
+        already has an explicit context_tokens value or when the provider
+        returns nothing (keeps the existing cap).
+
+        Call on startup from TUI and headless entrypoints so all channels
+        work with the same real window size instead of a None-fallback.
+        """
+        profile = self.config.current_profile
+        if profile.context_tokens is not None:
+            return
+        detected = await autodetect_context_tokens(profile)
+        if detected:
+            cap = reconcile_output_cap(self.config.agent.max_output_tokens, detected)
+            self.llm.set_max_tokens(cap)
 
     async def stream(
         self,

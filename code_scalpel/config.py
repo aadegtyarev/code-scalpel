@@ -71,6 +71,10 @@ class AgentConfig(BaseModel):
     context_budget_warn: float = 0.70
     context_budget_critical: float = 0.90
     compact_threshold: float = 0.50
+    # Sliding window: when prompt fills context_budget_critical of the
+    # window, keep only the last N complete turns in history (dropping
+    # the oldest). Zero disables the auto-slide.
+    context_slide_turns: int = 4
     # UI locale: "en", "ru", or `None` to autodetect from `LC_*`/`LANG`.
     # Only the TUI surface is affected — prompts the model sees stay
     # English regardless (weak local models perform better on English).
@@ -283,9 +287,17 @@ class ModelProfile(BaseModel):
         return v
 
     def inference_kwargs(self, mode: str = "ask", thinking_effort: str = "off") -> dict[str, Any]:
-        """Return inference params for a given mode. Temperature is per-mode;
-        top_p / frequency_penalty / seed are shared. When thinking_effort is
-        not "off" and the profile supports thinking, reasoning_effort is added."""
+        """Return inference params for a given mode.
+
+        When the model supports thinking (auto-detected or explicit), maps
+        thinking_effort levels to reasoning_effort API param:
+          off    → reasoning_effort="none"  (suppress; default)
+          low    → reasoning_effort="low"
+          medium → reasoning_effort="medium"
+          high   → reasoning_effort="high"
+
+        Models that don't support thinking get no reasoning_effort at all.
+        """
         result: dict[str, Any] = {
             "temperature": self.temperature.for_mode(mode),
             "top_p": self.top_p,
@@ -297,8 +309,8 @@ class ModelProfile(BaseModel):
         effective_thinking = self.supports_thinking
         if effective_thinking is None:
             effective_thinking = detect_supports_thinking(self.model)
-        if thinking_effort != "off" and effective_thinking:
-            result["reasoning_effort"] = thinking_effort
+        if effective_thinking:
+            result["reasoning_effort"] = "none" if thinking_effort == "off" else thinking_effort
         return result
 
     def provider_base_url(self) -> str:
@@ -319,7 +331,7 @@ class ModelProfile(BaseModel):
 # Model name substrings known to support reasoning_effort / thinking params.
 # Checked when ModelProfile.supports_thinking is None (auto-detect mode).
 _THINKING_MODEL_PATTERNS: frozenset[str] = frozenset(
-    {"o1", "o3", "qwq", "deepseek-r1", "claude-3-7"}
+    {"o1", "o3", "qwq", "deepseek-r1", "claude-3-7", "qwen3"}
 )
 
 

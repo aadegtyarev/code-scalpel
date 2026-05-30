@@ -25,7 +25,12 @@ from pathlib import Path
 from typing import Any
 
 from code_scalpel.agent import ToolExecuted
-from code_scalpel.config import ModelProfile, load_config, reconcile_output_cap
+from code_scalpel.config import (
+    ModelProfile,
+    autodetect_context_tokens,
+    load_config,
+    reconcile_output_cap,
+)
 from code_scalpel.runtime import Runtime
 from code_scalpel.tools.agent_tools import ToolCall, ToolResult
 from scripts.probes_v2.ipc import send_response, serve_request
@@ -86,7 +91,7 @@ class ProbeDaemon:
             },
         )
 
-    def _init_runtime(self) -> None:
+    async def _init_runtime(self) -> None:
         """Lazy: только когда первый step придёт. Пинит модель к
         `PROBE_BASE_MODEL` (выставляется CLI'ем) — никаких `auto`,
         нужна явная id для reproducibility прогонов. Если задан
@@ -125,15 +130,18 @@ class ProbeDaemon:
         # остаётся активным независимо от trust — это про защиту
         # от случайного `rm`, а не про confirmation.
         self.config.agent.trust = "yolo"
+        detected_ctx = (
+            await autodetect_context_tokens(profile)
+            if profile.context_tokens is None
+            else profile.context_tokens
+        )
         base_llm = OpenAICompatibleAdapter(
             base_url=f"{profile.provider_base_url()}/v1",
             api_key=profile.api_key(),
             model=profile.model,
             timeout=float(self.config.agent.llm_timeout),
             cost_per_1k=profile.cost_per_1k,
-            max_tokens=reconcile_output_cap(
-                self.config.agent.max_output_tokens, profile.context_tokens
-            ),
+            max_tokens=reconcile_output_cap(self.config.agent.max_output_tokens, detected_ctx),
             use_completion_tokens=profile.provider == "openai",
         )
         self.logging_adapter = LoggingLLMAdapter(base_llm, self.paths.chat_jsonl)
@@ -249,7 +257,7 @@ class ProbeDaemon:
             Реальный «делать»-режим.
         """
         if self.runtime is None:
-            self._init_runtime()
+            await self._init_runtime()
         assert self.runtime is not None
         self.user_turns += 1
         append_jsonl(
@@ -317,7 +325,7 @@ class ProbeDaemon:
         сигнатуре, и в `meta.json.adaptations` пишет что
         отсутствует."""
         if self.runtime is None:
-            self._init_runtime()
+            await self._init_runtime()
         assert self.runtime is not None
         append_jsonl(self.paths.timing_jsonl, {"ts": utc_now(), "event": "go.start"})
         append_jsonl(

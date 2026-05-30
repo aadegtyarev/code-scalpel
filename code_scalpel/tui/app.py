@@ -321,6 +321,8 @@ class ScalpelApp(App[None]):
                 self._agent._llm.set_model(model_name)
             if tokens:
                 self.state.context_limit = tokens
+                if self.runtime is not None:
+                    await self.runtime.resolve_context()
             # supports_thinking: explicit profile override wins; otherwise
             # try the provider's API metadata, then fall back to name-pattern.
             if profile.supports_thinking is not None:
@@ -2119,5 +2121,9 @@ class ScalpelApp(App[None]):
         if not limit:
             footer.ctx = ""
             return
-        pct = used / limit * 100
-        footer.ctx = f"{used // 1000}k/{limit // 1000}k ({pct:.0f}%)"
+        footer.ctx = self.session.context_bar(
+            used,
+            limit,
+            warn=self.config.agent.context_budget_warn,
+            critical=self.config.agent.context_budget_critical,
+        )

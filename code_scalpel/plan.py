@@ -160,7 +160,15 @@ PLAN_JSON_SCHEMA: dict[str, object] = {
                     "skills": {"type": "array", "items": {"type": "string"}},
                     "test_command": {"type": ["string", "null"]},
                 },
-                "required": ["id", "title", "goal", "files", "acceptance", "skills", "test_command"],
+                "required": [
+                    "id",
+                    "title",
+                    "goal",
+                    "files",
+                    "acceptance",
+                    "skills",
+                    "test_command",
+                ],
             },
         }
     },

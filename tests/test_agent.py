@@ -572,6 +572,39 @@ async def test_clear_history_drops_past_turns(project: Path) -> None:
 
 
 @pytest.mark.asyncio
+async def test_slide_history_window_keeps_last_n_turns(project: Path) -> None:
+    llm = MockLLMAdapter(["one", "two", "three", "four"])
+    agent = StepAgent(llm=llm, cwd=project, config=_CONFIG)
+
+    await agent.ask("turn1")
+    await agent.ask("turn2")
+    await agent.ask("turn3")
+
+    assert len([m for m in agent.history if m.get("role") == "user"]) == 3
+    dropped = agent.slide_history_window(keep_turns=2)
+    assert dropped > 0
+    user_msgs = [m for m in agent.history if m.get("role") == "user"]
+    assert len(user_msgs) == 2
+    contents = [m.get("content", "") for m in user_msgs]
+    assert "turn1" not in contents
+    assert "turn2" in contents
+    assert "turn3" in contents
+
+
+@pytest.mark.asyncio
+async def test_slide_history_window_noop_when_within_limit(project: Path) -> None:
+    llm = MockLLMAdapter(["one", "two"])
+    agent = StepAgent(llm=llm, cwd=project, config=_CONFIG)
+
+    await agent.ask("turn1")
+    await agent.ask("turn2")
+
+    dropped = agent.slide_history_window(keep_turns=5)
+    assert dropped == 0
+    assert len([m for m in agent.history if m.get("role") == "user"]) == 2
+
+
+@pytest.mark.asyncio
 async def test_compact_summarizes_and_replaces_history(project: Path) -> None:
     llm = MockLLMAdapter(["reply A", "reply B", "- bullet point summary"])
     agent = StepAgent(llm=llm, cwd=project, config=_CONFIG)
