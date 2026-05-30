@@ -84,6 +84,7 @@ class Runtime:
                 max_tokens=reconcile_output_cap(
                     config.agent.max_output_tokens, profile.context_tokens
                 ),
+                use_completion_tokens=profile.provider == "openai",
             )
         self.llm = llm
         self.memory: MemoryStore | None = MemoryStore(root=cwd) if with_memory else None

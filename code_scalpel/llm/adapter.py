@@ -84,6 +84,7 @@ class OpenAICompatibleAdapter:
         timeout: float = 120.0,
         cost_per_1k: dict[str, float] | None = None,
         max_tokens: int | None = None,
+        use_completion_tokens: bool = False,
     ) -> None:
         self._client = AsyncOpenAI(
             base_url=base_url,
@@ -96,6 +97,9 @@ class OpenAICompatibleAdapter:
         # See config.reconcile_output_cap (согласовано с контекстным
         # бюджетом). None → провайдерский дефолт (без капа).
         self._max_tokens = max_tokens
+        # OpenAI o-series and gpt-5+ reject `max_tokens`; use
+        # `max_completion_tokens` instead. Set for provider="openai".
+        self._token_cap_key = "max_completion_tokens" if use_completion_tokens else "max_tokens"
 
     def set_model(self, model: str) -> None:
         """Swap the model id used for subsequent requests. Called by the TUI
@@ -114,7 +118,7 @@ class OpenAICompatibleAdapter:
         if tools:
             params["tools"] = tools
         if self._max_tokens is not None:
-            params.setdefault("max_tokens", self._max_tokens)
+            params.setdefault(self._token_cap_key, self._max_tokens)
         response = cast(
             ChatCompletion,
             await self._client.chat.completions.create(
@@ -169,7 +173,7 @@ class OpenAICompatibleAdapter:
         if tools:
             params["tools"] = tools
         if self._max_tokens is not None:
-            params.setdefault("max_tokens", self._max_tokens)
+            params.setdefault(self._token_cap_key, self._max_tokens)
         # Ask for a final usage chunk so the caller can stop estimating tokens
         # from char counts. LM Studio honours stream_options; OpenAI does too.
         params.setdefault("stream_options", {"include_usage": True})
