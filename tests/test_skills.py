@@ -10,6 +10,7 @@ from code_scalpel.skills import (
     DockerSkill,
     GoSkill,
     JsTsSkill,
+    MarkdownSkill,
     PostgresSkill,
     PythonSkill,
     Skill,
@@ -395,8 +396,66 @@ def test_model_instructions_compact() -> None:
 # ── all_skills() — registry enumeration for the catalog block ────────────────
 
 
+# ── MarkdownSkill (prompt-only, auto-discovered from .md files) ──────────────
+
+
+def test_markdown_skill_never_autodetects(tmp_path: Path) -> None:
+    """MarkdownSkill.detect is always False — must be loaded explicitly."""
+    (tmp_path / ".git").mkdir()
+    skill = MarkdownSkill("git")
+    assert skill.detect(tmp_path) is False
+    assert skill.detect(Path("/")) is False
+
+
+def test_markdown_skill_provides_no_test_runner() -> None:
+    assert MarkdownSkill("git").provides_test_runner is False
+
+
+def test_markdown_skill_test_and_lint_empty() -> None:
+    s = MarkdownSkill("git")
+    assert s.test_cmd() == []
+    assert s.lint_cmd() == []
+
+
+def test_markdown_skill_default_description() -> None:
+    s = MarkdownSkill("foo")
+    assert s.description == "Foo instructions"
+
+
+def test_markdown_skill_explicit_description() -> None:
+    s = MarkdownSkill("git", "Git workflow rules")
+    assert s.description == "Git workflow rules"
+
+
+# ── git skill (auto-discovered from prompts/skills/git.md) ───────────────────
+
+
+def test_git_skill_auto_discovered() -> None:
+    """git must appear in all_skills() via auto-discovery, not manual registration."""
+    names = {s.name for s in all_skills()}
+    assert "git" in names
+
+
+def test_git_skill_not_autodetected(tmp_path: Path) -> None:
+    """git is load-on-demand — must NOT appear in active_skills even for .git/ repos."""
+    (tmp_path / ".git").mkdir()
+    names = {s.name for s in active_skills(tmp_path)}
+    assert "git" not in names
+
+
+def test_git_skill_model_instructions_mentions_reset() -> None:
+    skill = get_skill("git")
+    assert skill is not None
+    text = skill.model_instructions()
+    assert "reset" in text
+    assert "git add" in text
+
+
+# ── all_skills() — registry enumeration for the catalog block ────────────────
+
+
 def test_all_skills_returns_every_registered() -> None:
     """all_skills() is what the agent uses to build the catalog block —
     every built-in must appear."""
     names = {s.name for s in all_skills()}
-    assert {"python", "go", "js", "docker", "postgres", "sqlite"}.issubset(names)
+    assert {"python", "go", "js", "docker", "postgres", "sqlite", "git"}.issubset(names)

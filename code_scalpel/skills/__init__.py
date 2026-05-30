@@ -3,22 +3,28 @@
 Public surface:
 
 * `Skill` — ABC; subclass to define a new stack.
+* `MarkdownSkill` — concrete prompt-only skill; auto-discovered from
+  prompts/skills/*.md for any name not already registered.
 * `SkillRegistry` — class holding registered skills.
 * `register_skill(skill)` — add a skill to the global registry.
 * `get_skill(name)` — fetch a registered skill by its `name` attribute.
 * `active_skills(root)` — every skill whose detect() fires for `root`.
 * `default_skill(root)` — first active skill, or None.
 
-Built-ins (PythonSkill, DockerSkill) are registered on import. The
-global registry lives in this module; tests can clear it via the
-private `_registry._reset()` hook.
+Python `Skill` subclasses in `*_skill.py` modules are auto-discovered and
+registered on import, sorted by their `priority` attribute (lower = first).
+Advisory prompt-only skills (e.g. git) live as prompts/skills/<name>.md and
+are registered via `MarkdownSkill` without a Python class.
+
+Adding a new stack skill = drop a `*_skill.py` here. No registration needed.
+Adding a new advisory skill = drop a `<name>.md` in prompts/skills/. Ditto.
 """
 
 from __future__ import annotations
 
 from pathlib import Path
 
-from code_scalpel.skills.base import Skill
+from code_scalpel.skills.base import MarkdownSkill, Skill
 from code_scalpel.skills.docker_skill import DockerSkill
 from code_scalpel.skills.go_skill import GoSkill
 from code_scalpel.skills.js_skill import JsTsSkill
@@ -27,19 +33,65 @@ from code_scalpel.skills.python_skill import PythonSkill
 from code_scalpel.skills.registry import SkillRegistry
 from code_scalpel.skills.sqlite_skill import SqliteSkill
 
-# Registration order is the priority order for `default_runnable_skill`.
-# Language skills come first so a polyglot repo (Python + Postgres,
-# Go + Docker) picks the language's test runner. Container skill next
-# (Docker — has its own test command via `docker compose`). Component
-# skills (Postgres, SQLite) ship `provides_test_runner = False` so they
-# don't compete for the test path regardless of order.
 _registry = SkillRegistry()
-_registry.register(PythonSkill())
-_registry.register(JsTsSkill())
-_registry.register(GoSkill())
-_registry.register(DockerSkill())
-_registry.register(PostgresSkill())
-_registry.register(SqliteSkill())
+
+
+def _auto_register_python_skills(registry: SkillRegistry) -> None:
+    """Scan *_skill.py modules in this package; register all Skill subclasses.
+
+    Sorted by `priority` (lower = registered first) so language skills
+    come before component skills in default_runnable_skill lookups.
+    """
+    import importlib
+    import pkgutil
+
+    pkg_dir = str(Path(__file__).parent)
+    seen: set[str] = set()
+    pending: list[tuple[int, Skill]] = []
+
+    for info in pkgutil.iter_modules([pkg_dir]):
+        if not info.name.endswith("_skill"):
+            continue
+        mod = importlib.import_module(f"code_scalpel.skills.{info.name}")
+        for attr in vars(mod).values():
+            if not (isinstance(attr, type) and issubclass(attr, Skill)):
+                continue
+            if attr in (Skill, MarkdownSkill):
+                continue
+            skill_name: str = getattr(attr, "name", "")
+            if not skill_name or skill_name in seen:
+                continue
+            seen.add(skill_name)
+            pending.append((getattr(attr, "priority", 50), attr()))
+
+    for _, skill in sorted(pending, key=lambda x: x[0]):
+        registry.register(skill)
+
+
+def _auto_register_markdown_skills(registry: SkillRegistry) -> None:
+    """Register MarkdownSkill for every prompts/skills/*.md not already covered."""
+    from importlib.resources import files as _files
+
+    registered = {s.name for s in registry.all()}
+    try:
+        skills_res = _files("code_scalpel.prompts").joinpath("skills")
+        for item in skills_res.iterdir():
+            if not item.name.endswith(".md"):
+                continue
+            name = item.name[:-3]
+            if name in registered:
+                continue
+            try:
+                first_line = item.read_text(encoding="utf-8").splitlines()[0].strip()
+            except Exception:
+                first_line = f"{name.title()} instructions"
+            registry.register(MarkdownSkill(name, first_line))
+    except Exception:
+        pass
+
+
+_auto_register_python_skills(_registry)
+_auto_register_markdown_skills(_registry)
 
 
 def register_skill(skill: Skill) -> None:
@@ -84,6 +136,7 @@ __all__ = [
     "DockerSkill",
     "GoSkill",
     "JsTsSkill",
+    "MarkdownSkill",
     "PostgresSkill",
     "PythonSkill",
     "Skill",

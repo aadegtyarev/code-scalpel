@@ -39,6 +39,7 @@ class PostgresSkill(Skill):
         ".env DATABASE_URL / SQL migrations)."
     )
     provides_test_runner = False
+    priority = 60
 
     def detect(self, root: Path) -> bool:
         if (root / "alembic.ini").is_file():

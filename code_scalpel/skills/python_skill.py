@@ -26,6 +26,7 @@ class PythonSkill(Skill):
     description = (
         "pytest + ruff for a Python project (detects pyproject.toml / requirements.txt / setup.py)."
     )
+    priority = 10
 
     def detect(self, root: Path) -> bool:
         for marker in ("pyproject.toml", "requirements.txt", "setup.py"):
