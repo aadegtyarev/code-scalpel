@@ -1,0 +1,37 @@
+{
+  "scenario": "notes_cli",
+  "pass_score": 6,
+  "pass_max": 7,
+  "criteria": {
+    "package": {
+      "passed": true,
+      "detail": "1 непустых .py-файла(ов) с исходным кодом"
+    },
+    "four_commands": {
+      "passed": true,
+      "detail": "все 4 команды упомянуты"
+    },
+    "json_storage": {
+      "passed": true,
+      "detail": "json-сериализация + .json-хранилище найдены"
+    },
+    "tests_present": {
+      "passed": true,
+      "detail": "1 тест-файл(ов)"
+    },
+    "docs": {
+      "passed": true,
+      "detail": "README найден (README.md)"
+    },
+    "installable": {
+      "passed": false,
+      "detail": "editable/requirements install не прошёл: o/latest/config/build/\n      \n      As an example, if you intend to ship a directory named `foo` that resides within a `src` directory located at the root of your project, you can define the following:\n      \n      [tool.hatch.build.targets.wheel]\n      packages = [\"src/foo\"]\n      [end of output]\n  \n  note: This error originates from a subprocess, and is likely not a problem with pip.\nerror: metadata-generation-failed\n\n× Encountered error while generating package metadata.\n╰─> See above for output.\n\nnote: This is an issue with the package mentioned above, not pip.\nhint: See above for details."
+    },
+    "tests_pass": {
+      "passed": true,
+      "detail": "pytest зелёный"
+    }
+  },
+  "ended_reason": "task_solved",
+  "mechanical_solved": true
+}
