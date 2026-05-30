@@ -3232,6 +3232,24 @@ solved=False** — ложный успех аннулирован. **Реаль�
 argparse-точкой входа) — правило в mode_plan/mode_code «проект
 должен запускаться как `python -m <pkg> <cmd>`», и N-замер.
 
+### ПЕРВЫЙ ЧЕСТНЫЙ SOLVED (2026-05-30, run 2c0cb1e)
+
+Цепочка после ложного solved: runnable-CLI правило (точка входа) +
+syntax-guard (`ast.parse` до тестов, ловит хвостовой `")`) + test-
+isolation правило (тесты не делят storage). Результат: `all_done`,
+**7/8, solved=True, acceptance PASS**. Проверено руками: `python
+notes.py add/list/search` реально работают, тесты зелёные. Это НЕ
+ложный успех — CLI запускается, в отличие от acbe16d.
+
+Известные изъяны (N=1, не гейт сейчас):
+- `delete 0` — no-op (delete по «метке», метки с 1; acceptance
+  чекает только add→list, delete-семантику не ловит → можно усилить
+  acceptance на полный цикл add→delete→list).
+- `installable` всё ещё fail (wheel/имя пакета).
+
+Открыто: воспроизводимость (N-замер acceptance-true solved-rate);
+усиление acceptance до полного CRUD-цикла.
+
 Возможные направления для consistency:
 - **a) Усилить prompt в mode_plan.md** — модель часто оставляет
   files/acceptance пустыми (schema их optional). Принудить
