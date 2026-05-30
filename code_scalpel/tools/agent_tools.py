@@ -38,6 +38,31 @@ from code_scalpel.tools.web_search import web_search as _web_search
 ConfirmShellExec = Callable[[str], Awaitable[bool]]
 
 # OpenAI tools schema — sent with chat() so the model can call them natively.
+WEB_LEARN_SCHEMA: dict[str, Any] = {
+    "type": "function",
+    "function": {
+        "name": "web_learn",
+        "description": (
+            "Search the web for documentation on a topic, fetch the top result, "
+            "and save it as a recipe in `.code-scalpel/recipes/`. "
+            "Use at the start of a task when the required recipe doesn't exist yet "
+            "and the stack/technology is known. "
+            "Example: web_learn('python pyproject.toml setuptools') saves a recipe "
+            "that future tasks can use without re-searching."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "query": {
+                    "type": "string",
+                    "description": "Search query, e.g. 'python pytest tmp_path fixtures'",
+                }
+            },
+            "required": ["query"],
+        },
+    },
+}
+
 WEB_SEARCH_SCHEMA: dict[str, Any] = {
     "type": "function",
     "function": {
@@ -387,7 +412,8 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
             },
         },
     },
-    WEB_SEARCH_SCHEMA,  # forward reference resolved at module load; defined below
+    WEB_LEARN_SCHEMA,
+    WEB_SEARCH_SCHEMA,
 ]
 
 
@@ -1330,6 +1356,7 @@ __all__ = (
     "TOOL_SCHEMAS",
     "ToolCall",
     "UNLOAD_SKILL_SCHEMA",
+    "WEB_LEARN_SCHEMA",
     "WEB_SEARCH_SCHEMA",
     "ToolResult",
     "execute",

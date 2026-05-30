@@ -22,6 +22,50 @@ _MAX_RESULTS = 6
 _SNIPPET_CAP = 300
 
 
+async def search_top_url(query: str) -> tuple[str, str] | None:
+    """Return (title, url) of the top DDG result, or None if no results.
+
+    Used by `web_learn` to find the most relevant page to fetch.
+    """
+    try:
+        async with httpx.AsyncClient(
+            timeout=_TIMEOUT,
+            follow_redirects=True,
+            headers={"User-Agent": _USER_AGENT},
+        ) as client:
+            resp = await client.post(
+                "https://lite.duckduckgo.com/lite/",
+                data={"q": query, "kl": "wt-wt"},
+            )
+    except httpx.HTTPError as e:
+        raise RuntimeError(f"web_search network error: {e}") from e
+
+    if resp.status_code >= 400:
+        raise RuntimeError(f"web_search: HTTP {resp.status_code}")
+
+    return _top_result(resp.text)
+
+
+def _top_result(html_text: str) -> tuple[str, str] | None:
+    """Return (title, url) of the first result, or None."""
+    link_re = re.compile(
+        r"""<a\b[^>]+class=['""]result-link['""][^>]*href=['""]([^'"">]+)['""][^>]*>(.*?)</a>"""
+        r"""|<a\b[^>]+href=['""]([^'"">]+)['""][^>]*class=['""]result-link['""][^>]*>(.*?)</a>""",
+        re.DOTALL,
+    )
+
+    def clean(s: str) -> str:
+        s = re.sub(r"<[^>]+>", "", s)
+        return html.unescape(" ".join(s.split()))
+
+    for m in link_re.finditer(html_text):
+        url = m.group(1) or m.group(3) or ""
+        title = clean(m.group(2) or m.group(4) or "")
+        if url and title:
+            return title, url
+    return None
+
+
 async def web_search(query: str, max_results: int = _MAX_RESULTS) -> str:
     """Search DuckDuckGo Lite and return formatted result titles + snippets.
 
