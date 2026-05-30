@@ -280,6 +280,19 @@ async def test_run_tests_reports_failure(tmp_path: Path) -> None:
 
 
 @pytest.mark.asyncio
+async def test_run_tests_no_tests_collected_is_not_failure(tmp_path: Path) -> None:
+    """pytest exit 5 ("no tests collected") must be ok=True. В цепочке
+    задач ранние шаги (README, структура, storage) пишутся до появления
+    тестов — пустой suite не должен валить задачу и рвать план."""
+    # Пустая папка без test_*.py → pytest exit code 5.
+    call = ToolCall(name="run_tests", body="")
+    result = await execute(call, tmp_path)
+    assert result.ok
+    assert "exit code: 5" in result.output
+    assert "no tests collected" in result.output
+
+
+@pytest.mark.asyncio
 async def test_run_tests_uses_python_skill_when_pyproject_present(tmp_path: Path) -> None:
     """A project with pyproject.toml routes through PythonSkill.test_cmd,
     so the recorded shell command must be exactly its pytest argv and

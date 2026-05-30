@@ -1055,8 +1055,17 @@ async def _tool_run_tests(call: ToolCall, cwd: Path, runner: ShellRunner) -> Too
         text = (
             text[:_MAX_TEST_OUTPUT] + f"\n... ({len(text) - _MAX_TEST_OUTPUT} more bytes truncated)"
         )
-    summary = f"using skill: {skill_label}\nexit code: {result.returncode}\n---\n{text}"
-    return ToolResult(call, output=summary, ok=result.returncode == 0)
+    # pytest exit 5 = "no tests collected" — НЕ провал. В цепочке задач
+    # ранние шаги (README, структура, storage) пишутся ДО появления
+    # тестов; пустой suite не должен валить задачу и рвать план. Это
+    # отлично от exit 2 (ошибка коллекции, битый импорт) — тот остаётся
+    # провалом. Сводка несёт реальный код, так что ничего не скрыто.
+    no_tests = result.returncode == 5
+    summary = f"using skill: {skill_label}\nexit code: {result.returncode}"
+    if no_tests:
+        summary += " (no tests collected — not a failure)"
+    summary += f"\n---\n{text}"
+    return ToolResult(call, output=summary, ok=result.returncode in (0, 5))
 
 
 _MAX_SHELL_OUTPUT = 4000
