@@ -2562,6 +2562,55 @@ def test_parse_task_files_drops_placeholder() -> None:
     assert _parse_task_files(task) == []
 
 
+def test_parse_task_files_drops_function_call() -> None:
+    from code_scalpel.agent import _parse_task_files
+    from code_scalpel.plan import Task
+
+    task = Task(id="T001", title="x", body="Files: project_map()\n", done=False)
+    assert _parse_task_files(task) == []
+
+
+def test_parse_task_files_keeps_real_path_alongside_function_call() -> None:
+    from code_scalpel.agent import _parse_task_files
+    from code_scalpel.plan import Task
+
+    task = Task(id="T001", title="x", body="Files: README.md, project_map()\n", done=False)
+    assert _parse_task_files(task) == ["README.md"]
+
+
+def test_fix_t001_files_replaces_placeholder() -> None:
+    from code_scalpel.agent import _fix_t001_files
+
+    plan = "## T001: Write readme\n\nFiles: project_map()\n\n## T002: Code\n\nFiles: main.py\n"
+    result = _fix_t001_files(plan)
+    assert "Files: README.md" in result
+    assert "project_map()" not in result
+    # T002 must be untouched
+    assert "Files: main.py" in result
+
+
+def test_fix_t001_files_no_op_when_real_path() -> None:
+    from code_scalpel.agent import _fix_t001_files
+
+    plan = "## T001: Write readme\n\nFiles: README.md\n\n## T002: Code\n\nFiles: main.py\n"
+    assert _fix_t001_files(plan) == plan
+
+
+def test_fix_t001_files_inserts_when_missing() -> None:
+    from code_scalpel.agent import _fix_t001_files
+
+    plan = "## T001: Write readme\n\nGoal: create spec\n\n## T002: Code\n"
+    result = _fix_t001_files(plan)
+    assert "Files: README.md" in result
+
+
+def test_fix_t001_files_no_op_when_no_t001() -> None:
+    from code_scalpel.agent import _fix_t001_files
+
+    plan = "## T002: Code\n\nFiles: main.py\n"
+    assert _fix_t001_files(plan) == plan
+
+
 def test_parse_task_test_command_extracts() -> None:
     from code_scalpel.agent import _parse_task_test_command
     from code_scalpel.plan import Task

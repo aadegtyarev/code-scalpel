@@ -521,6 +521,58 @@ def _parse_task_skills(task: Task) -> list[str]:
     return []
 
 
+def _fix_t001_files(plan_text: str) -> str:
+    """Ensure T001's Files: line lists a real path.
+
+    If T001 has no Files: line, or its line is empty / contains only
+    function-call placeholders (e.g. project_map()), rewrite it to
+    `Files: README.md` — the canonical first task creates the spec.
+    Called after the annotation LLM pass so the rest of the loop sees
+    a valid context for T001.
+    """
+    lines = plan_text.splitlines(keepends=True)
+    in_t001 = False
+    files_line_idx: int | None = None
+    t001_end: int | None = None
+    has_real_files = False
+
+    for i, raw in enumerate(lines):
+        stripped = raw.strip()
+        # Detect T001 heading (with or without [✓] done marker)
+        if not in_t001 and "T001" in stripped and stripped.startswith("##"):
+            in_t001 = True
+            continue
+        if in_t001:
+            if stripped.startswith("##"):
+                t001_end = i
+                break
+            if stripped.lower().startswith("files:"):
+                files_line_idx = i
+                rest = stripped[len("files:") :].strip()
+                for chunk in rest.split(","):
+                    p = chunk.strip()
+                    if p and p.lower() not in ("n/a", "none", "-") and "(" not in p:
+                        has_real_files = True
+
+    if not in_t001 or has_real_files:
+        return plan_text
+
+    if files_line_idx is not None:
+        old = lines[files_line_idx]
+        ending = old[len(old.rstrip("\r\n")) :]
+        lines[files_line_idx] = f"Files: README.md{ending}"
+    else:
+        # No Files: line at all — insert one right after the T001 heading
+        insert_at = t001_end if t001_end is not None else len(lines)
+        for i, raw in enumerate(lines):
+            if "T001" in raw and raw.strip().startswith("##"):
+                insert_at = i + 1
+                break
+        lines.insert(insert_at, "Files: README.md\n")
+
+    return "".join(lines)
+
+
 def _parse_task_files(task: Task) -> list[str]:
     """Extract the comma-separated `Files:` list from a task body.
 
@@ -540,6 +592,8 @@ def _parse_task_files(task: Task) -> list[str]:
         for chunk in rest.split(","):
             p = chunk.strip()
             if not p or p.startswith("<") or p.endswith(">"):
+                continue
+            if "(" in p and ")" in p:  # function call like project_map(), not a path
                 continue
             items.append(p)
         return items
@@ -1707,7 +1761,7 @@ class StepAgent:
                 reply = "\n".join(lines)
         if "## T" not in reply:
             return plan_text  # model didn't follow format; keep original
-        return reply
+        return _fix_t001_files(reply)
 
     async def _load_skills_for_task(
         self,
