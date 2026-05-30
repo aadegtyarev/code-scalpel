@@ -71,6 +71,10 @@ class AgentConfig(BaseModel):
     context_budget_warn: float = 0.70
     context_budget_critical: float = 0.90
     compact_threshold: float = 0.50
+    # Sliding window: when prompt fills context_budget_critical of the
+    # window, keep only the last N complete turns in history (dropping
+    # the oldest). Zero disables the auto-slide.
+    context_slide_turns: int = 4
     # UI locale: "en", "ru", or `None` to autodetect from `LC_*`/`LANG`.
     # Only the TUI surface is affected — prompts the model sees stay
     # English regardless (weak local models perform better on English).

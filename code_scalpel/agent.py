@@ -806,6 +806,23 @@ class StepAgent:
         self._history.clear()
         self._read_files_history.clear()
 
+    def slide_history_window(self, keep_turns: int) -> int:
+        """Drop oldest turns from history keeping only the last `keep_turns`
+        complete user/assistant pairs. Returns number of messages dropped.
+
+        A turn boundary is any message with role="user". Tool messages and
+        assistant tool_calls are part of the turn that precedes them and
+        travel with their owning assistant message."""
+        if keep_turns <= 0 or not self._history:
+            return 0
+        turn_starts = [i for i, m in enumerate(self._history) if m.get("role") == "user"]
+        if len(turn_starts) <= keep_turns:
+            return 0
+        cut_at = turn_starts[-keep_turns]
+        dropped = cut_at
+        self._history = self._history[cut_at:]
+        return dropped
+
     def attach_memory(self, store: MemoryStore | None) -> None:
         """Swap or detach the auto-recall memory store. The TUI builds
         MemoryStore lazily on first /remember/ /recall — when that
@@ -2842,6 +2859,13 @@ class StepAgent:
                     cost=None,
                 )
             )
+            slide_turns = self._config.agent.context_slide_turns
+            if slide_turns > 0:
+                ctx_limit = getattr(self._state, "context_limit", 0) if self._state else 0
+                if ctx_limit > 0:
+                    pct = prompt_total / ctx_limit
+                    if pct >= self._config.agent.context_budget_critical:
+                        self.slide_history_window(slide_turns)
 
     async def _run_tool_loop(
         self,

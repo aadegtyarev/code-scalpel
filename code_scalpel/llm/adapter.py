@@ -80,6 +80,8 @@ class LLMAdapter(Protocol):
 
     def set_model(self, model: str) -> None: ...
 
+    def set_max_tokens(self, max_tokens: int) -> None: ...
+
 
 class OpenAICompatibleAdapter:
     def __init__(
@@ -112,6 +114,10 @@ class OpenAICompatibleAdapter:
         after autodetect resolves a placeholder name (`auto` / `local-model`)
         to the real id served by the provider."""
         self._model = model
+
+    def set_max_tokens(self, max_tokens: int) -> None:
+        """Update the output token cap after context window detection."""
+        self._max_tokens = max_tokens
 
     async def chat(
         self,

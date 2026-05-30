@@ -72,6 +72,9 @@ class MockLLMAdapter:
     def set_model(self, model: str) -> None:
         self.model = model
 
+    def set_max_tokens(self, max_tokens: int) -> None:
+        self.max_tokens = max_tokens
+
 
 class MockShellRunner:
     """Deterministic shell runner for tests.

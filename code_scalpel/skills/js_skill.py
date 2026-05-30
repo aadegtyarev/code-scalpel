@@ -63,4 +63,3 @@ class JsTsSkill(Skill):
     def format_cmd(self) -> list[str] | None:
         pm = _detect_pm(Path.cwd())
         return [pm, "run", "format"]
-

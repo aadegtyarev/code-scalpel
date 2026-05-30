@@ -59,4 +59,3 @@ class PythonSkill(Skill):
 
     def format_cmd(self) -> list[str] | None:
         return ["ruff", "format", "."]
-

@@ -36,4 +36,3 @@ class GoSkill(Skill):
 
     def format_cmd(self) -> list[str] | None:
         return ["gofmt", "-w", "."]
-
