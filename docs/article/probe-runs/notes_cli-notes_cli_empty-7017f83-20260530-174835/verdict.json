@@ -1,0 +1,41 @@
+{
+  "scenario": "notes_cli",
+  "pass_score": 8,
+  "pass_max": 8,
+  "criteria": {
+    "package": {
+      "passed": true,
+      "detail": "1 непустых .py-файла(ов) с исходным кодом"
+    },
+    "four_commands": {
+      "passed": true,
+      "detail": "все 4 команды упомянуты"
+    },
+    "json_storage": {
+      "passed": true,
+      "detail": "json-сериализация + .json-хранилище найдены"
+    },
+    "tests_present": {
+      "passed": true,
+      "detail": "4 тест-файл(ов)"
+    },
+    "docs": {
+      "passed": true,
+      "detail": "README найден (README.md)"
+    },
+    "installable": {
+      "passed": true,
+      "detail": "проект ставится как пакет"
+    },
+    "tests_pass": {
+      "passed": true,
+      "detail": "pytest зелёный"
+    },
+    "acceptance": {
+      "passed": true,
+      "detail": "CLI работает: add→list через `notes.py`"
+    }
+  },
+  "ended_reason": "task_solved",
+  "mechanical_solved": true
+}

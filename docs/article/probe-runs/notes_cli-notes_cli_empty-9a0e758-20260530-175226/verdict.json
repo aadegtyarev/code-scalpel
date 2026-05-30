@@ -1,0 +1,41 @@
+{
+  "scenario": "notes_cli",
+  "pass_score": 6,
+  "pass_max": 8,
+  "criteria": {
+    "package": {
+      "passed": true,
+      "detail": "2 непустых .py-файла(ов) с исходным кодом"
+    },
+    "four_commands": {
+      "passed": true,
+      "detail": "все 4 команды упомянуты"
+    },
+    "json_storage": {
+      "passed": true,
+      "detail": "json-сериализация + .json-хранилище найдены"
+    },
+    "tests_present": {
+      "passed": true,
+      "detail": "2 тест-файл(ов)"
+    },
+    "docs": {
+      "passed": true,
+      "detail": "README найден (README.md)"
+    },
+    "installable": {
+      "passed": true,
+      "detail": "проект ставится как пакет"
+    },
+    "tests_pass": {
+      "passed": false,
+      "detail": "pytest упал (rc=1): аления')\n        delete_parser.set_defaults(func=delete_note)\n    \n        if args is None:\n            args = parser.parse_args()\n>       result = args.func(args.text if 'text' in args else args.keyword if 'keyword' in args else args.index)\n                 ^^^^^^^^^\nE       AttributeError: 'list' object has no attribute 'func'\n\nsrc/notes/cli.py:28: AttributeError\n=========================== short test summary info ============================\nFAILED tests/test_cli.py::test_add_note - AttributeError: 'list' object has n...\nFAILED tests/test_cli.py::test_list_notes - AttributeError: 'list' object has...\nFAILED tests/test_cli.py::test_search_notes - AttributeError: 'list' object h...\nFAILED tests/test_cli.py::test_delete_note - AttributeError: 'list' object ha...\n4 failed, 4 passed in 0.06s"
+    },
+    "acceptance": {
+      "passed": false,
+      "detail": "точка входа есть, но add/list не сработали (1 кандидат(ов))"
+    }
+  },
+  "ended_reason": "task_solved",
+  "mechanical_solved": false
+}

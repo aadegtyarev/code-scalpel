@@ -1,0 +1,41 @@
+{
+  "scenario": "notes_cli",
+  "pass_score": 6,
+  "pass_max": 8,
+  "criteria": {
+    "package": {
+      "passed": true,
+      "detail": "2 непустых .py-файла(ов) с исходным кодом"
+    },
+    "four_commands": {
+      "passed": true,
+      "detail": "все 4 команды упомянуты"
+    },
+    "json_storage": {
+      "passed": true,
+      "detail": "json-сериализация + .json-хранилище найдены"
+    },
+    "tests_present": {
+      "passed": true,
+      "detail": "1 тест-файл(ов)"
+    },
+    "docs": {
+      "passed": true,
+      "detail": "README найден (README.md)"
+    },
+    "installable": {
+      "passed": true,
+      "detail": "проект ставится как пакет"
+    },
+    "tests_pass": {
+      "passed": false,
+      "detail": "pytest упал (rc=4): ERROR: /tmp/claude-1000/probe-check-zmkdw7n7/proj/pyproject.toml: Expected '=' after a key in a key/value pair (at line 9, column 19)"
+    },
+    "acceptance": {
+      "passed": false,
+      "detail": "нет точки входа CLI (__main__/argparse) — не запускается как CLI"
+    }
+  },
+  "ended_reason": "task_solved",
+  "mechanical_solved": false
+}

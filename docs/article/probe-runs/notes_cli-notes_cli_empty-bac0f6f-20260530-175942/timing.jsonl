@@ -1,0 +1,4 @@
+{"ts": "2026-05-30T17:59:44Z", "event": "step.start", "turn": 1, "mode": "plan"}
+{"ts": "2026-05-30T17:59:56Z", "event": "step.end", "turn": 1}
+{"ts": "2026-05-30T17:59:56Z", "event": "go.start"}
+{"ts": "2026-05-30T18:07:59Z", "event": "go.end", "stopped_reason": "max_failures", "tasks_completed": 1}

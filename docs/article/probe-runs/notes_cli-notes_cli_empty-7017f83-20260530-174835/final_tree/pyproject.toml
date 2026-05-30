@@ -1,0 +1,16 @@
+[tool.poetry]
+name = "notes"
+version = "0.1.0"
+description = "CLI для заметок"
+authors = ["Your Name <your.email@example.com>"]
+
+[tool.poetry.dependencies]
+python = "^3.8"
+
+[tool.poetry.dev-dependencies]
+pytest = "^7.0"
+ruff = "^0.0.264"
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"
