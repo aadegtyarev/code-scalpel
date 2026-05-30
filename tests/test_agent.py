@@ -1950,30 +1950,25 @@ async def test_run_plan_continues_past_single_skipped_task(project: Path) -> Non
 
 @pytest.mark.asyncio
 async def test_run_plan_stops_on_repeated_skips(project: Path) -> None:
-    """If every task gets skipped — model replying in plain text across
-    the board — the plan still halts after `stop_after_failures`
-    consecutive non-progress outcomes. Otherwise an unproductive run
-    would silently iterate through the whole list."""
+    """Тотальный giveup (модель отвечает текстом на каждую задачу →
+    skipped) всё равно останавливает план — но по МЯГКОМУ skip-порогу
+    (stop_after_failures + 2), не как failure. Skip обычно безвреден
+    (работа свёрнута в раннюю задачу), поэтому строгий max_failures на
+    него убивал бы прогон до завершения плана."""
     _write_tasks(
         project,
-        "## T001: a\n\nGoal: x\n\n## T002: b\n\nGoal: y\n\n## T003: c\n\nGoal: z\n",
+        "".join(f"## T00{i}: t{i}\n\nGoal: g{i}\n\n" for i in range(1, 6)),
     )
 
-    # Every task → plain text (skipped). With stop_after_failures=2,
-    # we should bail out after T002.
-    llm = MockLLMAdapter(
-        [
-            "I have a question about T001.",
-            "I have a question about T002.",
-            "I have a question about T003.",
-        ]
-    )
+    # Каждая задача → текст (skipped). stop_after_failures=2 → skip
+    # giveup-порог = 4, поэтому bail после T004 (4 скипа), T005 не идёт.
+    llm = MockLLMAdapter([f"I have a question about T00{i}." for i in range(1, 6)])
     agent = StepAgent(llm=llm, cwd=project, config=_retry_config())
 
     result = await agent.run_plan(stop_after_failures=2)
 
     assert result.stopped_reason == "task_not_done"
-    assert [o.status for o in result.outcomes] == ["skipped", "skipped"]
+    assert [o.status for o in result.outcomes] == ["skipped"] * 4
     assert result.tasks_completed == 0
 
 
