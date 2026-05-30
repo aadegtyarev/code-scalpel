@@ -1,0 +1,4 @@
+{"ts": "2026-05-30T12:54:15Z", "event": "step.start", "turn": 1, "mode": "plan"}
+{"ts": "2026-05-30T12:56:16Z", "event": "step.error", "error": "ReadTimeout('')"}
+{"ts": "2026-05-30T12:56:16Z", "event": "go.start"}
+{"ts": "2026-05-30T12:56:16Z", "event": "go.end", "stopped_reason": "no_tasks", "tasks_completed": 0}
