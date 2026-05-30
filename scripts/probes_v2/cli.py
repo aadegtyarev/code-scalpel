@@ -257,8 +257,19 @@ def _preflight_busy_check() -> None:
 
     Best-effort: if `lms` CLI is missing (`is_busy` returns None)
     we don't block — caller is on a setup without LM Studio CLI
-    and can't act on this signal anyway."""
+    and can't act on this signal anyway.
+
+    Skipped entirely when the active profile is not lmstudio — the
+    check is meaningless for remote providers (OpenAI, OpenRouter)."""
+    from code_scalpel.config import load_config
     from code_scalpel.llm.lmstudio_status import is_busy
+
+    try:
+        cfg = load_config()
+        if cfg.current_profile.provider != "lmstudio":
+            return
+    except Exception:
+        pass  # config unreadable — fall through to the busy check
 
     busy = is_busy()
     if busy is True:

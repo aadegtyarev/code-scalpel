@@ -1,0 +1,41 @@
+{
+  "scenario": "notes_cli",
+  "pass_score": 6,
+  "pass_max": 8,
+  "criteria": {
+    "package": {
+      "passed": true,
+      "detail": "1 непустых .py-файла(ов) с исходным кодом"
+    },
+    "four_commands": {
+      "passed": true,
+      "detail": "все 4 команды упомянуты"
+    },
+    "json_storage": {
+      "passed": true,
+      "detail": "json-сериализация + .json-хранилище найдены"
+    },
+    "tests_present": {
+      "passed": true,
+      "detail": "3 тест-файл(ов)"
+    },
+    "docs": {
+      "passed": true,
+      "detail": "README найден (README.md)"
+    },
+    "installable": {
+      "passed": false,
+      "detail": "editable/requirements install не прошёл: o/latest/config/build/\n      \n      As an example, if you intend to ship a directory named `foo` that resides within a `src` directory located at the root of your project, you can define the following:\n      \n      [tool.hatch.build.targets.wheel]\n      packages = [\"src/foo\"]\n      [end of output]\n  \n  note: This error originates from a subprocess, and is likely not a problem with pip.\nerror: metadata-generation-failed\n\n× Encountered error while generating package metadata.\n╰─> See above for output.\n\nnote: This is an issue with the package mentioned above, not pip.\nhint: See above for details."
+    },
+    "tests_pass": {
+      "passed": false,
+      "detail": "pytest упал (rc=1): note_text1 = \"Первая тестовая заметка\"\n        note_text2 = \"Вторая тестовая заметка\"\n        add(note_text1)\n        add(note_text2)\n        notes = load_notes()\n>       assert len(notes) == 2\nE       AssertionError: assert 21 == 2\nE        +  where 21 = len({'1': 'Тестовая заметка', '10': 'Тестовая заметка', '11': 'Тестовая заметка', '12': 'Первая тестовая заметка', ...})\n\ntests/test_add.py:18: AssertionError\n----------------------------- Captured stdout call -----------------------------\nЗаметка 20 добавлена\nЗаметка 21 добавлена\n=========================== short test summary info ============================\nFAILED tests/test_add.py::test_add_note - AssertionError: assert 19 == 1\nFAILED tests/test_add.py::test_add_multiple_notes - AssertionError: assert 21...\n2 failed, 2 passed in 0.04s"
+    },
+    "acceptance": {
+      "passed": true,
+      "detail": "CLI работает: add→list через `main.py`"
+    }
+  },
+  "ended_reason": "task_solved",
+  "mechanical_solved": false
+}

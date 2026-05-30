@@ -1,0 +1,20 @@
+[build-system]
+requires = ['setuptools', 'wheel']
+
+[project]
+name = "notes"
+version = "0.1.0"
+description = "Программа для работы с заметками"
+authors = [{ name="Ваше имя", email="ваша.email@example.com" }]
+license = { file="LICENSE" }
+readme = "README.md"
+requires-python = ">=3.7"
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+]
+dependencies = [
+    'ruff',
+    'pytest'
+]

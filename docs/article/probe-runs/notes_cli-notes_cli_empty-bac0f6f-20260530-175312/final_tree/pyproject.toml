@@ -1,0 +1,10 @@
+[build-system]
+requires = ['setuptools', 'wheel']
+build-backend = 'setuptools.build_meta'
+
+[project]
+name = 'notes'
+version = '0.1.0'
+description = 'Программа для управления заметками'
+authors = [{'name': 'Your Name', 'email': 'your.email@example.com'}]
+dependencies = ['pytest']

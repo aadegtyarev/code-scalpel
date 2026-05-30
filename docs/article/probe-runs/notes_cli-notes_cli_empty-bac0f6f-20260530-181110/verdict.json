@@ -1,0 +1,41 @@
+{
+  "scenario": "notes_cli",
+  "pass_score": 4,
+  "pass_max": 8,
+  "criteria": {
+    "package": {
+      "passed": true,
+      "detail": "2 непустых .py-файла(ов) с исходным кодом"
+    },
+    "four_commands": {
+      "passed": true,
+      "detail": "все 4 команды упомянуты"
+    },
+    "json_storage": {
+      "passed": false,
+      "detail": "json.dump/load=True, .json-путь=False"
+    },
+    "tests_present": {
+      "passed": true,
+      "detail": "2 тест-файл(ов)"
+    },
+    "docs": {
+      "passed": true,
+      "detail": "README найден (README.md)"
+    },
+    "installable": {
+      "passed": false,
+      "detail": "editable/requirements install не прошёл: o/latest/config/build/\n      \n      As an example, if you intend to ship a directory named `foo` that resides within a `src` directory located at the root of your project, you can define the following:\n      \n      [tool.hatch.build.targets.wheel]\n      packages = [\"src/foo\"]\n      [end of output]\n  \n  note: This error originates from a subprocess, and is likely not a problem with pip.\nerror: metadata-generation-failed\n\n× Encountered error while generating package metadata.\n╰─> See above for output.\n\nnote: This is an issue with the package mentioned above, not pip.\nhint: See above for details."
+    },
+    "tests_pass": {
+      "passed": false,
+      "detail": "pytest упал (rc=1): t from a string that may\n        have extraneous data at the end.\n    \n        \"\"\"\n        try:\n            obj, end = self.scan_once(s, idx)\n        except StopIteration as err:\n>           raise JSONDecodeError(\"Expecting value\", s, err.value) from None\nE           json.decoder.JSONDecodeError: Expecting value: line 1 column 1 (char 0)\n\n/usr/lib/python3.12/json/decoder.py:355: JSONDecodeError\n=========================== short test summary info ============================\nFAILED tests/test_cli.py::test_add - assert 1 == 0\nFAILED tests/test_cli.py::test_list - json.decoder.JSONDecodeError: Expecting...\nFAILED tests/test_cli.py::test_search - json.decoder.JSONDecodeError: Expecti...\nFAILED tests/test_cli.py::test_delete - json.decoder.JSONDecodeError: Expecti...\n4 failed, 4 passed in 0.13s"
+    },
+    "acceptance": {
+      "passed": false,
+      "detail": "точка входа есть, но add/list не сработали (1 кандидат(ов))"
+    }
+  },
+  "ended_reason": "task_solved",
+  "mechanical_solved": false
+}
