@@ -39,6 +39,7 @@ from scripts.probes_v2.state import (
     git_is_dirty,
     git_remote_url,
     make_run_id,
+    update_json,
     utc_now,
     write_placeholder_artifacts,
 )
@@ -388,6 +389,10 @@ def finalize(
     # попал в основной репо как gitlink (вложенный submodule
     # pointer, который git не клонирует).
     if paths.workdir.exists():
+        # Считаем коммиты модели до удаления workdir: total - 1 (initial fixture commit).
+        commits_landed = _count_probe_commits(paths.workdir)
+        update_json(paths.metrics_json, {"commits_landed": commits_landed})
+
         if paths.final_tree.exists():
             shutil.rmtree(paths.final_tree)
         shutil.copytree(
@@ -599,6 +604,26 @@ def _reset_to_baseline(base_url: str, currently_loaded: list[str]) -> None:
     except urllib.error.URLError as e:
         typer.echo(f"error: failed to load baseline `{PINNED_BASE_MODEL}`: {e}", err=True)
         raise typer.Exit(1) from None
+
+
+def _count_probe_commits(workdir: Path) -> int:
+    """Число коммитов модели в workdir (total − 1 initial fixture commit).
+
+    Возвращает 0 если .git нет или git rev-list упал."""
+    git_dir = workdir / ".git"
+    if not git_dir.exists():
+        return 0
+    try:
+        r = subprocess.run(
+            ["git", "rev-list", "--count", "HEAD"],
+            cwd=workdir,
+            capture_output=True,
+            text=True,
+        )
+        total = int(r.stdout.strip()) if r.returncode == 0 else 0
+        return max(0, total - 1)  # subtract "probe-fixture initial state" commit
+    except Exception:
+        return 0
 
 
 def _init_workdir_git(workdir: Path) -> None:

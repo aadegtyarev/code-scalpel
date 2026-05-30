@@ -1011,6 +1011,10 @@ class StepAgent:
                         )
                     )
                     if tests_passed:
+                        if self._config.agent.auto_git and not self._model_already_committed(
+                            result.tool_results
+                        ):
+                            await self._ask_model_to_commit(task_label, on_tool_executed)
                         return StepResult(
                             reply=result.reply,
                             edits=[],
@@ -1093,6 +1097,10 @@ class StepAgent:
                     prompt = _NEEDS_TESTS_PROMPT
                     continue
                 # Patch is on disk; clear edits so the caller doesn't re-apply.
+                if self._config.agent.auto_git and not self._model_already_committed(
+                    result.tool_results
+                ):
+                    await self._ask_model_to_commit(task_label, on_tool_executed)
                 return StepResult(
                     reply=result.reply,
                     edits=[],
@@ -1633,6 +1641,34 @@ class StepAgent:
             runner=self._shell_runner,
         )
         return result.output, result.ok
+
+    @staticmethod
+    def _model_already_committed(tool_results: list[ToolExecuted] | tuple[ToolExecuted, ...]) -> bool:
+        """True if the model already called shell_exec with 'git commit' this turn."""
+        return any(
+            te.call.name == "shell_exec" and "git commit" in (te.call.body or "")
+            for te in tool_results
+        )
+
+    async def _ask_model_to_commit(
+        self,
+        task_label: str,
+        on_tool_executed: Callable[[ToolCall, ToolResult], None] | None,
+    ) -> None:
+        """One extra ask() after tests pass: let the model commit its own work.
+
+        Gives the model an explicit signal to call shell_exec with git commit.
+        Best-effort — any error is suppressed so the caller's return is unaffected.
+        If the model ignores the prompt, auto_commit_on_done fires as fallback.
+        """
+        label = task_label or "implement task"
+        prompt = (
+            "Tests passed. Now stage and commit:\n"
+            f'`git add -A && git commit -m "{label}"`\n'
+            "Adjust the message to describe what you actually changed."
+        )
+        with suppress(Exception):
+            await self.ask(prompt, mode="code", on_tool_executed=on_tool_executed)
 
     async def _verify_task_test_command(self, command: str) -> bool:
         """Run the task's planner-declared `Test command` and return its
