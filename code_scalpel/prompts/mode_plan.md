@@ -54,7 +54,12 @@ Rules:
   manual or N/A. Do NOT put commentary in this field — only the
   command or null.
 - `acceptance`: array of strings, one observable test or behaviour
-  per bullet. No prose.
+  per bullet. No prose. **For CLI tasks that describe error exits, name
+  the exact code** — "exits with code 1 on missing resource", not just
+  "exits with nonzero status". Convention: 0 = success, 1 = runtime /
+  domain error (resource not found, I/O failure), 2 = bad input
+  (wrong args, parse error). Tests generated later use these bullets as
+  their contract — vague bullets cause exit-code drift between tasks.
 - `skills`: array of skill names (e.g. `["python"]`). Empty array
   if not relevant.
 - NO write_file calls. NO code. NO explanatory text before or after
