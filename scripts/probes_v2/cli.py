@@ -24,10 +24,11 @@ import urllib.error
 import urllib.request
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Annotated
+from typing import Annotated, Any
 
 import typer
 
+from scripts.probes_v2.checkers import has_checker, run_checks
 from scripts.probes_v2.ipc import send_request
 from scripts.probes_v2.state import (
     FIXTURES_ROOT,
@@ -75,6 +76,16 @@ def start(
             "если нет — всё на основной модели.",
         ),
     ] = None,
+    base_url: Annotated[
+        str,
+        typer.Option(
+            "--base-url",
+            help="Корень OpenAI-совместимого сервера БЕЗ /v1 (по умолчанию "
+            "http://localhost:1234). Для удалённой LM Studio: "
+            "http://192.168.2.105:1234. Прокидывается и в pre-flight detection, "
+            "и агенту в демоне.",
+        ),
+    ] = "http://localhost:1234",
 ) -> None:
     """Создать run-dir, развернуть fixture, запустить демон.
     Печатает run-id на stdout — caller сохраняет его для
@@ -131,9 +142,9 @@ def start(
     # не PINNED_BASE_MODEL — печатаем warning, но прогон
     # продолжаем (могут быть кейсы где пользователь намеренно
     # сменил модель).
-    base_url = "http://localhost:1234/v1"
-    model_loaded = _detect_lmstudio_model(base_url)
-    all_loaded = _lmstudio_loaded_model_ids(base_url) or []
+    api_url = f"{base_url}/v1"
+    model_loaded = _detect_lmstudio_model(api_url)
+    all_loaded = _lmstudio_loaded_model_ids(api_url) or []
     if model_loaded not in {PINNED_BASE_MODEL, "unknown"} and not upstream_model:
         typer.echo(
             f"warning: LM Studio loaded `{model_loaded}`, probe expects "
@@ -164,7 +175,7 @@ def start(
             f"● Baseline `{PINNED_BASE_MODEL}` не загружена — выставляю чистый state…",
             err=True,
         )
-        _reset_to_baseline(base_url, all_loaded)
+        _reset_to_baseline(api_url, all_loaded)
 
     upstream_cmd_part = f" --upstream-model={upstream_model}" if upstream_model else ""
     meta = {
@@ -178,7 +189,7 @@ def start(
         "git_checkout_cmd": f"git checkout {git_sha}" if git_sha != "unknown" else None,
         "model_name_expected": PINNED_BASE_MODEL,
         "model_name_actual": model_loaded,
-        "model_base_url": base_url,
+        "model_base_url": api_url,
         # None = без upstream, всё решает основная модель; имя
         # модели = делегируем сложные fork'и наверх. v0.12
         # `UpstreamForker` + `UpstreamPendingQueue` обеспечивают
@@ -198,6 +209,7 @@ def start(
 
     env = _os.environ.copy()
     env["PROBE_BASE_MODEL"] = PINNED_BASE_MODEL
+    env["PROBE_BASE_URL"] = base_url
     if upstream_model:
         env["PROBE_UPSTREAM_MODEL"] = upstream_model
     proc = subprocess.Popen(
@@ -334,16 +346,20 @@ def status(run_id: Annotated[str, typer.Argument()]) -> None:
 def finalize(
     run_id: Annotated[str, typer.Argument()],
     reason: Annotated[
-        str,
+        str | None,
         typer.Option(
             "--reason",
-            help="task_solved | user_gave_up | error",
+            help=(
+                "Переопределить вердикт вручную: task_solved | user_gave_up | error. "
+                "По умолчанию выводится механическим чекером сценария."
+            ),
         ),
-    ],
+    ] = None,
 ) -> None:
     """Остановить демон, снять snapshot финального дерева,
-    обновить metrics/verdict, дописать в INDEX.md."""
-    if reason not in {"task_solved", "user_gave_up", "error"}:
+    прогнать механический чекер, обновить metrics/verdict, дописать
+    в INDEX.md."""
+    if reason is not None and reason not in {"task_solved", "user_gave_up", "error"}:
         typer.echo(f"error: bad --reason: {reason}", err=True)
         raise typer.Exit(2)
     paths = _resolve_run(run_id)
@@ -372,23 +388,69 @@ def finalize(
         # после снапшота, чтобы не таскать дубликат.
         shutil.rmtree(paths.workdir)
 
-    # Обновим meta: ended_at + ended_reason
     meta = json.loads(paths.meta_json.read_text())
-    meta["ended_at"] = utc_now()
-    meta["ended_reason"] = reason
-    paths.meta_json.write_text(json.dumps(meta, indent=2, ensure_ascii=False) + "\n")
+    scenario = str(meta["scenario"])
 
-    # Verdict — пока заглушка с reason'ом. Мехчекеры подключим
-    # отдельным PR'ом вместе с конкретным сценарием.
+    # Механический вердикт из фактов: ставим проект в эфемерный venv
+    # и гоняем его тесты. Если для сценария нет чекера — остаётся
+    # ручной --reason (как раньше). Ручной --reason всегда перекрывает.
     verdict = json.loads(paths.verdict_json.read_text())
-    verdict["scenario"] = meta["scenario"]
-    verdict["ended_reason"] = reason
+    verdict["scenario"] = scenario
+    final_reason = _apply_mechanical_verdict(scenario, paths.final_tree, verdict, reason)
+
+    meta["ended_at"] = utc_now()
+    meta["ended_reason"] = final_reason
+    paths.meta_json.write_text(json.dumps(meta, indent=2, ensure_ascii=False) + "\n")
     paths.verdict_json.write_text(json.dumps(verdict, indent=2, ensure_ascii=False) + "\n")
 
     # Дописать в INDEX.md одну строку.
     _append_to_index(meta, verdict, paths)
 
-    typer.echo(f"finalized: {run_id} ({reason})")
+    score = f"{verdict['pass_score']}/{verdict['pass_max']}"
+    typer.echo(f"finalized: {run_id} ({final_reason}, mechanical {score})")
+
+
+@app.command()
+def check(
+    run_id: Annotated[str, typer.Argument()],
+    no_run_tests: Annotated[
+        bool,
+        typer.Option(
+            "--no-run-tests", help="Только структурные проверки, без venv+pytest (быстро)."
+        ),
+    ] = False,
+    write: Annotated[
+        bool,
+        typer.Option("--write", help="Записать результат в verdict.json (иначе только печать)."),
+    ] = False,
+) -> None:
+    """Прогнать механический чекер по уже снятому `final_tree` без
+    перезапуска прогона. Для ретроспективной (пере)оценки прогонов."""
+    paths = _resolve_run(run_id)
+    meta = json.loads(paths.meta_json.read_text())
+    scenario = str(meta["scenario"])
+    if not has_checker(scenario):
+        typer.echo(f"error: нет механического чекера для '{scenario}'", err=True)
+        raise typer.Exit(2)
+    if not paths.final_tree.exists() or not any(paths.final_tree.iterdir()):
+        typer.echo(f"error: нет final_tree в {paths.run_dir}", err=True)
+        raise typer.Exit(2)
+
+    result = run_checks(scenario, paths.final_tree, run_tests=not no_run_tests)
+    assert result is not None  # has_checker уже проверили
+    solved = "task_solved" if result.solved else "user_gave_up"
+    typer.echo(f"{run_id}: {solved}  ({result.pass_score}/{result.pass_max})")
+    for key, crit in result.criteria.items():
+        mark = "PASS" if crit.passed else "FAIL"
+        typer.echo(f"  [{mark}] {key}: {crit.detail}")
+
+    if write:
+        verdict = json.loads(paths.verdict_json.read_text())
+        verdict["scenario"] = scenario
+        verdict.update(result.to_verdict())
+        verdict["ended_reason"] = solved
+        paths.verdict_json.write_text(json.dumps(verdict, indent=2, ensure_ascii=False) + "\n")
+        typer.echo(f"verdict.json обновлён → {solved}")
 
 
 @app.command(name="list")
@@ -410,6 +472,42 @@ def _resolve_run(run_id: str) -> RunPaths:
         typer.echo(f"error: run not found: {run_dir}", err=True)
         raise typer.Exit(2)
     return RunPaths(run_dir)
+
+
+def _apply_mechanical_verdict(
+    scenario: str,
+    final_tree: Path,
+    verdict: dict[str, Any],
+    manual_reason: str | None,
+    *,
+    run_tests: bool = True,
+) -> str:
+    """Заполнить `verdict` механическими критериями и вернуть итоговый
+    `ended_reason`. Ручной `manual_reason` перекрывает механику (с
+    предупреждением при расхождении). Если для сценария нет чекера —
+    `manual_reason` обязателен."""
+    result = run_checks(scenario, final_tree, run_tests=run_tests)
+    if result is None:
+        if manual_reason is None:
+            typer.echo(
+                f"error: нет механического чекера для '{scenario}' — нужен --reason",
+                err=True,
+            )
+            raise typer.Exit(2)
+        verdict["ended_reason"] = manual_reason
+        return manual_reason
+
+    verdict.update(result.to_verdict())
+    derived = "task_solved" if result.solved else "user_gave_up"
+    final = manual_reason if manual_reason is not None else derived
+    if manual_reason is not None and manual_reason != derived:
+        typer.echo(
+            f"warning: ручной --reason '{manual_reason}' расходится с механикой "
+            f"'{derived}' ({result.pass_score}/{result.pass_max}) — пишу ручной",
+            err=True,
+        )
+    verdict["ended_reason"] = final
+    return final
 
 
 def _daemon_info(paths: RunPaths) -> tuple[str, int]:
