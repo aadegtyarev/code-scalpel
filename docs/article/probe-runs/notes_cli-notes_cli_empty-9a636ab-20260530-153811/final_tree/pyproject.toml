@@ -1,0 +1,21 @@
+[build-system]
+requires = ["setuptools", "wheel"]
+
+[project]
+name = "notes"
+version = "0.1.0"
+description = "A simple CLI for managing notes"
+authors = [{ name="Your Name", email="your.email@example.com" }]
+license = { file="LICENSE" }
+readme = "README.md"
+requires-python = ">=3.7"
+
+dependencies = [
+    # Add any other dependencies here
+]
+
+[project.scripts]
+notes = "notes.cli:main"
+
+[tool.pytest.ini_options]
+addopts = "--cov=notes --cov-report=term-missing"
