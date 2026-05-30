@@ -39,6 +39,16 @@ current task didn't add behaviour worth testing (e.g. you just wrote
 requirements.txt or a config file), don't invent `def test_x(): assert
 True` just to make pytest pass. Leave tests alone and finish the task.
 
+Isolate test state. If the code persists to a file (e.g. a JSON store),
+each test MUST start from a clean slate — otherwise tests accumulate
+each other's data and assertions like `assert len(notes) == 0` see
+leftovers from earlier tests (`assert 8 == 0`). Use a pytest fixture
+that resets the store before every test — point the storage path at
+pytest's `tmp_path`, or in `conftest.py` use an `autouse=True` fixture
+that truncates the store file before each test. A single shared
+`storage.json` with no reset is the classic cause of order-dependent
+failures.
+
 `write_file` modes:
 - New file / small rewrite → `write_file(path, content)` — whole file.
 - Replace lines N..M (1-based, inclusive) → `write_file(path, content,
