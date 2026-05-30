@@ -87,6 +87,15 @@ def start(
             "и агенту в демоне.",
         ),
     ] = "http://localhost:1234",
+    profile: Annotated[
+        str | None,
+        typer.Option(
+            "--profile",
+            help="Имя профиля из ~/.config/code-scalpel/config.yaml. "
+            "Если задан — берёт model и base_url из профиля, "
+            "пропускает LM Studio pre-flight. Например: --profile openai.",
+        ),
+    ] = None,
 ) -> None:
     """Создать run-dir, развернуть fixture, запустить демон.
     Печатает run-id на stdout — caller сохраняет его для
@@ -99,6 +108,32 @@ def start(
     if not fixture_path.is_dir():
         typer.echo(f"error: fixture not found: {fixture_path}", err=True)
         raise typer.Exit(2)
+
+    # Разрешаем профиль. Если --profile задан — берём model и base_url
+    # из config.yaml и пропускаем LM Studio pre-flight. Если нет —
+    # используем PINNED_BASE_MODEL и localhost:1234 (обычный qwen-путь).
+    use_lmstudio_preflight = True
+    effective_model = PINNED_BASE_MODEL
+    effective_base_url = base_url
+    if profile is not None:
+        from code_scalpel.config import load_config
+
+        cfg = load_config()
+        if profile not in cfg.profiles:
+            typer.echo(
+                f"error: profile '{profile}' not found in config. "
+                f"Available: {', '.join(cfg.profiles)}",
+                err=True,
+            )
+            raise typer.Exit(2)
+        prof = cfg.profiles[profile]
+        effective_model = prof.model
+        effective_base_url = prof.provider_base_url()
+        use_lmstudio_preflight = prof.provider == "lmstudio"
+        typer.echo(
+            f"● using profile '{profile}': model={effective_model}, base_url={effective_base_url}",
+            err=True,
+        )
 
     git_sha = current_git_sha(REPO_ROOT)
     git_dirty = git_is_dirty(REPO_ROOT)
@@ -136,6 +171,7 @@ def start(
     with tarfile.open(paths.fixture_tar, "w:gz") as tar:
         tar.add(fixture_path, arcname=project)
 
+    # LM Studio pre-flight — только для lmstudio-провайдера.
     # Дёрнем `/v1/models` чтобы зафиксировать реально загруженную
     # модель — не угадывать в meta. Если LM Studio недоступна —
     # фиксируем как «unknown», прогон не блокируем (агент сам
@@ -143,42 +179,41 @@ def start(
     # не PINNED_BASE_MODEL — печатаем warning, но прогон
     # продолжаем (могут быть кейсы где пользователь намеренно
     # сменил модель).
-    api_url = f"{base_url}/v1"
-    model_loaded = _detect_lmstudio_model(api_url)
-    all_loaded = _lmstudio_loaded_model_ids(api_url) or []
-    if model_loaded not in {PINNED_BASE_MODEL, "unknown"} and not upstream_model:
-        typer.echo(
-            f"warning: LM Studio loaded `{model_loaded}`, probe expects "
-            f"`{PINNED_BASE_MODEL}`. Continuing — verify intent in evaluation.md.",
-            err=True,
-        )
-    # Проверка upstream-модели — если задана, она должна быть
-    # **тоже** загружена в LM Studio. Иначе fork'и в очереди
-    # упадут при flush'е на 404/timeout. Это **критично**, поэтому
-    # fail-fast (а не warning) — иначе бессмысленно жечь токены
-    # baseline-задачами.
-    if upstream_model and upstream_model not in all_loaded:
-        typer.echo(
-            f"error: upstream model `{upstream_model}` not loaded in LM Studio.\n"
-            f"Currently loaded: {', '.join(all_loaded) if all_loaded else '(none / API unreachable)'}.\n"
-            f"Load it via LM Studio UI (или `lms load {upstream_model}` если CLI стоит) и повторите.",
-            err=True,
-        )
-        raise typer.Exit(1)
-
-    # Reset LM Studio к чистому baseline-состоянию: если baseline
-    # не загружена (например, прошлый probe оставил gemma) —
-    # выгружаем всё и грузим baseline. Probe-прогоны должны
-    # начинаться с одинакового state, иначе swap-orchestration
-    # будет сравнивать с разной точкой отсчёта.
-    if PINNED_BASE_MODEL not in all_loaded:
-        typer.echo(
-            f"● Baseline `{PINNED_BASE_MODEL}` не загружена — выставляю чистый state…",
-            err=True,
-        )
-        _reset_to_baseline(api_url, all_loaded)
+    api_url = f"{effective_base_url}/v1"
+    if use_lmstudio_preflight:
+        model_loaded = _detect_lmstudio_model(api_url)
+        all_loaded = _lmstudio_loaded_model_ids(api_url) or []
+        if model_loaded not in {effective_model, "unknown"} and not upstream_model:
+            typer.echo(
+                f"warning: LM Studio loaded `{model_loaded}`, probe expects "
+                f"`{effective_model}`. Continuing — verify intent in evaluation.md.",
+                err=True,
+            )
+        # Проверка upstream-модели — если задана, она должна быть
+        # **тоже** загружена в LM Studio. Иначе fork'и в очереди
+        # упадут при flush'е на 404/timeout. Это **критично**, поэтому
+        # fail-fast (а не warning) — иначе бессмысленно жечь токены
+        # baseline-задачами.
+        if upstream_model and upstream_model not in all_loaded:
+            typer.echo(
+                f"error: upstream model `{upstream_model}` not loaded in LM Studio.\n"
+                f"Currently loaded: {', '.join(all_loaded) if all_loaded else '(none / API unreachable)'}.\n"
+                f"Load it via LM Studio UI (или `lms load {upstream_model}` если CLI стоит) и повторите.",
+                err=True,
+            )
+            raise typer.Exit(1)
+        if effective_model not in all_loaded:
+            typer.echo(
+                f"● Baseline `{effective_model}` не загружена — выставляю чистый state…",
+                err=True,
+            )
+            _reset_to_baseline(api_url, all_loaded)
+    else:
+        model_loaded = effective_model
+        all_loaded = [effective_model]
 
     upstream_cmd_part = f" --upstream-model={upstream_model}" if upstream_model else ""
+    profile_cmd_part = f" --profile={profile}" if profile else ""
     meta = {
         "run_id": run_id,
         "scenario": scenario,
@@ -188,9 +223,10 @@ def start(
         "git_dirty": git_dirty,
         "git_commit_url": git_commit_url,
         "git_checkout_cmd": f"git checkout {git_sha}" if git_sha != "unknown" else None,
-        "model_name_expected": PINNED_BASE_MODEL,
+        "model_name_expected": effective_model,
         "model_name_actual": model_loaded,
         "model_base_url": api_url,
+        "profile": profile,
         # None = без upstream, всё решает основная модель; имя
         # модели = делегируем сложные fork'и наверх. v0.12
         # `UpstreamForker` + `UpstreamPendingQueue` обеспечивают
@@ -200,7 +236,7 @@ def start(
         "ended_at": None,
         "ended_reason": None,
         "user_role": "claude-acting-as-user-per-tone-of-voice.md",
-        "command": f"probe start {scenario} {project}{upstream_cmd_part}",
+        "command": f"probe start {scenario} {project}{upstream_cmd_part}{profile_cmd_part}",
     }
     paths.meta_json.write_text(json.dumps(meta, indent=2, ensure_ascii=False) + "\n")
 
@@ -209,8 +245,8 @@ def start(
     import os as _os
 
     env = _os.environ.copy()
-    env["PROBE_BASE_MODEL"] = PINNED_BASE_MODEL
-    env["PROBE_BASE_URL"] = base_url
+    env["PROBE_BASE_MODEL"] = effective_model
+    env["PROBE_BASE_URL"] = effective_base_url
     if upstream_model:
         env["PROBE_UPSTREAM_MODEL"] = upstream_model
     proc = subprocess.Popen(
