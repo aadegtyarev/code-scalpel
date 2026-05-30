@@ -46,6 +46,7 @@ _MAX_TOOL_ROUNDS = 6
 _APPLY_FAILED_PROMPT = _prompts.APPLY_FAILED
 _TESTS_FAILED_PROMPT = _prompts.TESTS_FAILED
 _MISSING_FILES_PROMPT = _prompts.MISSING_FILES
+_NO_PROGRESS_PROMPT = _prompts.NO_PROGRESS
 _NEEDS_TESTS_PROMPT = _prompts.NEEDS_TESTS
 
 
@@ -422,6 +423,27 @@ def _successful_write_paths(tool_results: tuple[ToolExecuted, ...]) -> list[str]
         except (json.JSONDecodeError, KeyError, AttributeError):
             pass
     return paths
+
+
+def _attempt_signature(result: StepResult) -> str:
+    """Стабильный хэш мутаций этой попытки — write_file (path+content)
+    и SEARCH/REPLACE edits. Пустая строка, если попытка ничего не
+    меняла. `code_with_retry` ловит по нему no-progress-петлю: модель
+    воспроизводит правку, которую уже пробовала (типичный трэш на
+    слабой модели — переписывает один файл по кругу)."""
+    parts: list[str] = []
+    for r in result.tool_results:
+        if r.call.name == "write_file" and r.result.ok:
+            try:
+                args = json.loads(r.call.body)
+            except (json.JSONDecodeError, AttributeError):
+                continue
+            parts.append(f"W\x00{args.get('path', '')}\x00{args.get('content', '')}")
+    for e in result.edits:
+        parts.append(f"E\x00{e.path}\x00{e.search}\x00{e.replace}")
+    if not parts:
+        return ""
+    return hashlib.sha256("\x01".join(sorted(parts)).encode("utf-8")).hexdigest()
 
 
 def _collect_write_file_diffs(tool_results: tuple[ToolExecuted, ...]) -> str:
@@ -807,9 +829,35 @@ class StepAgent:
         seen_hypotheses: set[str] = set()
         last_test_output: str = ""
         debug_pass_runs = 0
+        # No-progress guard: сигнатуры уже опробованных мутаций. Если
+        # модель воспроизводит ту же правку — это топтание (трэш на
+        # слабой модели). Один раз эскалируем (промпт «смени подход»),
+        # при повторе после эскалации — рвём петлю, не жжём бюджет.
+        seen_sigs: set[str] = set()
+        no_progress_escalated = False
         for i in range(max_retries + 1):
             result = await self.ask(prompt, mode=mode, on_tool_executed=on_tool_executed)
             last_result = result
+            sig = _attempt_signature(result)
+            if sig and sig in seen_sigs:
+                if on_tool_executed is not None:
+                    note = (
+                        "Повтор после эскалации — останавливаю петлю."
+                        if no_progress_escalated
+                        else "Модель повторила ту же правку — требую сменить подход."
+                    )
+                    with suppress(Exception):
+                        call = ToolCall(name="no_progress", body=task_label)
+                        on_tool_executed(call, ToolResult(call, output=note, ok=False))
+                if not no_progress_escalated and i < max_retries:
+                    no_progress_escalated = True
+                    prompt = _NO_PROGRESS_PROMPT.format(
+                        output=last_test_output or "(нет вывода тестов)"
+                    )
+                    continue
+                break
+            if sig:
+                seen_sigs.add(sig)
             if not result.edits:
                 # No SEARCH/REPLACE patch. The model may have written files
                 # via the `write_file` tool instead — that's a first-class

@@ -1114,24 +1114,24 @@ async def test_code_with_retry_stops_at_max_attempts(project: Path) -> None:
     from code_scalpel.tools.shell import ShellResult
     from tests.mocks import MockShellRunner
 
-    # Each round the model emits a patch that's a no-op rewrite of itself
-    # (`return "wrong"` → `return "wrong"`). The first round mutates the
-    # file; rounds 2 and 3 re-emit the same patch which keeps applying
-    # because SEARCH still matches. Tests fail every time.
-    bad_patch_self_idempotent = """\
-hello.py
-```python
-<<<<<<< SEARCH
-def hello():
-    return "wrong"
-=======
-def hello():
-    return "wrong"
->>>>>>> REPLACE
-```
-"""
+    # Each round emits a DISTINCT failing patch (wrong → wrong2 → wrong3),
+    # so the no-progress guard doesn't fire — we're testing the
+    # max-attempts ceiling, where the model keeps genuinely trying
+    # different things and every one fails tests.
+    def _chain_patch(old: str, new: str) -> str:
+        return (
+            "hello.py\n```python\n<<<<<<< SEARCH\n"
+            f"def hello():\n    return {old}\n=======\n"
+            f"def hello():\n    return {new}\n>>>>>>> REPLACE\n```\n"
+        )
+
     llm = MockLLMAdapter(
-        [_BAD_PATCH, bad_patch_self_idempotent, bad_patch_self_idempotent, _BAD_PATCH]
+        [
+            _BAD_PATCH,  # pass → "wrong"
+            _chain_patch('"wrong"', '"wrong2"'),
+            _chain_patch('"wrong2"', '"wrong3"'),
+            _GOOD_PATCH,  # unused — loop stops at max_retries
+        ]
     )
     shell = MockShellRunner([ShellResult("still failing", 1)] * 5)
     agent = StepAgent(
@@ -1152,6 +1152,42 @@ def hello():
     # applied cleanly and only the tests rejected them.
     pytest_calls = [c for c in shell.calls if c and c[0] == "pytest"]
     assert len(pytest_calls) == 3
+
+
+@pytest.mark.asyncio
+async def test_code_with_retry_no_progress_guard_breaks_thrash(project: Path) -> None:
+    """Модель повторяет ту же правку → no-progress guard: один раз
+    эскалирует (промпт «смени подход»), при повторе — рвёт петлю.
+    Так слабая модель не жжёт max_failures на идентичных rewrite'ах
+    (наблюдалось вживую: test_notes.py переписан 6 раз по кругу)."""
+    from code_scalpel.tools.shell import ShellResult
+    from tests.mocks import MockShellRunner
+
+    # Один и тот же падающий патч на каждой итерации.
+    llm = MockLLMAdapter([_BAD_PATCH, _BAD_PATCH, _BAD_PATCH])
+    shell = MockShellRunner([ShellResult("still failing", 1)] * 5)
+    agent = StepAgent(
+        llm=llm,
+        cwd=project,
+        config=_retry_config(max_debug_attempts=2),
+        shell_runner=shell,
+    )
+
+    cards: list[tuple[str, str]] = []
+    result = await agent.code_with_retry(
+        "fix something",
+        on_tool_executed=lambda c, r: cards.append((c.name, r.output)),
+    )
+
+    # Только первая настоящая попытка записана; повторы коротко
+    # замкнуты вместо честных 3 attempts.
+    assert len(result.attempts) == 1
+    # Guard эскалировал хотя бы раз и затем остановился.
+    no_progress_cards = [out for name, out in cards if name == "no_progress"]
+    assert no_progress_cards, "ожидали no_progress-карту"
+    # Эскалационный промпт ушёл модели (3-й вызов получил NO_PROGRESS).
+    third_call_system = llm.calls[2][0]["content"] + str(llm.calls[2])
+    assert "DIFFERENT" in third_call_system or "STOP repeating" in third_call_system
 
 
 @pytest.mark.asyncio
