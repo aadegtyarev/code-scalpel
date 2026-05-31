@@ -10,8 +10,16 @@ Python project rules:
   these lines (use `write_file` with `insert_after_line=0` if .gitignore
   is missing, or append): `.venv/`, `__pycache__/`, `*.pyc`,
   `.pytest_cache/`, `dist/`, `build/`, `*.egg-info/`.
-- Install deps: `.venv/bin/pip install -r requirements.txt` (or `-e .`
-  for editable installs of the project itself).
+- Install deps: `.venv/bin/pip install -r requirements.txt` (or
+  `.venv/bin/pip install -e .` for editable installs of the project itself).
+  IMPORTANT: after installing, verify with `.venv/bin/python -c "import <pkg>"`.
+  If the import fails, do NOT retry pip — instead add `pythonpath` to
+  pyproject.toml so pytest can find the package without installation:
+    [tool.pytest.ini_options]
+    pythonpath = ["."]          # flat layout:  notes_cli/ at root
+    # pythonpath = ["src"]      # src layout:   src/notes_cli/
+  With `pythonpath` set, `.venv/bin/pytest` finds the package via sys.path
+  and you don't need a working editable install.
 - Tests: `.venv/bin/pytest -x --tb=short --no-header -q` (stop on first
   fail).
 - Lint: `.venv/bin/ruff check .` — auto-fix: `.venv/bin/ruff check --fix .`

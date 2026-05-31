@@ -1129,14 +1129,6 @@ async def _tool_run_tests(call: ToolCall, cwd: Path, runner: ShellRunner) -> Too
         cmd = ["pytest", "-x", "--tb=short", "--no-header", "-q", *args]
         skill_label = "pytest (fallback)"
 
-    # Prefer the project's own venv pytest so `pip install -e .` inside
-    # the venv is visible to the test runner. System pytest runs in the
-    # system Python env and can't import packages installed only in .venv.
-    if cmd and cmd[0] == "pytest":
-        venv_pytest = cwd / ".venv" / "bin" / "pytest"
-        if venv_pytest.is_file():
-            cmd = [str(venv_pytest)] + cmd[1:]
-
     try:
         result = await runner.run(cmd, cwd=str(cwd), timeout=120)
     except Exception as e:

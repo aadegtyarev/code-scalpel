@@ -258,7 +258,9 @@ def check_cli_acceptance(tree: Path) -> Criterion:
         # не импортируются и CLI падает с ImportError до первой команды.
         # Передаём venv-питон в _find_cli_launchers: установленный пакет
         # виден напрямую, src-layout не нужно обходить через sys.path.
-        venv = work / ".acc-venv"
+        # ВАЖНО: venv создаём РЯДОМ с work, не внутри — иначе _source_py_files
+        # обходит сотни venv-файлов и получает десятки ложных кандидатов.
+        venv = Path(tmp) / ".acc-venv"
         py_bin = sys.executable
         rc, _ = _run([sys.executable, "-m", "venv", str(venv)], work, 60)
         if rc == 0:
