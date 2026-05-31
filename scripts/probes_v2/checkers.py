@@ -192,24 +192,35 @@ def _has_tests(tree: Path) -> Criterion:
 _ACC_TOKEN = "ACC_PROBE_NOTE_7Q2"
 
 
-def _find_cli_launchers(tree: Path) -> list[list[str]]:
+def _find_cli_launchers(tree: Path, python: str | None = None) -> list[list[str]]:
     """Способы запустить проект КАК CLI, drift-устойчиво к имени/структуре.
     `python -m <pkg>` для пакетов с `__main__.py`; `python <file>` для
     модулей с реальной точкой входа (`__main__` + argparse/sys.argv/
     click/typer). Модуль без точки входа сюда НЕ попадёт — это и ловит
-    «функции есть, а CLI нет»."""
+    «функции есть, а CLI нет».
+
+    `python` — путь к интерпретатору (по умолчанию sys.executable).
+    Если передан venv-питон, модуль уже установлен через pip и
+    src-layout прозрачен без всякого sys.path-хака."""
+    py_bin = python or sys.executable
     launchers: list[list[str]] = []
     for main in tree.rglob("__main__.py"):
         if {"tests", "__pycache__"} & set(main.parts):
             continue
-        mod = ".".join(main.parent.relative_to(tree).parts)
+        parts = main.parent.relative_to(tree).parts
+        # src-layout: первый компонент — "src" без __init__.py.
+        # Генерируем модуль без "src." — pip install -e . уже поставил
+        # пакет в venv и он виден напрямую.
+        if parts and parts[0] == "src" and not (tree / "src" / "__init__.py").exists():
+            parts = parts[1:]
+        mod = ".".join(parts)
         if mod:
-            launchers.append([sys.executable, "-m", mod])
+            launchers.append([py_bin, "-m", mod])
     entry_re = re.compile(r"__main__|argparse|sys\.argv|\bclick\b|\btyper\b")
     for py in _source_py_files(tree):
         text = py.read_text("utf-8", "replace")
         if "__main__" in text and entry_re.search(text):
-            launchers.append([sys.executable, str(py.relative_to(tree))])
+            launchers.append([py_bin, str(py.relative_to(tree))])
     return launchers
 
 
@@ -242,7 +253,22 @@ def check_cli_acceptance(tree: Path) -> Criterion:
                 "__pycache__", "*.pyc", ".git", ".venv", "venv", ".pytest_cache", "*.json"
             ),
         )
-        launchers = _find_cli_launchers(work)
+
+        # Ставим зависимости в изолированный venv — без этого click/typer
+        # не импортируются и CLI падает с ImportError до первой команды.
+        # Передаём venv-питон в _find_cli_launchers: установленный пакет
+        # виден напрямую, src-layout не нужно обходить через sys.path.
+        venv = work / ".acc-venv"
+        py_bin = sys.executable
+        rc, _ = _run([sys.executable, "-m", "venv", str(venv)], work, 60)
+        if rc == 0:
+            py_bin = str(venv / "bin" / "python")
+            pip = [py_bin, "-m", "pip", "install", "-q"]
+            rc2, _ = _run([*pip, "-e", ".[dev]"], work, _INSTALL_TIMEOUT_SEC)
+            if rc2 != 0:
+                _run([*pip, "-e", "."], work, _INSTALL_TIMEOUT_SEC)
+
+        launchers = _find_cli_launchers(work, python=py_bin)
         if not launchers:
             return Criterion(
                 False, "нет точки входа CLI (__main__/argparse) — не запускается как CLI"
