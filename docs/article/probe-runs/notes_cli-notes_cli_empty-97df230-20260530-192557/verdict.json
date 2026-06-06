@@ -1,0 +1,41 @@
+{
+  "scenario": "notes_cli",
+  "pass_score": 5,
+  "pass_max": 8,
+  "criteria": {
+    "package": {
+      "passed": true,
+      "detail": "1 непустых .py-файла(ов) с исходным кодом"
+    },
+    "four_commands": {
+      "passed": true,
+      "detail": "все 4 команды упомянуты"
+    },
+    "json_storage": {
+      "passed": true,
+      "detail": "json-сериализация + .json-хранилище найдены"
+    },
+    "tests_present": {
+      "passed": true,
+      "detail": "1 тест-файл(ов)"
+    },
+    "docs": {
+      "passed": true,
+      "detail": "README найден (README.md)"
+    },
+    "installable": {
+      "passed": false,
+      "detail": "editable/requirements install не прошёл: o/latest/config/build/\n      \n      As an example, if you intend to ship a directory named `foo` that resides within a `src` directory located at the root of your project, you can define the following:\n      \n      [tool.hatch.build.targets.wheel]\n      packages = [\"src/foo\"]\n      [end of output]\n  \n  note: This error originates from a subprocess, and is likely not a problem with pip.\nerror: metadata-generation-failed\n\n× Encountered error while generating package metadata.\n╰─> See above for output.\n\nnote: This is an issue with the package mentioned above, not pip.\nhint: See above for details."
+    },
+    "tests_pass": {
+      "passed": false,
+      "detail": "pytest упал (rc=1): ^^\nE       NameError: name 'os' is not defined. Did you forget to import 'os'\n\ntests/test_cli.py:6: NameError\n______________________ ERROR at setup of test_delete_note ______________________\n\n    def setup_module():\n>       if os.path.exists('notes.json'):\n           ^^\nE       NameError: name 'os' is not defined. Did you forget to import 'os'\n\ntests/test_cli.py:6: NameError\n=========================== short test summary info ============================\nERROR tests/test_cli.py::test_add_note - NameError: name 'os' is not defined....\nERROR tests/test_cli.py::test_list_notes - NameError: name 'os' is not define...\nERROR tests/test_cli.py::test_search_notes - NameError: name 'os' is not defi...\nERROR tests/test_cli.py::test_delete_note - NameError: name 'os' is not defin...\n4 errors in 0.03s"
+    },
+    "acceptance": {
+      "passed": false,
+      "detail": "нет точки входа CLI (__main__/argparse) — не запускается как CLI"
+    }
+  },
+  "ended_reason": "task_solved",
+  "mechanical_solved": false
+}

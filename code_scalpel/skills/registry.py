@@ -40,11 +40,24 @@ class SkillRegistry:
         self._skills.append(skill)
 
     def all(self) -> tuple[Skill, ...]:
-        return tuple(self._skills)
+        """Model-facing catalog: every listed skill (hidden ones excluded).
+
+        `hidden` skills stay registered — `get(name)`, `default` and
+        `default_runnable` still see them — but never appear in the
+        catalog the model is shown, so a discovery-only adapter does not
+        advertise a row with no prompts/skills guidance behind it.
+        """
+        return tuple(s for s in self._skills if not s.hidden)
 
     def active(self, root: Path) -> tuple[Skill, ...]:
-        """Return every skill that claims this root, in registration order."""
-        return tuple(s for s in self._skills if s.detect(root))
+        """Listed skills that claim this root, in registration order.
+
+        Mirrors `all()` on the `hidden` exclusion: this backs the
+        detected-stack hint and the `/skills` panel, both model/user
+        facing. `default`/`default_runnable` keep their own unfiltered
+        scan over `_skills` so detection selection is unaffected.
+        """
+        return tuple(s for s in self._skills if not s.hidden and s.detect(root))
 
     def default(self, root: Path) -> Skill | None:
         """Return the first active skill, or None if nothing detects."""

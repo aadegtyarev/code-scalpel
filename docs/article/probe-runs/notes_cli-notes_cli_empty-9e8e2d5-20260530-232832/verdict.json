@@ -1,0 +1,41 @@
+{
+  "scenario": "notes_cli",
+  "pass_score": 7,
+  "pass_max": 8,
+  "criteria": {
+    "package": {
+      "passed": true,
+      "detail": "5 непустых .py-файла(ов) с исходным кодом"
+    },
+    "four_commands": {
+      "passed": true,
+      "detail": "все 4 команды упомянуты"
+    },
+    "json_storage": {
+      "passed": true,
+      "detail": "json-сериализация + .json-хранилище найдены"
+    },
+    "tests_present": {
+      "passed": true,
+      "detail": "2 тест-файл(ов)"
+    },
+    "docs": {
+      "passed": true,
+      "detail": "README найден (README.md)"
+    },
+    "installable": {
+      "passed": true,
+      "detail": "проект ставится как пакет"
+    },
+    "tests_pass": {
+      "passed": false,
+      "detail": "pytest упал (rc=1): delete_missing_note_exits_nonzero ____________________\n\ntmp_path = PosixPath('/tmp/claude-1000/pytest-of-adegtyarev/pytest-87/test_delete_missing_note_exits0')\ncapsys = <_pytest.capture.CaptureFixture object at 0x73700193b4d0>\n\n    def test_delete_missing_note_exits_nonzero(tmp_path, capsys):\n        storage = tmp_path / \"notes.json\"\n    \n        exit_code = main([\"--storage\", str(storage), \"delete\", \"missing\"])\n>       assert exit_code == 2\nE       assert 1 == 2\n\ntests/test_cli.py:31: AssertionError\n----------------------------- Captured stdout call -----------------------------\nnote not found: missing\n=========================== short test summary info ============================\nFAILED tests/test_cli.py::test_delete_missing_note_exits_nonzero - assert 1 == 2\n1 failed, 2 passed in 0.05s"
+    },
+    "acceptance": {
+      "passed": true,
+      "detail": "CLI работает: add→list через `-m notes_cli`"
+    }
+  },
+  "ended_reason": "user_gave_up",
+  "mechanical_solved": false
+}

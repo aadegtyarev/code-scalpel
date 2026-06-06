@@ -20,3 +20,9 @@ config.yaml
 .code-scalpel/
 .claude/
 memory/
+
+# ai-pm protocol tooling — separate project, vendored locally, not product history.
+.ai-pm/tooling/
+
+# Probe-run scratch working copies (nested git repos) — never part of the corpus.
+docs/article/probe-runs/*/.workdir/

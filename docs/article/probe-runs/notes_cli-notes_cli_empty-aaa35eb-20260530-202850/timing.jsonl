@@ -1,0 +1,2 @@
+{"ts": "2026-05-30T20:28:51Z", "event": "step.start", "turn": 1, "mode": "plan"}
+{"ts": "2026-05-30T20:28:53Z", "event": "step.error", "error": "BadRequestError('Error code: 400 - {\\'error\\': {\\'message\\': \"Invalid schema for response_format \\'plan\\': In context=(), \\'additionalProperties\\' is required to be supplied and to be false.\", \\'type\\': \\'invalid_request_error\\', \\'param\\': \\'response_format\\', \\'code\\': None}}')"}

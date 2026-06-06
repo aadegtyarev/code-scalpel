@@ -24,11 +24,12 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from code_scalpel.skills.base import MarkdownSkill, Skill
+from code_scalpel.skills.base import MarkdownSkill, ScaffoldSpec, Skill
 from code_scalpel.skills.docker_skill import DockerSkill
 from code_scalpel.skills.go_skill import GoSkill
 from code_scalpel.skills.js_skill import JsTsSkill
 from code_scalpel.skills.postgres_skill import PostgresSkill
+from code_scalpel.skills.python_cli_adapter import PythonCliAdapter
 from code_scalpel.skills.python_skill import PythonSkill
 from code_scalpel.skills.registry import SkillRegistry
 from code_scalpel.skills.sqlite_skill import SqliteSkill
@@ -91,6 +92,19 @@ def _auto_register_markdown_skills(registry: SkillRegistry) -> None:
 
 
 _auto_register_python_skills(_registry)
+
+# PythonCliAdapter is registered explicitly, NOT via _auto_register_*: its
+# module is python_cli_adapter.py (not *_skill.py), so the auto-scanner
+# skips it. It is registered with provides_test_runner = False (never wins
+# default_runnable — PythonSkill, priority 10, stays the test runner) and
+# hidden = True (excluded from the model catalog / detected-stack hint /
+# /skills, since it shares PythonSkill's detect() and has no
+# prompts/skills/python-cli.md behind it). It stays get_skill('python-cli')-
+# discoverable for the future run-loop. This is the "discoverable without
+# hijacking the test path and without polluting the model listings"
+# decision (plan scenario 7 + interaction scenarios + Pass-2 finding 1).
+_registry.register(PythonCliAdapter())
+
 _auto_register_markdown_skills(_registry)
 
 
@@ -138,7 +152,9 @@ __all__ = [
     "JsTsSkill",
     "MarkdownSkill",
     "PostgresSkill",
+    "PythonCliAdapter",
     "PythonSkill",
+    "ScaffoldSpec",
     "Skill",
     "SkillRegistry",
     "SqliteSkill",

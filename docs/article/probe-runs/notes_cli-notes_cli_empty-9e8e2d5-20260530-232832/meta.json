@@ -1,0 +1,20 @@
+{
+  "run_id": "notes_cli-notes_cli_empty-9e8e2d5-20260530-232832",
+  "scenario": "notes_cli",
+  "project": "notes_cli_empty",
+  "version_tag": "main_9e8e2d5",
+  "git_sha": "9e8e2d59f214fa33b5f87432c28fcf89f74340c0",
+  "git_dirty": true,
+  "git_commit_url": "https://github.com/aadegtyarev/code-scalpel/commit/9e8e2d59f214fa33b5f87432c28fcf89f74340c0",
+  "git_checkout_cmd": "git checkout 9e8e2d59f214fa33b5f87432c28fcf89f74340c0",
+  "model_name_expected": "gpt-5.4-mini",
+  "model_name_actual": "gpt-5.4-mini",
+  "model_base_url": "https://api.openai.com/v1",
+  "profile": "openai",
+  "upstream_model": null,
+  "started_at": "2026-05-30T23:28:32Z",
+  "ended_at": "2026-05-30T23:32:41Z",
+  "ended_reason": "user_gave_up",
+  "user_role": "claude-acting-as-user-per-tone-of-voice.md",
+  "command": "probe start notes_cli notes_cli_empty --profile=openai"
+}
