@@ -8,31 +8,35 @@ PM reads this when curious about progress; PM never edits it. Agents read it as 
 
 ## Task
 
-(none — project just initialized under ai-pm-protocol)
+Capture the TUI UX/ergonomics as an authoritative spec in docs/ui-guide.md (migration step 0, feat/capture-tui-ux-spec) — de-risks later TUI rewrite / seam evolution. Backend redesign (feature 1: project-adapter-abstraction) is PARKED behind this.
 
 ## Status
 
-idle
+documenting (TUI UX spec capture)
 
 ## Done
 
 - Bootstrap: legacy adoption (full documentation mode) completed.
+- Spike: diagnosed "doesn't work as a product" — 19% task_solved across 107 probe runs; root cause = no acceptance/run gate in Definition-of-Done (only 2% of failed runs ever invoked the deliverable). Language-agnostic.
+- pm-architect arch note written: `.ai-pm/arch/backend-redesign_arch.md` (project-adapter abstraction + acceptance gate in run_plan; TUI UX preserved, impl/seam evolvable under non-breakage discipline).
 
 ## Remaining
 
-- Await first feature description from PM.
+- PM picks first feature to plan from the migration path.
+- Open PM decisions: 3/3-gate as DoD vs manual release check; Fork-2 acceptance-spec source; agent.py decomposition scope.
 
 ## Touched files
 
-(none active)
+- .ai-pm/arch/backend-redesign_arch.md (new)
+- docs/* + .ai-pm/* from bootstrap (committed on branch chore/bootstrap-ai-pm, PR #166)
 
 ## Next step
 
-PM describes a feature → run `/pm-plan`.
+PM selects first feature (recommended: feat/project-adapter-abstraction) → run `/pm-plan`.
 
 ## Validation
 
-pending
+pending (per-feature)
 
 ## Notes
 
