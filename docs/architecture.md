@@ -354,6 +354,79 @@ demotion gate), `plan_runner.py` (`should_run_now` position signal),
 `skills/python_cli_adapter.py`, `agent.py` (`derive_acceptance_args`),
 `config.py` (`auto_derive_acceptance`), `state.py`.
 
+### Acceptance self-fix loop (feature 3) (v0.14)
+
+**Chosen:** when verification #4 would demote the **last applicable task**
+(`done → failed` — intent × position × state all agree, see *Acceptance
+gate enforcement* above), the run loop no longer fails immediately. At
+`optimist`/`yolo` trust it re-feeds the failing run-smoke output back to
+`code_with_retry` as the error to fix, rebuilds, and re-runs the smoke — up
+to a bounded budget — before finally recording `failed`. At `skeptic` it
+fails immediately and waits for the human, exactly as before this feature.
+The shape:
+- **Loop home: `plan_runner._run_task`** (the run loop already owns the one
+  build→verify edge), *not* `plan_verify.py` — `verify_task` stays a pure
+  Definition-of-Done reporter (Q1-B). This is symmetric with `debug_pass`
+  nesting inside `code_with_retry`: the layer that runs the plan owns the
+  build→verify retries, just as the layer that builds owns its test retries.
+- **Trust gate = `policy.auto_confirm(trust)`** (a machine check, not a
+  prompt instruction): `optimist`/`yolo` ⇒ auto-fix; `skeptic` ⇒ record
+  `failed` and stop — current behaviour unchanged.
+- **Failure signal carried inline** on the returned `TaskOutcome` (a new
+  optional field, default `None`, preserved by `_demote`'s field copy): the
+  failing run-smoke output reaches `code_with_retry` in the same invocation.
+  It is **not** persisted to `STATE.json` — it is a within-turn signal;
+  resume re-derives the spec and re-runs smoke from scratch (Q2-A, avoids
+  unbounded state bloat).
+- **Two bounding guards:** (1) a budget of `acceptance_self_fix_max_attempts`
+  (default 3) attempts; (2) an anti-loop early stop — if a rebuild produces
+  byte-identical run-smoke output two attempts in a row, the loop stops
+  before burning the rest of the budget (the analogue of
+  `_build_failure_retry_prompt`'s identical-`test_output` break).
+- **Fires at one position only.** Self-fix runs under the *same* three-signal
+  gate that governs demotion, so it engages only on the single last
+  applicable task (`should_run_now`). Early CLI tasks, libraries, and no-spec
+  projects are observed, never self-fixed and never demoted — the
+  feature-2/4 no-regression locks are unchanged.
+- **Language-agnostic.** The retry prompt is assembled from the
+  adapter-provided run command + the run-smoke output only — zero language
+  strings in `plan_runner` or the self-fix path.
+- **HEAD re-snapshot per attempt.** Each self-fix rebuild re-snapshots
+  `head_before` so the per-task HEAD-advance check is evaluated against that
+  attempt's commit, never a stale prior sha; a recovered task ends with HEAD
+  advanced and is auto-committed like any other `done` task.
+**Why:** this makes the project's core "controlled autonomy = the model
+fails its own machine check and iterates" promise literal (CLAUDE.md core
+principle; *Machine checks over prompt instructions* above) and is the
+consistency lever toward a stable `notes_cli` 3/3 — instead of a result that
+depends on a single model coin-flip, the agent gets bounded retries to
+converge. It is the deferred follow-up flagged by the *Acceptance gate
+enforcement* decision ("the model self-fixing mid-plan failures").
+**Combined bound (accepted + documented).** The outer self-fix budget (3)
+nests over `code_with_retry`'s own inner test-retry loop (1 +
+`max_debug_attempts`), so the worst case is ~9 full build passes on the *one*
+last applicable task per plan. The two budgets are independent knobs;
+accepted because self-fix fires at a single position, so the multiplier
+applies at most once per plan.
+**Taxonomy unchanged.** No new task-outcome status — self-fix reuses the
+existing `done → failed` edge, just *deferred* until the budget is
+exhausted. See `### Task outcome status` and `## State model`.
+**Config:** `acceptance_self_fix` (default `True`) is the master on/off;
+`acceptance_self_fix_max_attempts` (default 3) is the budget. Both in
+`config.py` `AgentConfig` (pydantic; no magic numbers in the loop). Self-fix
+reuses `code_with_retry`'s existing code-mode temperature — no new
+temperature knob.
+**Security:** the bounded autonomous self-fix loop is a new autonomous
+iteration surface — bounded by `SC8` (`## Security constraints`); risk rows
+in `docs/threat-model.md` (T05/T06/T10).
+Source: `.ai-pm/arch/backend-redesign_arch.md` (migration step 3);
+`.ai-pm/arch/acceptance-self-fix-loop_arch.md` (Q1-B, Q2-A, anti-loop +
+combined-bound notes); `docs/features/acceptance-self-fix-loop_plan.md`
+(KD1–KD10); shipped in `code_scalpel/plan_runner.py` (`_self_fix_acceptance`
+/ `_build_task` / `_acceptance_demoted` / `_self_fix_prompt`),
+`plan_verify.py` (inline failure-output on `TaskOutcome`), `config.py`
+(`acceptance_self_fix` + `acceptance_self_fix_max_attempts`).
+
 ## Architectural constraints
 
 - **Stay inside the project root.** Subprocess cwd is pinned to the
@@ -389,6 +462,13 @@ demotion gate), `plan_runner.py` (`should_run_now` position signal),
   acceptance-spec derivation (one narrow-pass LLM call per acceptance-less
   task at `/go`, mirroring `auto_annotate_plan`); disable for a
   headless/hermetic run.
+- `acceptance_self_fix` (default `True`) + `acceptance_self_fix_max_attempts` (default 3) — the bounded acceptance
+  self-fix loop (feature 3): at `optimist`/`yolo` the last applicable task
+  gets up to 3 rebuild→re-run-smoke attempts before final `failed`. Nests
+  over `code_with_retry`'s inner test-retry budget (1 + `max_debug_attempts`)
+  for a ~9-build worst case on the one last applicable task per plan; the two
+  budgets are independent knobs. Reuses `shell_exec_timeout` for each re-run;
+  no new temperature knob.
 - Fork human-decision timers: optimist `120s`, yolo+critical `60s`.
 - **No RAM / boot budget asserted by code — `[?]`.** Single-GPU VRAM is the
   real constraint behind the upstream model-swap, but no number is pinned;
@@ -403,7 +483,7 @@ demotion gate), `plan_runner.py` (`should_run_now` position signal),
 | `code_scalpel/__main__.py` | `python -m code_scalpel` entry → `cli.app` |
 | `code_scalpel/runtime.py` | **Composition channel**: owns session+llm+memory+agent; `stream/ask/code_with_retry/fork/flush_upstream`; the one path every entry point shares |
 | `code_scalpel/agent.py` | **StepAgent** — the core engine (~2840 LOC): tool loop, `stream_ask`, `code_with_retry`, narrow passes, compaction, fork detection; `run_plan` is now a thin delegator to `PlanRunner` (strangled out — agent.py shrank ~450 lines) |
-| `code_scalpel/plan_runner.py` | **PlanRunner** — the per-task `run_plan` execution loop strangled out of `agent.py` (re-hash/plan_modified, streak/threshold, auto-commit hook, callback timing); computes the `should_run_now` position signal (last not-done task) and threads it into `verify_task`; `StepAgent.run_plan` delegates `PlanRunner(self).run(...)` |
+| `code_scalpel/plan_runner.py` | **PlanRunner** — the per-task `run_plan` execution loop strangled out of `agent.py` (re-hash/plan_modified, streak/threshold, auto-commit hook, callback timing); computes the `should_run_now` position signal (last not-done task) and threads it into `verify_task`; since v0.14 (feature 3) also orchestrates the bounded trust-gated acceptance **self-fix loop** (`_self_fix_acceptance` / `_build_task` / `_acceptance_demoted` / `_self_fix_prompt`); `StepAgent.run_plan` delegates `PlanRunner(self).run(...)` |
 | `code_scalpel/plan_loading.py` | TASKS.json/TASKS.md load + per-iteration re-hash + skill annotation + pre-loop acceptance-intent derivation for the run loop (extracted alongside the strangle) |
 | `code_scalpel/plan_post_checks.py` | post-task hooks for the run loop (auto-commit, plan annotation) extracted alongside the strangle |
 | `code_scalpel/plan_verify.py` | per-task Definition-of-Done machine checks: `Files:` exist, `Test command:` exit-0, git HEAD advanced (all demoting), and **verification #4 `_verify_acceptance`** — the registry-resolved acceptance run-smoke that **demotes `done → failed` only when intent (`applicable`) × position (`should_run_now`) × state (failing run-smoke) all agree, else records/surfaces only** (v0.14; see the Acceptance gate enforcement decision) |
@@ -533,7 +613,7 @@ observed, never demoted.** **The taxonomy is unchanged** — no new status;
 enforcement reuses the existing `done → failed` edge. Everywhere the three
 signals do not all agree the run-smoke is still recorded/surfaced and never
 demotes. The run-smoke verdict (`passed`/`failed`/`noop`) is also a distinct
-`AgentState` field. See the *Acceptance gate enforcement* decision in
+`AgentState` field. **Since v0.14 (`acceptance-self-fix-loop`, feature 3) the `done → failed` edge is *deferred through a bounded self-fix budget* at `optimist`/`yolo`** — before the final demotion the run loop re-feeds the failing run-smoke output to `code_with_retry`, rebuilds, and re-runs the smoke up to `acceptance_self_fix_max_attempts` (default 3) times (or stops early on byte-identical run-smoke output); only after the budget is spent is the task finally `failed`. At `skeptic` the edge still fires immediately. **Still no new status** — the edge and its terminal states are unchanged; only its timing at `optimist`/`yolo` is deferred. See the *Acceptance self-fix loop* and *Acceptance gate enforcement* decisions in
 `## Architectural decisions` and `## State model`.
 
 ### Tool surface (function-calling schemas)
@@ -638,7 +718,7 @@ repo); the position is recomputed deterministically in the run-loop; the
 state is the deterministic verify-time run-smoke. **Known limitation:**
 position is proxied by "last not-done task", so a plan whose final task is
 non-CLI observes rather than enforces (safe under-enforcement) — see the
-*Acceptance gate enforcement* decision.
+*Acceptance gate enforcement* decision. **Self-fix deferral (v0.14, feature 3):** at `optimist`/`yolo` the demoting edge is not taken on the first failing run-smoke — the run loop rebuilds and re-runs (bounded by `acceptance_self_fix_max_attempts`, default 3, with a byte-identical-output early stop) and only records `failed` after the budget is spent; at `skeptic` it still fires immediately. The verdict values and the edge are unchanged — only the timing of the edge at `optimist`/`yolo` is deferred (see the *Acceptance self-fix loop* decision).
 
 Loop-level stops: `all_done`, `no_tasks`, `plan_modified` (TASKS.md hash
 changed mid-run), `CancelledError` (ESC — already-marked tasks stay).
@@ -708,6 +788,7 @@ cancel.
   tokenized via `shlex`, so model-supplied metacharacters become literal
   argv tokens, never shell operators; execution stays on the SC1/SC2/SC3
   gated `execute()` path. (Referenced by `docs/threat-model.md` T12.)
+- **SC8** — The autonomous acceptance **self-fix loop** (feature 3) is bounded and trust-gated: it runs only at `optimist`/`yolo` (`policy.auto_confirm`, a machine check — never a prompt instruction; `skeptic` fails immediately and waits for the human), is capped at `acceptance_self_fix_max_attempts` (default 3) rebuild→re-run-smoke iterations, and stops early when two consecutive attempts produce byte-identical run-smoke output (the rebuild changed nothing observable). Each rebuilt patch still passes the SC1 shell gate and the per-task HEAD-advance check; the loop never bypasses the consecutive-failure stop. (Referenced by `docs/threat-model.md` T05/T06/T10.)
 
 ### Recovery & key-loss posture
 

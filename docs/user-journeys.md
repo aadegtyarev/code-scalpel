@@ -101,7 +101,7 @@ work through it.
 |---|---|---|---|
 | 1. | Runs `/go` and picks a scope (next task / full plan / manual retry) | The agent ensures a git repo exists, then executes tasks one by one | No git repo — the agent auto-inits one with a starter `.gitignore` |
 | 2. | Watches per-task progress cards | Each task: read → write → test → commit, with optional per-step review and test-sanity checks | A task fails repeatedly — the loop stops after N consecutive failures, keeping partial progress on disk |
-| 3. | Sees, per task, whether the deliverable actually ran | A card showing the agent ran the finished deliverable the way a user would (e.g. asking it for its help text) and whether it ran cleanly. A task is **failed by this check only at the very end** — when the project is meant to be a runnable command-line tool, this is its final step, and the finished deliverable still doesn't actually run. Earlier steps (the tool isn't supposed to run yet) and projects with no runnable tool (e.g. a library) are only *observed*, never failed by it | At the final step the deliverable doesn't run at all (the classic "looked done but never executed" case) — that final task is demoted to failed instead of passing silently. An early step that is still building toward a runnable tool is shown informationally and is never failed by this check; a library or other non-CLI project is likewise only noted, never wrongly failed |
+| 3. | Sees, per task, whether the deliverable actually ran | A card showing the agent ran the finished deliverable the way a user would (e.g. asking it for its help text) and whether it ran cleanly. A task is **failed by this check only at the very end** — when the project is meant to be a runnable command-line tool, this is its final step, and the finished deliverable still doesn't actually run. Earlier steps (the tool isn't supposed to run yet) and projects with no runnable tool (e.g. a library) are only *observed*, never failed by it | At the final step the deliverable doesn't run at all (the classic "looked done but never executed" case) — that final task is demoted to failed instead of passing silently. An early step that is still building toward a runnable tool is shown informationally and is never failed by this check; a library or other non-CLI project is likewise only noted, never wrongly failed. At `optimist`/`yolo` trust the agent first **tries to fix it itself** — it re-feeds the failing run back to the model, rebuilds, and re-runs the deliverable up to a few bounded attempts before finally marking the task failed; at `skeptic` it fails immediately and waits for the human |
 | 4. | (at a fork) Sees a choice card or auto-resolution | At skeptic a choice card waits; at optimist a timed card; at yolo it auto-resolves (critical forks still pause) | The auto-pick is wrong — recorded for later override review |
 | 5. | Sees the run summary | Tasks done/failed, commits made, any pending upstream forks | The model forgot to commit — an auto-commit hook commits the task for it |
 | 6. | (optional) Runs `/escalate` or lets `/go` end | Pending forks are flushed through a stronger upstream model in one batch; disagreements are surfaced as overrides | Upstream model swap fails — forks reported unresolved, no silent code rewrite |
@@ -115,7 +115,12 @@ overrides never auto-rewrite code. The deliverable run-check (run-smoke)
 to be a runnable command-line tool, the task is the plan's **final step**
 (where the tool should be runnable end-to-end), and the finished deliverable
 **still doesn't run**. So a `done` final step of a CLI project means the
-tool really worked. **Earlier steps are never failed by this check** (the
+tool really worked. At `optimist`/`yolo` trust, a failing
+final-deliverable run does not fail the task on the first try — the agent
+**auto-fixes**: it rebuilds and re-runs the deliverable a bounded number of
+times before finally marking it failed. At `skeptic` it never auto-rebuilds
+— a failing final-deliverable run fails the task immediately and waits for
+the human, exactly as before. **Earlier steps are never failed by this check** (the
 tool isn't supposed to run yet), and **projects with no runnable tool (e.g. a
 library) are never failed by it either** — the run stays informational there.
 The acceptance check may be auto-derived (one LLM pass per acceptance-less

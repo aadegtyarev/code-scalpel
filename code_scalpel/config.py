@@ -129,6 +129,24 @@ class AgentConfig(BaseModel):
     # headless / mocked caller stays predictable. On by default because
     # the v0.14 acceptance gate's teeth depend on the derived spec.
     auto_derive_acceptance: bool = True
+    # Acceptance self-fix loop (feature 3). When a runnable CLI deliverable's
+    # final-task run-smoke fails, instead of demoting `done → failed`
+    # immediately, the run loop re-feeds the failing run-smoke output to
+    # `code_with_retry` as the error to fix, rebuilds, and re-runs the smoke —
+    # up to `acceptance_self_fix_max_attempts` times — before finally `failed`.
+    # Trust-gated (skeptic never auto-fixes; optimist/yolo do — see
+    # policy.auto_confirm) and bounded; an outer identical-run-smoke-output
+    # break stops early when a rebuild changes nothing observable. On by
+    # default — it is the consistency lever toward a stable task_solved.
+    acceptance_self_fix: bool = True
+    # Bounded self-fix attempts before the task is finally `failed`. The outer
+    # budget is independent of `max_debug_attempts` (the inner code_with_retry
+    # test-retry budget); the compound worst-case ceiling is
+    # `acceptance_self_fix_max_attempts * (max_debug_attempts + 1) + 1` build
+    # passes (the trailing +1 is the initial build), where both factors are
+    # user-configurable. Accepted because self-fix fires at a single position
+    # (`should_run_now`, KD8) — the one last applicable task per plan.
+    acceptance_self_fix_max_attempts: int = 3
     # Inference thinking effort — passed to providers that support it
     # (o1/o3, deepseek-r1, qwq). Ignored when ModelProfile.supports_thinking
     # is False or None (auto-detected as unsupported). Toggled via Ctrl+K.

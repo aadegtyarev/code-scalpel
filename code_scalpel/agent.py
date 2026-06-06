@@ -289,6 +289,13 @@ class TaskOutcome:
     task: Task
     step_result: StepResult | None
     status: str
+    # The failing acceptance run-smoke output, surfaced inline by
+    # `verify_task` so the run loop can hand it to `code_with_retry` as the
+    # self-fix failure signal (feature 3, KD2). Default None; set only when an
+    # acceptance run-smoke FAILED. A within-turn signal — NOT persisted to
+    # STATE.json. `_demote`'s `dataclasses.replace` preserves it across the
+    # done→failed edge.
+    acceptance_output: str | None = None
 
 
 @dataclass(frozen=True)

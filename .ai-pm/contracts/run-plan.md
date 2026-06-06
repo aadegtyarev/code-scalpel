@@ -35,6 +35,15 @@ execution on a weak local model, controlling autonomy via the trust level.
   builds the argv; the model never emits a shell command) written back into
   the plan; a human-declared prose acceptance is a hint to the derivation,
   not an executed command.
+- **When that final-step run-smoke fails at `optimist`/`yolo`**, the loop does
+  not demote `done → failed` immediately — it re-feeds the failing run-smoke
+  output to the model, rebuilds, and re-runs the smoke up to a bounded budget
+  (`acceptance_self_fix_max_attempts`, default 3) before finally failing.
+  Bounded by the budget **and** an identical-run-smoke-output anti-loop
+  early-stop. At `skeptic` the task fails immediately and waits for the human
+  (`policy.auto_confirm` gate). Self-fix fires only at the single
+  last-applicable-task position; early CLI tasks and library / no-spec tasks
+  are never self-fixed.
 - `/escalate` (or end of `/go`) flushes pending forks through the upstream
   model and surfaces disagreements as overrides.
 
@@ -77,19 +86,27 @@ execution on a weak local model, controlling autonomy via the trust level.
   release gate** at the final step. **Current bound (honest):** the gate
   enforces only at the plan's last not-done task, so a plan whose runnable
   CLI is built earlier and whose final task is non-CLI (tests/docs) is
-  *observed*, not enforced; full consistent `notes_cli` 3/3 also depends on
-  later work (feature 3 — self-fixing mid-plan failures + a fuller
-  "deliverable complete" signal) and on closing the `resolve_pkg`
-  flat-layout reach gap. The gate's current contract is therefore **"never
-  false-fail; enforce at the final step where applicable."**
+  *observed*, not enforced; full consistent `notes_cli` 3/3 is now helped by
+  the bounded self-fix loop (feature 3 — self-fixing a failing final-deliverable
+  run at optimist/yolo before demotion) but still depends on a fuller
+  "deliverable complete" signal and on closing the `resolve_pkg` flat-layout
+  reach gap. The gate's current contract is therefore **"never false-fail;
+  enforce at the final step where applicable; self-fix before demotion at
+  optimist/yolo."**
+- Self-fix loop (`tests/test_acceptance_self_fix.py`) — recovers a task when a
+  rebuild fixes the run (`done`); exhausts the budget → `failed`; skeptic never
+  auto-fixes; off-switch restores immediate `failed`; identical-output
+  early-stop; language-agnostic (non-python adapter); HEAD re-snapshot per
+  attempt; recovered task committed exactly once (S1–S7 + F8/F9).
 
 ## Out of scope
 
 - Auto-rewriting code from an override decision.
 - Per-task fork scoping (all later tasks assumed to depend on a fork).
 - A fuller "deliverable complete" signal that enforces a runnable CLI built
-  by an earlier task when the final task is non-CLI, and model self-fixing
-  of mid-plan failures (consistency) — deferred to feature 3 / a follow-up.
+  by an earlier task when the final task is non-CLI — a follow-up. (Model
+  self-fixing of a failing final-deliverable run landed in feature 3 —
+  acceptance-self-fix-loop — and is no longer out of scope.)
 - Acceptance run-smoke for setuptools **flat-layout** projects — `resolve_pkg`
   is src-layout/hatchling only today, so flat-layout projects skip run-smoke
   (a reach gap; a follow-up).
@@ -103,3 +120,4 @@ execution on a weak local model, controlling autonomy via the trust level.
 - (legacy — pre-protocol; v0.7–v0.14)
 - [acceptance-gate-run-plan](../../docs/features/acceptance-gate-run-plan_plan.md) — run-smoke plumbing + observability (recorded, not enforced)
 - [acceptance-spec-in-tasks](../../docs/features/acceptance-spec-in-tasks_plan.md) — acceptance gate now enforces when intent × position × state agree (derived args-only spec + write-back; enforce at the plan's final step; early tasks + libraries never demoted); `notes_cli` 3/3 the live enforced release gate at the final step
+- [acceptance-self-fix-loop](../../docs/features/acceptance-self-fix-loop_plan.md) — bounded, trust-gated self-fix loop: a failing final-step run-smoke at optimist/yolo is re-fed to the model and rebuilt up to a budget before `failed`; skeptic fails immediately; budget + identical-output break bound it; never self-fixes early CLI tasks or library / no-spec tasks

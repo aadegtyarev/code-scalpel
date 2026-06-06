@@ -3317,6 +3317,28 @@ self-contained), но НЕ на консистентность кода/тест
   (probe гоняется руками перед ship). Args-only безопасность: T11 resolved,
   +T12/+SC7 в threat-model.
 
+✓ backend-redesign step 3 — acceptance-self-fix-loop (2026-06-07, review
+  passed Pass-1 + Pass-2, no blocking findings):
+  verification #4 больше не фейлит сразу — при провале run-smoke последней
+  *applicable* задачи на trust `optimist`/`yolo` агент **сам чинит**:
+  скармливает вывод проваленного run-smoke обратно в `code_with_retry`,
+  пересобирает и перезапускает deliverable до `acceptance_self_fix_max_attempts`
+  (default 3) раз, и только потом `failed`. На `skeptic` — фейл сразу,
+  ждём человека (как раньше). Anti-loop: bit-identical run-smoke output два
+  раза подряд → ранний стоп. Self-fix срабатывает только в одной позиции
+  (`should_run_now`); early-CLI / library / no-spec — наблюдаются, никогда не
+  чинятся и не демоутятся (feature-2/4 no-regression сохранён). Loop живёт в
+  `plan_runner._run_task` (Q1-B; `verify_task` остаётся чистым reporter'ом),
+  failure-signal несётся inline на `TaskOutcome` (Q2-A, НЕ персистится в
+  STATE.json), trust-гейт = `policy.auto_confirm` (machine check). Конфиг:
+  `acceptance_self_fix` (default True) + `acceptance_self_fix_max_attempts`
+  (default 3) в `config.py`. Combined-bound принят и задокументирован
+  (~9 build-passes worst case на одной последней задаче). Это рычаг к
+  стабильному `notes_cli` 3/3 (consistency, а не везение модели). Docs:
+  +decision record + SC8 + Task-outcome/State-model правки в architecture.md,
+  Journey 5 в user-journeys.md, T05/T06/T10 + SC8 + Last reviewed в
+  threat-model.md.
+
 Возможные направления для consistency:
 - **a) Усилить prompt в mode_plan.md** — модель часто оставляет
   files/acceptance пустыми (schema их optional). Принудить

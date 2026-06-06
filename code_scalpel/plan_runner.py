@@ -29,7 +29,7 @@ if TYPE_CHECKING:
     from collections.abc import Callable
     from pathlib import Path
 
-    from code_scalpel.agent import RunPlanResult, StepAgent, TaskOutcome
+    from code_scalpel.agent import RunPlanResult, StepAgent, StepResult, TaskOutcome
     from code_scalpel.fork import HumanForker
 
 
@@ -88,6 +88,10 @@ class PlanRunner:
 
     def __init__(self, agent: StepAgent) -> None:
         self._agent = agent
+        # Stashes the most recent `code_with_retry` return so the build pass
+        # and its classification/verification can share it across `_run_task`
+        # and the self-fix attempts without re-threading it through args.
+        self._last_step_result: StepResult | None = None
 
     async def run(
         self,
@@ -266,37 +270,145 @@ class PlanRunner:
         True only on the last not-done task, where an applicable-intent
         deliverable should be runnable end-to-end (the acceptance gate
         enforces only there — earlier tasks observe).
+
+        When the acceptance gate demotes the final task and trust permits, the
+        bounded self-fix cycle (KD1) takes over before the demotion is final.
         """
         from code_scalpel.agent import _build_task_prompt, _classify_outcome
 
-        agent = self._agent
-        # Snapshot HEAD before the task; at task end we compare to tell whether
-        # the model actually committed. Skipped when auto_git is off.
-        head_before: str | None = None
-        if agent._config.agent.auto_git:
-            head_before = await agent._git_head_sha()
-
-        # Load the task's declared skills before code_with_retry so the per-task
-        # system prompt carries the right stack guidance.
-        await agent._load_skills_for_task(task, on_tool_executed)
-
         prompt = _build_task_prompt(task)
-        step_result = await agent.code_with_retry(
-            prompt,
-            mode="code",
-            on_tool_executed=on_tool_executed,
-            force_loop=True,
-            task_label=f"{task.id} — {task.title}",
-        )
-
+        head_before = await self._build_task(task, prompt, on_tool_executed)
+        step_result = self._last_step_result
+        assert step_result is not None  # set by _build_task
         outcome = _classify_outcome(task, step_result)
-        return await verify_task(
+        outcome = await verify_task(
             self._agent,
             task,
             outcome,
             head_before,
             on_tool_executed,
             should_run_now=should_run_now,
+        )
+        if not self._acceptance_demoted(outcome, should_run_now):
+            return outcome
+        return await self._self_fix_acceptance(task, outcome, prompt, on_tool_executed)
+
+    async def _build_task(
+        self,
+        task: Task,
+        prompt: str,
+        on_tool_executed: Callable[[ToolCall, ToolResult], None] | None,
+    ) -> str | None:
+        """Snapshot HEAD, load skills, run one `code_with_retry` build pass.
+
+        Returns the pre-build HEAD sha (None when `auto_git` is off) so the
+        caller can re-evaluate the HEAD-advance check against THIS pass's
+        commit — re-snapshotted per self-fix attempt, never carried stale.
+        Stashes the build's `StepResult` on `self._last_step_result`.
+        """
+        agent = self._agent
+        head_before: str | None = None
+        if agent._config.agent.auto_git:
+            head_before = await agent._git_head_sha()
+        await agent._load_skills_for_task(task, on_tool_executed)
+        self._last_step_result = await agent.code_with_retry(
+            prompt,
+            mode="code",
+            on_tool_executed=on_tool_executed,
+            force_loop=True,
+            task_label=f"{task.id} — {task.title}",
+        )
+        return head_before
+
+    def _acceptance_demoted(self, outcome: TaskOutcome, should_run_now: bool) -> bool:
+        """True iff the acceptance gate (not checks 1-3) drove this demotion.
+
+        The self-fix loop fires only on an acceptance demotion at the
+        enforcing position: `verify_task` sets `acceptance_output` only when an
+        applicable run-smoke FAILED, and `_demote` preserves it. A checks-1-3
+        failure leaves `acceptance_output` None, so it is never self-fixed.
+        """
+        return (
+            should_run_now
+            and outcome.status == "failed"
+            and outcome.acceptance_output is not None
+            and self._agent._config.agent.acceptance_self_fix
+        )
+
+    async def _self_fix_acceptance(
+        self,
+        task: Task,
+        outcome: TaskOutcome,
+        prompt: str,
+        on_tool_executed: Callable[[ToolCall, ToolResult], None] | None,
+    ) -> TaskOutcome:
+        """Bounded, trust-gated self-fix of an acceptance demotion (KD1).
+
+        Re-feeds the failing run-smoke output to `code_with_retry`, rebuilds,
+        and re-verifies up to the configured budget before the demotion is
+        final. Trust is a machine check — `policy.auto_confirm` (skeptic never
+        auto-fixes; KD3). One outer anti-loop guard: byte-identical run-smoke
+        output two attempts in a row stops early (KD5). The retry prompt is
+        assembled from the adapter-provided command + the run-smoke output
+        only — zero language strings (KD9). A `code_with_retry` raise counts
+        as a failed attempt (failure path 8); partial progress stays on disk.
+        """
+        from code_scalpel.agent import _classify_outcome
+        from code_scalpel.policy import auto_confirm
+
+        agent = self._agent
+        if not auto_confirm(agent._config.agent.trust):
+            # skeptic — fail immediately and wait for the human, as today (KD3).
+            return outcome
+
+        budget = agent._config.agent.acceptance_self_fix_max_attempts
+        last_signal = outcome.acceptance_output
+        for _ in range(budget):
+            assert last_signal is not None  # _acceptance_demoted guarantees it
+            retry_prompt = self._self_fix_prompt(prompt, last_signal)
+            try:
+                head_before = await self._build_task(task, retry_prompt, on_tool_executed)
+            except Exception:
+                # The rebuild engine raised — treat the attempt as failed, keep
+                # partial progress on disk, and finalize `failed` (failure path 8).
+                return outcome
+            step_result = self._last_step_result
+            assert step_result is not None  # set by _build_task
+            retried = await verify_task(
+                agent,
+                task,
+                _classify_outcome(task, step_result),
+                head_before,
+                on_tool_executed,
+                should_run_now=True,
+            )
+            if retried.status == "done":
+                return retried
+            new_signal = retried.acceptance_output
+            if new_signal is None or new_signal == last_signal:
+                # Either the demotion was no longer acceptance-driven, or the
+                # rebuild changed nothing observable — stop early (KD5).
+                return retried
+            outcome, last_signal = retried, new_signal
+        return outcome
+
+    @staticmethod
+    def _self_fix_prompt(task_prompt: str, run_smoke_output: str) -> str:
+        """Assemble the self-fix retry prompt from the task + run-smoke output.
+
+        Target-language/tool agnostic (KD9): this method injects no
+        target-language or tool literal (no `python`, `-m`, `notes_cli`, etc.).
+        The command and the failure text both come from the `detect()`-selected
+        adapter's run-smoke output, which already begins with the code-owned
+        command line (the adapter's argv) and its stdout/stderr. The English
+        instructional framing here is the deliberate, canon-compliant exception
+        (artifacts are English) — it carries no target-language literal.
+        """
+        return (
+            f"{task_prompt}\n\n"
+            "The deliverable was built but its acceptance run did not pass. "
+            "Fix the code so the run succeeds. The acceptance run produced:\n\n"
+            f"{run_smoke_output}"
         )
 
     def _persist_task_end(self, task: Task, outcome: TaskOutcome) -> None:
