@@ -36,3 +36,17 @@ and why it was deferred rather than fixed.
   (one wasted local LLM pass). Fix (if pursued): distinguish an
   infra-`refused` (sandbox/policy) from a deliverable-`refused` and skip
   self-fix only for the former, updating F9 accordingly.
+
+## acceptance gate — reach gap (surfaced by Step-5.5 live probe, 2026-06-07)
+
+- **Close the flat-layout run-smoke reach gap** · note · technical reason
+  recorded. The Step-5.5 live `notes_cli` probe could not exercise the self-fix
+  loop at all: qwen14b builds the deliverable as a **flat-layout** project, but
+  `resolve_pkg` is src-layout/hatchling-only, so every acceptance run-smoke
+  returns `skipped (pkg-unresolvable)` → no failing acceptance verdict → no
+  demotion → self-fix has nothing to engage on. The self-fix consistency gain on
+  the live `notes_cli` task_solved rate is therefore **not observable until this
+  gap closes**. Already noted in `.ai-pm/contracts/run-plan.md` `## Out of scope`;
+  recorded here so the dependency for *live* self-fix verification is explicit.
+  Fix: extend `resolve_pkg` to resolve flat-layout (setuptools) packages so
+  run-smoke runs on them.
