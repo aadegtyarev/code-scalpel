@@ -1,6 +1,6 @@
 # Threat Model
 
-**Last reviewed:** 2026-06-06
+**Last reviewed:** 2026-06-07
 
 > Canonical threat model for code-scalpel. Owned by `pm-architect`.
 > Finalized at legacy adoption from the `pm-codebase-reader` draft
@@ -74,12 +74,12 @@ self-inflicted blast radius).
 | T02 | Model writes / escapes outside the project dir via `cd`/redirect/`cp -> /…` | A2 | M | H | SC2 (cwd pin + escape hard-blocks) |
 | T03 | Sandbox bypass — destructive command runs un-isolated (incl. userns/AppArmor blocking bwrap) | A2 | L | H | SC3 (bwrap RO `/usr` `/etc`, tmpfs `/home` `/tmp`; detect-and-degrade when userns is restricted) |
 | T04 | Symlink in repo points outside root; file tool follows it | A2 | L | M | SC4 (resolve symlinks before access) |
-| T05 | Bad/incomplete patch corrupts source or breaks build | A1, A4 | H | M | skeptic apply gate + auto-tests + per-task HEAD check; partial progress kept for inspection |
-| T06 | Autonomous loop commits broken or empty work | A1, A4 | M | M | test gate before done; auto-commit only on `done`; plan-modified stop |
+| T05 | Bad/incomplete patch corrupts source or breaks build | A1, A4 | H | M | skeptic apply gate + auto-tests + per-task HEAD check; partial progress kept for inspection. The v0.14 acceptance **self-fix loop** (feature 3) reuses the patch path autonomously at optimist/yolo, bounded by SC8 (budget + identical-output break + trust gate; skeptic never auto-rebuilds) |
+| T06 | Autonomous loop commits broken or empty work | A1, A4 | M | M | test gate before done; auto-commit only on `done`; plan-modified stop. The acceptance self-fix loop (v0.14) is a new bounded autonomous iteration surface — capped attempts + byte-identical-output early stop + trust gate (SC8); each rebuilt commit still passes the test gate and the per-task HEAD check |
 | T07 | API key leaked into logs / model context / YAML | A3 | L | H | SC5 (env-only secrets) |
 | T08 | Prompt injection via `/learn --url` / web fetch overrides agent intent | A1, A5 | M | M | `(inferred)` partial — note size cap (SC6-adjacent) limits one vector; no content sanitisation `[?]` (PM to scope) |
 | T09 | Poisoned project memory note steers future turns | A5 | L | M | notes are user-authored + size-capped; no auto-ingest of model claims |
-| T10 | Wrong auto-resolved fork (yolo/optimist timeout) makes a bad architectural choice | A1 | M | M | critical forks force a human window; overrides recorded for review; overrides never auto-rewrite code |
+| T10 | Wrong auto-resolved fork (yolo/optimist timeout) makes a bad architectural choice | A1 | M | M | critical forks force a human window; overrides recorded for review; overrides never auto-rewrite code. The v0.14 acceptance **self-fix loop** is a new place the model acts without per-step confirm (auto-rebuilding a failing final task at optimist/yolo) — mitigated by **skeptic-no-autofix** (the trust gate, a machine check) plus the bounded budget + identical-output break (SC8); a wrong self-fix is bounded and its commits stay subject to the test + HEAD-advance gates |
 | T11 | Autonomous acceptance run-smoke executes the project's own code at `trust="yolo"` | A1, A2 | M | M | **no new boundary** — runs through the existing trust-gated + `bwrap`-sandboxed + `policy.py`-blocked `execute()` shell path (SC1/SC2/SC3); the floor run-smoke command is **code-owned and deterministic** (`python -m <pkg> --help`, `resolve_pkg`-resolved). *Resolved (v0.14):* the model-derived acceptance commands feature 4 added are **args-only**, not free-form shell — see T12 |
 | T12 | Model-derived acceptance **args** executed at `trust="yolo"` (v0.14 `feat/acceptance-spec-in-tasks`): the narrow pass derives subcommand args that reach the deliverable run | A1, A2 | M | M | **args-only (SC7)** — the model supplies only subcommand args + an expected substring, never a shell command; the **adapter** builds the argv (`python -m <pkg> <args>`), tokenized via `shlex`, so metacharacters become literal tokens (verified: `add; rm -rf ~`, `$(whoami)`, backticks, `&&`, `\|`, `>` all neutralized). Execution stays on the SC1/SC2/SC3 boundary. **Residual:** the model-derived *args* still reach a yolo shell as a tokenized argv, and `bwrap` degrades to policy-only on restricted-userns hosts (SC3) — blast radius is "the deliverable run with odd args", not "arbitrary command". Mitigated by args-only (SC7), the sandbox where available, cwd-pinning (SC2), and the derived spec being surfaced pre-run for inspection (written back into the plan before first execution) |
 
@@ -126,3 +126,18 @@ residual risk (model-derived *args* still reach a yolo shell as a tokenized
 argv; `bwrap` degrades to policy-only on restricted-userns hosts), mitigated
 by SC7 + sandbox + cwd-pinning + pre-run surfacing of the derived spec. No
 new trust boundary beyond T11.
+
+Reviewed 2026-06-07 for `feat/acceptance-self-fix-loop` (feature 3 — a
+bounded, trust-gated acceptance self-fix loop): triggered by this
+document's own Review note ("the trust model changes / a new
+auto-resolution path lands"). At `optimist`/`yolo` a failing final
+deliverable run is now **auto-fixed** — the run loop re-feeds the run-smoke
+output to the builder, rebuilds, and re-runs, up to a bounded budget — a
+new autonomous iteration surface. **No new trust boundary** — the rebuilds
+and re-runs reuse the existing model-output→shell / model-output→filesystem
+paths (SC1/SC2/SC3) and the per-task HEAD + test gates. The loop's own
+bound is a new constraint **SC8** (budget + byte-identical-output early
+stop + `policy.auto_confirm` trust gate; `skeptic` never auto-rebuilds). T05
+and T06 (autonomous-loop rows) and T10 (wrong auto-resolution) updated to
+reference SC8; the skeptic-no-autofix gate is T10's primary mitigation. No
+new asset, adversary, or do-NOT-protect entry.
