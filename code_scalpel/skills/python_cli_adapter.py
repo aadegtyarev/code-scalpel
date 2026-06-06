@@ -35,7 +35,12 @@ import re
 import shlex
 from pathlib import Path
 
-from code_scalpel.skills.base import ScaffoldSpec, Skill
+from code_scalpel.skills.base import (
+    AcceptanceSpec,
+    ScaffoldSpec,
+    Skill,
+    decode_derived_acceptance,
+)
 from code_scalpel.skills.python_pkg import resolve_pkg
 from code_scalpel.skills.python_skill import PythonSkill
 
@@ -108,22 +113,78 @@ class PythonCliAdapter(Skill):
         # quoted argument groups like `--note 'a b'` intact.
         return ["python", "-m", pkg, *(shlex.split(args) if args else [])]
 
-    def acceptance_spec(self, task: object) -> tuple[str, str] | None:
-        # Default-floor: the deliverable is `-m`-runnable and --help exits
-        # cleanly. The expected observable is exit-0 (empty-string sentinel
-        # the gate treats as "command must succeed"); a richer round-trip
-        # spec is feat/acceptance-spec-in-tasks.
-        #
-        # <pkg> is resolved from the bound root exactly like run_smoke, so
-        # the command is actually runnable. The rootless discovery
-        # singleton cannot resolve a package — raise the same clear error
-        # run_smoke raises rather than hand back a non-runnable placeholder.
+    def acceptance_spec(self, task: object) -> AcceptanceSpec | None:
+        """Precedence B (declared) → C (derived) → A (default-floor).
+
+        Every branch builds `command` through `run_smoke(args)`, so the
+        python-specific `python -m <pkg>` prefix lives only here and a model-
+        or human-supplied `args` is tokenized into argv, never a shell string
+        (KD3 args-only). The rootless discovery singleton cannot resolve a
+        package — the same `ValueError` `run_smoke` raises bubbles up so the
+        run-loop records `pkg-unresolvable` rather than running a placeholder.
+        """
         if self._root is None:
             raise ValueError(
                 "acceptance_spec needs a project root: construct PythonCliAdapter(root=...)"
             )
-        pkg = resolve_pkg(self._root)
-        return (f"python -m {pkg} {_DEFAULT_FLOOR_HELP_ARGS}", "")
+        bullets = tuple(getattr(task, "acceptance", ()))
+        derived = self._derived_spec(bullets)
+        if derived is not None:
+            return derived
+        if bullets:
+            return self._declared_spec(bullets)
+        return self._floor_spec()
+
+    def _derived_spec(self, bullets: tuple[str, ...]) -> AcceptanceSpec | None:
+        """Build the C (narrow-pass-derived) spec from a written-back marker.
+
+        Returns None when no derived marker is present (so the caller falls
+        through to B/A). A derived not-applicable result yields a spec with
+        `applicable=False` — persisted so it is never re-derived, observed
+        not enforced.
+        """
+        for line in bullets:
+            data = decode_derived_acceptance(line)
+            if data is None:
+                continue
+            args = str(data.get("args", ""))
+            expected = str(data.get("expected", ""))
+            applicable = bool(data.get("applicable", False))
+            return AcceptanceSpec(
+                command=self._command(args),
+                expected=expected,
+                applicable=applicable,
+                source="derived",
+            )
+        return None
+
+    def _declared_spec(self, bullets: tuple[str, ...]) -> AcceptanceSpec:
+        """Build the B (human-declared) spec: the declared bullets are the run
+        args, joined and routed through `run_smoke` so the verb stays code-
+        owned. Human-declared acceptance is trusted CLI intent → applicable.
+        """
+        args = " ".join(b.strip() for b in bullets if b.strip())
+        return AcceptanceSpec(
+            command=self._command(args),
+            expected="",
+            applicable=True,
+            source="declared",
+        )
+
+    def _floor_spec(self) -> AcceptanceSpec:
+        """Build the A (default-floor) spec: `python -m <pkg> --help`, exit-0
+        only, NEVER applicable — the structural lock that keeps a python
+        library (which `detect` over-fires on) observational, not demoted.
+        """
+        return AcceptanceSpec(
+            command=self._command(_DEFAULT_FLOOR_HELP_ARGS),
+            expected="",
+            applicable=False,
+            source="floor",
+        )
+
+    def _command(self, args: str) -> str:
+        return shlex.join(self.run_smoke(args))
 
     def scaffold(self, spec: ScaffoldSpec) -> list[Path]:
         """Emit a deterministic, `-m`-runnable python-cli skeleton.

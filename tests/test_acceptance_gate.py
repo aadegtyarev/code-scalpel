@@ -1,14 +1,17 @@
-"""Tests for the run_plan acceptance gate (verification #4) — PLUMBING ONLY.
+"""Tests for the run_plan acceptance gate (verification #4).
 
 Drives the production verification entry point `plan_verify.verify_task`
 (the same function `PlanRunner._run_task` calls) against a python-cli project
 with a real `MockShellRunner`, so the run-smoke executes through the production
 `execute()` path — no hand-rolled parallel setup.
 
-Per the PM "plumbing only" re-scope (`.ai-pm/reviews/
-acceptance-gate-run-plan_review.md` `## Resolutions` #1), verification #4 is
-OBSERVATIONAL: it records the verdict and surfaces a card but NEVER demotes a
-task. These tests assert "recorded, not demoted". Covers the plan's Test plan:
+`feat/acceptance-spec-in-tasks` flips verification #4 from observational-only
+to ENFORCING where an *applicable* spec exists. The tasks here carry no declared
+acceptance, so the adapter returns the default-floor (`applicable=False`) — these
+tests therefore still assert "recorded, NOT demoted" (the no-regression branch:
+a project with no applicable spec — a library — is never wrongly failed). The
+demoting branch (an applicable declared/derived spec that fails) is covered in
+`test_acceptance_enforcement.py`. Covers the plan's Test plan:
 record-passed / record-failed-but-keep-done / no-op / library-not-demoted /
 timeout / pkg-unresolvable / exit-4-5 / expected-observable / yolo / argv /
 cwd / state round-trip / noop-no-clobber, plus the plan-modified interaction.
@@ -356,9 +359,19 @@ async def test_acceptance_expected_observable_checked_when_nonempty(tmp_path: Pa
     shell = MockShellRunner([ShellResult("nothing useful printed", 0)])
     state = AgentState()
 
+    from code_scalpel.skills.base import AcceptanceSpec
+
     class _ExpectingAdapter:
-        def acceptance_spec(self, task: object) -> tuple[str, str]:
-            return ("python -m notes_cli --help", "usage:")
+        def acceptance_spec(self, task: object) -> AcceptanceSpec:
+            # applicable=False keeps this an OBSERVATIONAL test of the
+            # expected-observable check (the demotion gate is tested
+            # separately); the verdict is recorded but the task is not demoted.
+            return AcceptanceSpec(
+                command="python -m notes_cli --help",
+                expected="usage:",
+                applicable=False,
+                source="floor",
+            )
 
     agent = _agent(project, shell, state=state)
     import code_scalpel.plan_verify as pv
