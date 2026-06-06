@@ -24,11 +24,12 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from code_scalpel.skills.base import MarkdownSkill, Skill
+from code_scalpel.skills.base import MarkdownSkill, ScaffoldSpec, Skill
 from code_scalpel.skills.docker_skill import DockerSkill
 from code_scalpel.skills.go_skill import GoSkill
 from code_scalpel.skills.js_skill import JsTsSkill
 from code_scalpel.skills.postgres_skill import PostgresSkill
+from code_scalpel.skills.python_cli_adapter import PythonCliAdapter
 from code_scalpel.skills.python_skill import PythonSkill
 from code_scalpel.skills.registry import SkillRegistry
 from code_scalpel.skills.sqlite_skill import SqliteSkill
@@ -91,6 +92,16 @@ def _auto_register_markdown_skills(registry: SkillRegistry) -> None:
 
 
 _auto_register_python_skills(_registry)
+
+# PythonCliAdapter is registered explicitly, NOT via _auto_register_*: its
+# module is python_cli_adapter.py (not *_skill.py), so the auto-scanner
+# skips it. It is registered here with provides_test_runner = False so it
+# is discoverable (get_skill / all_skills) yet never selected by
+# default_runnable — PythonSkill (priority 10) stays the test runner for
+# Python projects. This is the "discoverable without hijacking the test
+# path" decision (plan scenario 7 + interaction scenarios).
+_registry.register(PythonCliAdapter())
+
 _auto_register_markdown_skills(_registry)
 
 
@@ -138,7 +149,9 @@ __all__ = [
     "JsTsSkill",
     "MarkdownSkill",
     "PostgresSkill",
+    "PythonCliAdapter",
     "PythonSkill",
+    "ScaffoldSpec",
     "Skill",
     "SkillRegistry",
     "SqliteSkill",

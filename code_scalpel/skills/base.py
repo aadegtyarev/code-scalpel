@@ -29,8 +29,23 @@ Design notes:
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
+from dataclasses import dataclass
 from importlib.resources import files
 from pathlib import Path
+
+
+@dataclass(frozen=True)
+class ScaffoldSpec:
+    """Inputs a `Skill.scaffold` needs to emit a runnable skeleton.
+
+    `root` is the project directory the skeleton is written into; `pkg`
+    is the importable package name the deliverable will be run as
+    (`python -m <pkg>` for python-cli). Kept deliberately small — richer
+    adapters add their own fields in a subclass-specific spec if needed.
+    """
+
+    root: Path
+    pkg: str
 
 
 class Skill(ABC):
@@ -121,6 +136,50 @@ class Skill(ABC):
         chars per token matches `session.py` accounting.
         """
         return max(0, (len(self.name) + len(self.description)) // 4)
+
+    # ── ProjectAdapter superset ──────────────────────────────────────────
+    # These four make a Skill a full "project adapter" — not just how to
+    # test, but how to build/run/scaffold the actual deliverable. They are
+    # NON-abstract with safe defaults so every existing Skill stays
+    # concrete and instantiable; an adapter (e.g. PythonCliAdapter)
+    # overrides them. They are intentionally inert here: no run-loop
+    # consumes them yet (that is a later feature) — this just makes the
+    # contract exist.
+
+    def build_install(self) -> list[str]:
+        """Shell argv to make the deliverable runnable, or `[]` if none.
+
+        Default `[]` — a plain Skill knows how to test, but not how to
+        install/build the product. Adapters override (e.g. python-cli
+        returns `pip install -e .`).
+        """
+        return []
+
+    def run_smoke(self, args: str = "") -> list[str]:
+        """Shell argv to run the actual deliverable as a user would.
+
+        Default `[]` — a plain Skill has no run-smoke. `args` is appended
+        (whitespace-split) like `test_cmd`. Adapters override (e.g.
+        python-cli returns `python -m <pkg> <args>`).
+        """
+        return []
+
+    def scaffold(self, spec: ScaffoldSpec) -> list[Path]:
+        """Write a deterministic runnable skeleton; return files created.
+
+        Default no-op: returns `[]` (this skill does not own a project
+        skeleton). Adapters override to emit the code-owned entrypoint
+        plumbing instead of leaving it to the model's whim.
+        """
+        return []
+
+    def acceptance_spec(self, task: object) -> tuple[str, str] | None:
+        """`(command, expected_observable)` for "actually works", or None.
+
+        Default `None` — a plain Skill declares no acceptance contract.
+        Adapters override (python-cli returns the built-in default-floor).
+        """
+        return None
 
 
 class MarkdownSkill(Skill):
