@@ -12,12 +12,23 @@ Feature 4 of the backend redesign: `feat/acceptance-spec-in-tasks` — give the 
 
 ## Status
 
-⚠️ PASS-2 FIX PASS INTERRUPTED (session limit) — DO NOT trust/commit blindly.
-- Committed (verified-green earlier): 27ca34c, 4a0dbb0, c986f36, 1aa91ce — the feature-4 impl + tests (1271 passed at that point).
-- UNCOMMITTED working-tree changes (7 files: agent.py, plan_loading.py, plan_verify.py, prompts/derive_acceptance.md, skills/base.py, skills/python_cli_adapter.py, tests/test_acceptance_enforcement.py) = the in-progress code-review fix pass, **NOT verified, NOT committed**. The coder run was cut off before reporting + before pipeline confirmation; a safety-classifier-unavailable note was attached — VERIFY before trusting.
-- RESUME: (1) review the uncommitted diff against the 8 findings in `.ai-pm/reviews/acceptance-spec-in-tasks_review.md`; (2) run full pipeline (pytest / ruff check / ruff format --check / mypy cacheless); (3) if sound → commit; if not → finish/redo the fixes. Then continue the loop below.
+TIMING FIX LANDED — pipeline green, ready to re-probe notes_cli.
+The live notes_cli probe (caa564f, greenfield/empty fixture) proved the gate
+never enforced on greenfield builds: the pre-loop derivation, run on an EMPTY
+fixture, marked every task `applicable: false` ("no runnable CLI") → enforcement
+permanently disabled (scores 7,7,4, gate observational throughout) even though
+the deliverable worked by the end. Arch §"Timing fix (post-probe)" specifies the
+fix: separate THREE signals — Intent (pre-loop, text-only — is this MEANT to be
+a runnable CLI?), Position (`should_run_now`, structural — the last not-done
+task), State (deterministic run-smoke at verify-time, no LLM). Demotion condition
+is now exactly `applicable and should_run_now and not ok`; otherwise observe.
 
-(prior status: coding complete — ready for review loop.) Pipeline green (1271 passed / 40 skipped, ruff + format clean, mypy clean) EXCEPT one pre-existing, unrelated mypy error in code_scalpel/tools/files.py:8 (unused `# type: ignore`) that already exists on the base commit c518078 in untouched code — surfaced, NOT papered over. Cause: local pathspec 0.12.1 ships py.typed, so the bare ignore is now unused; an environment discrepancy, not a feature regression.
+Pipeline green (1282 passed / 40 skipped, ruff + format clean, mypy clean on all
+touched files) EXCEPT the one pre-existing, unrelated mypy error in
+code_scalpel/tools/files.py:8 (unused `# type: ignore`) — exists on the base
+commit in untouched code, explicitly out of scope for this fix; surfaced, NOT
+papered over. Cause: local pathspec 0.12.1 ships py.typed, so the bare ignore is
+now unused; an environment discrepancy, not a feature regression.
 
 ## Done
 
@@ -32,6 +43,13 @@ Feature 4 of the backend redesign: `feat/acceptance-spec-in-tasks` — give the 
   - Args-only narrow-pass derivation pre-loop (plan_loading._derive_acceptance, beside _annotate_plan) with output_schema {applicable,args,expected}; write-back to TASKS.json canonical + re-rendered/re-hashed markdown sentinel; typed tasks returned (finding 7); LLM/parse error→floor (path 9), disk error→in-memory+old sentinel (path 10). New config auto_derive_acceptance. derive_acceptance.md prompt + DERIVE_ACCEPTANCE export. agent.derive_acceptance_args + _DERIVE_ACCEPTANCE_SCHEMA.
   - state.last_acceptance_source persisted (forward-compatible default).
   - Tests: tests/test_acceptance_enforcement.py (22 new) — enforcement, generality (non-python adapter), args-only no-injection, derivation+write-back+resume, failure paths 9/10/12, json_schema + argv-no-shell stack-spec, interaction (plan_modified, compose, yolo-on-skeptic). Feature-2 tuple-shape + "never demotes for applicable" assertions updated per the planned contract change.
+- **Timing fix (post-probe) — three-signal demotion (this pass):**
+  - prompts/derive_acceptance.md: Q1 re-scoped STATE→INTENT ("is this deliverable MEANT to be a runnable CLI?" + explicit "do NOT assume the code exists yet") — root-cause fix for the permanent `applicable:false` on greenfield.
+  - plan_runner.py: `_last_not_done_index` helper + `should_run_now = (idx == last_not_done_index)` computed in `_run_loop`, threaded through `_run_task` → `verify_task(..., should_run_now=...)`. Pure plan structure, no LLM, no I/O.
+  - plan_verify.py: demotion condition `applicable and not ok` → `applicable and should_run_now and not ok`. `should_run_now` threaded through `verify_task` → `_verify_acceptance`. Library/floor → observe (unchanged); applicable-but-early → observe (new not-built-yet case); noop-never-applicable assert + no-exit-4/5-leniency + source/reason recording all kept.
+  - plan_loading.py: card string `observed (no runnable CLI)` → `runnable CLI (enforced at final task)` / `observed (library / not a CLI)` (the card masked the bug).
+  - python_cli_adapter.py: NO change (adapter stays position-unaware + language-agnostic).
+  - New tests: test_early_task_not_demoted_even_if_applicable, test_last_task_enforces_when_applicable, test_last_task_passes_when_runnable, test_library_still_never_demoted_at_last_task. Existing enforcement tests + the non-python adapter test updated for `should_run_now` (last-task enforcement path + early-task observe). All four invariants held (args-only, no language string in run-loop verify path, library no-regression, observational-where-not-applicable).
 
 ## Remaining
 
@@ -57,7 +75,11 @@ NOT touched (per task): docs/*, .ai-pm/contracts/run-plan.md, plan.md — post-c
 
 ## Next step
 
-review loop (Pass 1 pm-plan-checker; Pass 2 code-review). Then doc handoff + notes_cli 3/3 outcome probe before ship.
+Re-probe notes_cli (greenfield) — verify the gate now ENFORCES at the final task
+and can reach 3/3 task_solved. Then doc/contract delta (PM said "I'll handle the
+doc delta after re-probe"): architecture.md + threat-model.md + plan.md per
+"Docs to update" + the run-plan.md contract Must-not-break (add the early-task
+not-demoted case c). Then review loop / ship.
 
 ## Out-of-scope findings (→ backlog)
 

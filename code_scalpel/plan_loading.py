@@ -327,7 +327,17 @@ async def _derive_specs_for_tasks(
         # any prior prose (now consumed as a hint) or malformed marker is
         # superseded by the canonical derived spec.
         out.append(dataclasses.replace(task, acceptance=(marker,)))
-        verdict = "enforced" if applicable else "observed (no runnable CLI)"
+        # The card reports INTENT (judged from task text), not present state:
+        # an applicable task is a runnable-CLI deliverable that the gate will
+        # enforce once the plan reaches its final task; a not-applicable one is
+        # a library / non-CLI that stays observational. The old "no runnable
+        # CLI" wording read as filesystem state and masked the greenfield bug
+        # (arch §"Timing fix" Q3 / seam 4).
+        verdict = (
+            "runnable CLI (enforced at final task)"
+            if applicable
+            else "observed (library / not a CLI)"
+        )
         lines.append(f"  {task.id}: {verdict}")
     return tuple(out), lines, errors
 

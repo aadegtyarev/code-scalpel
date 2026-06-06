@@ -10,13 +10,16 @@ an `expected` substring. It is never a shell command and is never run verbatim.
 
 Answer three questions, nothing else:
 
-1. **Is there a runnable command-line deliverable here?** A task that
-   ships a CLI / command / executable the user invokes from a terminal →
-   `applicable: true`. A task that ships an importable LIBRARY / module
-   with no command-line entrypoint, or pure refactoring / docs / config
-   with nothing to run → `applicable: false`. When in doubt, prefer
-   `false` — a wrongly-applicable check fails a task that was never meant
-   to be run from a terminal.
+1. **Is this task's deliverable MEANT to be a runnable command-line
+   program?** Judge the task's INTENT from its description — do NOT assume
+   the code already exists. The repository may be empty and the program
+   not yet written; a from-scratch build of a CLI is still
+   `applicable: true`. A task whose intent is a CLI / command / executable
+   the user invokes from a terminal → `applicable: true`, even before a
+   single line is written. A task whose intent is an importable LIBRARY /
+   module with no command-line entrypoint, or pure refactoring / docs /
+   config with nothing a user runs → `applicable: false`. Decide from
+   what the task is FOR, never from what files happen to be present.
 
 2. **What subcommand arguments exercise the deliverable?** Return ONLY
    the arguments — the words you would type AFTER the program's own

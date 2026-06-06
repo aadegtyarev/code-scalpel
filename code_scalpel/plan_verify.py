@@ -8,18 +8,25 @@ cohesive home. A task that `code_with_retry` reported as `done` is demoted to
   1. `Files:` — every declared path exists on disk.            (demoting)
   2. `Test command:` — exits 0 (with the legacy exit-4/5 leniency).  (demoting)
   3. Git HEAD advanced — the model (or the auto-commit hook) committed. (demoting)
-  4. Acceptance run-smoke — ENFORCING WHERE APPLICABLE. The adapter hands
-     back an `AcceptanceSpec`; the run-loop runs `spec.command`, records the
-     verdict + surfaces a card, and demotes `done → failed` ONLY when
-     `spec.applicable` (a task-declared B or derived-and-applicable C spec).
-     A not-applicable spec (the default-floor A, or a derivation that found no
-     runnable CLI deliverable — a library) is observational: recorded +
-     surfaced, never demoted (the feature-2 no-regression behavior).
+  4. Acceptance run-smoke — ENFORCING WHERE APPLICABLE, AT THE FINAL TASK.
+     The adapter hands back an `AcceptanceSpec`; the run-loop runs
+     `spec.command`, records the verdict + surfaces a card, and demotes
+     `done → failed` ONLY when three signals agree: `spec.applicable`
+     (intent — a task-declared B or derived-and-applicable C spec, judged
+     pre-loop from task text), `should_run_now` (position — the last not-done
+     task, where the deliverable should be runnable end-to-end), and a
+     non-passing run-smoke (state). A not-applicable spec (the default-floor
+     A, or a derivation that found no runnable CLI deliverable — a library),
+     OR an applicable spec on an early not-built-yet task, is observational:
+     recorded + surfaced, never demoted.
 
 Checks 1-3 guard against the model claiming `done` after only partly executing
 a task; they demote done→failed (no new status). Check 4 gates demotion on
-`spec.applicable` — the CLI-vs-library discriminator born in the derivation,
-carried by the adapter, read once here (`feat/acceptance-spec-in-tasks`). The
+three separated signals — intent (`spec.applicable`, the CLI-vs-library
+discriminator born in the derivation, carried by the adapter), position
+(`should_run_now`, computed in the run-loop as pure plan structure), and state
+(the deterministic run-smoke) — so a greenfield CLI's early task is observed,
+not false-demoted (`feat/acceptance-spec-in-tasks` §"Timing fix"). The
 default-floor NEVER sets `applicable`, so a python LIBRARY (which
 `PythonCliAdapter.detect` over-fires on) stays observational. The path carries
 ZERO language strings — every "how to run this" is assembled inside the
@@ -63,12 +70,18 @@ async def verify_task(
     outcome: TaskOutcome,
     head_before: str | None,
     on_tool_executed: OnToolExecuted = None,
+    *,
+    should_run_now: bool = False,
 ) -> TaskOutcome:
     """Run checks 1-4 on a `done` outcome.
 
     Checks 1-3 may demote done→failed; check 4 (acceptance) demotes too, but
-    ONLY where an applicable spec exists — otherwise observational (see
-    module docstring).
+    ONLY where an applicable spec exists AND `should_run_now` is True — the
+    position signal (the last not-done task, where an applicable-intent
+    deliverable should be runnable end-to-end). Otherwise observational: a
+    not-applicable spec (library / floor) OR an applicable spec on an early
+    not-built-yet task records + cards but never demotes (see module
+    docstring; arch §"Timing fix").
     """
     from code_scalpel.agent import _parse_task_test_command, _verify_task_files
 
@@ -87,7 +100,9 @@ async def verify_task(
             return _demote(outcome)
 
     outcome = await _verify_head_advanced(agent, task, outcome, head_before)
-    return await _verify_acceptance(agent, task, outcome, on_tool_executed)
+    return await _verify_acceptance(
+        agent, task, outcome, on_tool_executed, should_run_now=should_run_now
+    )
 
 
 async def _verify_head_advanced(
@@ -127,18 +142,25 @@ async def _verify_acceptance(
     task: Task,
     outcome: TaskOutcome,
     on_tool_executed: OnToolExecuted = None,
+    *,
+    should_run_now: bool = False,
 ) -> TaskOutcome:
     """Verification #4 — run-smoke of the deliverable, ENFORCING where applicable.
 
     When `acceptance_adapter(root)` resolves (a python-cli project today),
     ask it for an `AcceptanceSpec`, run `spec.command`, RECORD the verdict
     (passed/failed/noop) and SURFACE a card. No acceptance adapter → a logged
-    no-op. Demotion is gated on `spec.applicable`: an applicable spec
-    (task-declared B or derived-applicable C) that does not pass demotes
-    `done → failed`; a not-applicable spec (the default-floor A or a library)
-    is recorded + surfaced but the outcome is returned unchanged (the feature-2
-    no-regression behavior). The path references NO language string — the
-    `applicable` bool is the only thing the loop reads (KD1 generality).
+    no-op. Demotion is gated on THREE signals together — `spec.applicable`
+    (intent: task-declared B or derived-applicable C, persisted pre-loop),
+    `should_run_now` (position: the last not-done task, where the deliverable
+    should be runnable end-to-end), and a non-passing verdict (state: the
+    deterministic run-smoke). Only when all three hold does the outcome demote
+    `done → failed`. A not-applicable spec (the default-floor A or a library),
+    OR an applicable spec on an early not-built-yet task (`should_run_now` is
+    False), is recorded + surfaced but the outcome is returned unchanged (the
+    feature-2 no-regression behavior + the greenfield not-built-yet case). The
+    path references NO language string — `applicable` and `should_run_now` are
+    the only signals the loop reads (KD1 generality; arch §"Timing fix").
     """
     adapter = acceptance_adapter(agent._cwd)
     if adapter is None:
@@ -161,10 +183,12 @@ async def _verify_acceptance(
         assert not applicable, "a noop verdict must never be applicable (would false-demote)"
     _record_acceptance(agent, command=command, verdict=verdict, reason=reason, source=source)
     _emit_acceptance_card(on_tool_executed, command=command, ok=ok, reason=card_reason)
-    # Enforce iff applicable: an applicable spec that did not pass demotes.
-    # A not-applicable spec (floor / library) is observational — the outcome
-    # from checks 1-3 stands (the load-bearing no-regression invariant).
-    if applicable and not ok:
+    # Enforce iff intent (applicable) AND position (should_run_now) AND a
+    # non-passing state. A not-applicable spec (floor / library) OR an
+    # applicable spec on an early not-built-yet task is observational — the
+    # outcome from checks 1-3 stands (the load-bearing no-regression invariant
+    # + the greenfield not-built-yet case; arch §"Timing fix").
+    if applicable and should_run_now and not ok:
         return _demote(outcome)
     return outcome
 

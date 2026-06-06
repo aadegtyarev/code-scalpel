@@ -226,7 +226,9 @@ async def test_enforce_on_derived_applicable_spec(tmp_path: Path) -> None:
     task = _derived_task(applicable=True, args="add x")
     shell = MockShellRunner([ShellResult("boom", 2)])
     state = AgentState()
-    out = await verify_task(_agent(project, shell, state=state), task, _done(task), None)
+    out = await verify_task(
+        _agent(project, shell, state=state), task, _done(task), None, should_run_now=True
+    )
     assert out.status == "failed"
     assert state.last_acceptance_source == "derived"
     # The executed command is the adapter's argv built from the derived args.
@@ -246,7 +248,11 @@ async def test_observational_when_derivation_not_applicable(tmp_path: Path) -> N
     task = _derived_task(applicable=False, args="")
     shell = MockShellRunner([ShellResult("No module named mylib.__main__", 1)])
     state = AgentState()
-    out = await verify_task(_agent(project, shell, state=state), task, _done(task), None)
+    # Even at the enforcement point (should_run_now=True) a not-applicable
+    # library must not demote — the regression lock holds at the final task.
+    out = await verify_task(
+        _agent(project, shell, state=state), task, _done(task), None, should_run_now=True
+    )
     assert out.status == "done", "a not-applicable (library) task must NEVER be demoted"
     assert state.last_acceptance_verdict == "failed"
     assert state.last_acceptance_source == "derived"
@@ -272,17 +278,92 @@ async def test_expected_observable_enforced_on_applicable(tmp_path: Path) -> Non
     project = _python_cli_project(tmp_path)
     task = _derived_task(applicable=True, args="list", expected="buy milk")
 
-    # Exit 0 but expected absent → demote.
+    # Exit 0 but expected absent → demote (at the enforcement point).
     shell = MockShellRunner([ShellResult("nothing", 0)])
     state = AgentState()
-    out = await verify_task(_agent(project, shell, state=state), task, _done(task), None)
+    out = await verify_task(
+        _agent(project, shell, state=state), task, _done(task), None, should_run_now=True
+    )
     assert out.status == "failed"
     assert state.last_acceptance_reason == "expected-missing"
 
     # Expected present → stays done.
     shell2 = MockShellRunner([ShellResult("buy milk\n", 0)])
-    out2 = await verify_task(_agent(project, shell2), task, _done(task), None)
+    out2 = await verify_task(_agent(project, shell2), task, _done(task), None, should_run_now=True)
     assert out2.status == "done"
+
+
+# ── Three-signal timing: intent × position × state ───────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_early_task_not_demoted_even_if_applicable(tmp_path: Path) -> None:
+    """Timing fix (greenfield not-built-yet, case a): an applicable
+    (CLI-intent) task whose run-smoke FAILS but which is NOT the last task
+    (`should_run_now=False`) is recorded observationally and stays `done` —
+    never demoted. Position gates enforcement; intent alone is not enough."""
+    project = _python_cli_project(tmp_path)
+    task = _derived_task(applicable=True, args="add x")
+    shell = MockShellRunner([ShellResult("boom", 2)])
+    state = AgentState()
+    out = await verify_task(
+        _agent(project, shell, state=state), task, _done(task), None, should_run_now=False
+    )
+    assert out.status == "done", "an early applicable task must be observed, not demoted"
+    # The run-smoke still ran + recorded (visible trail for feature 3) —
+    # observation, not enforcement.
+    assert state.last_acceptance_verdict == "failed"
+    assert state.last_acceptance_source == "derived"
+    assert shell.shell_calls == ["python -m notes_cli add x"]
+
+
+@pytest.mark.asyncio
+async def test_last_task_enforces_when_applicable(tmp_path: Path) -> None:
+    """Timing fix (should-run-but-broken, case c — the coin-flip caught): an
+    applicable task that IS the last task (`should_run_now=True`) with a failing
+    run-smoke is demoted `done → failed`. This is the one demoting surface."""
+    project = _python_cli_project(tmp_path)
+    task = _derived_task(applicable=True, args="add x")
+    shell = MockShellRunner([ShellResult("boom", 2)])
+    state = AgentState()
+    out = await verify_task(
+        _agent(project, shell, state=state), task, _done(task), None, should_run_now=True
+    )
+    assert out.status == "failed", "the last applicable task with a broken CLI must demote"
+    assert state.last_acceptance_source == "derived"
+
+
+@pytest.mark.asyncio
+async def test_last_task_passes_when_runnable(tmp_path: Path) -> None:
+    """Timing fix (greenfield happy path): an applicable last task whose
+    run-smoke PASSES (exit 0, expected present) stays `done` — the gate engages
+    and the deliverable works, contributing to a green outcome."""
+    project = _python_cli_project(tmp_path)
+    task = _derived_task(applicable=True, args="list", expected="buy milk")
+    shell = MockShellRunner([ShellResult("buy milk\n", 0)])
+    state = AgentState()
+    out = await verify_task(
+        _agent(project, shell, state=state), task, _done(task), None, should_run_now=True
+    )
+    assert out.status == "done"
+    assert state.last_acceptance_verdict == "passed"
+
+
+@pytest.mark.asyncio
+async def test_library_still_never_demoted_at_last_task(tmp_path: Path) -> None:
+    """Timing fix (regression lock, case b): a NOT-applicable (library) task,
+    even as the LAST task with a failing run-smoke, is observed and stays
+    `done`. Intent=false short-circuits before position/state — the feature-2
+    no-regression invariant holds at the enforcement point."""
+    project = _python_cli_project(tmp_path, pkg="mylib")
+    task = _derived_task(applicable=False, args="")
+    shell = MockShellRunner([ShellResult("No module named mylib.__main__", 1)])
+    state = AgentState()
+    out = await verify_task(
+        _agent(project, shell, state=state), task, _done(task), None, should_run_now=True
+    )
+    assert out.status == "done", "a library must NEVER demote, even at the last task"
+    assert state.last_acceptance_source == "derived"
 
 
 # ── Generality: enforce through a non-python adapter ─────────────────────────
@@ -294,8 +375,10 @@ async def test_run_loop_enforces_through_a_nonpython_adapter(
 ) -> None:
     """GENERALITY guard (PM constraint): a fake `provides_acceptance` adapter
     with NO python returning an applicable AcceptanceSpec → the run-loop demotes
-    on failure through it. Proves the verify path holds zero language strings —
-    it reads only `spec.applicable` and runs `spec.command`."""
+    on failure through it AT THE LAST-TASK enforcement point. Proves the verify
+    path holds zero language strings — it reads only `spec.applicable` (intent)
+    ANDed with the structural `should_run_now` (position) and runs
+    `spec.command`."""
 
     class _FakeNodeAdapter:
         provides_acceptance = True
@@ -311,16 +394,24 @@ async def test_run_loop_enforces_through_a_nonpython_adapter(
     monkeypatch.setattr(pv, "acceptance_adapter", lambda root: _FakeNodeAdapter())
     task = Task(id="T001", title="t", body="", done=False)
 
-    # Failure through the fake adapter → demote.
+    # Failure through the fake adapter at the last task → demote.
     shell = MockShellRunner([ShellResult("error", 1)])
-    out = await verify_task(_agent(tmp_path, shell), task, _done(task), None)
+    out = await verify_task(_agent(tmp_path, shell), task, _done(task), None, should_run_now=True)
     assert out.status == "failed"
     assert shell.shell_calls == ["node cli.js run"]
 
     # Success through the fake adapter → stays done. Same loop, no python.
     shell2 = MockShellRunner([ShellResult("ok", 0)])
-    out2 = await verify_task(_agent(tmp_path, shell2), task, _done(task), None)
+    out2 = await verify_task(_agent(tmp_path, shell2), task, _done(task), None, should_run_now=True)
     assert out2.status == "done"
+
+    # Position gate: the SAME failing fake adapter on an EARLY (not-last) task
+    # observes, never demotes — no language string leaks into the position bool.
+    shell3 = MockShellRunner([ShellResult("error", 1)])
+    out3 = await verify_task(
+        _agent(tmp_path, shell3), task, _done(task), None, should_run_now=False
+    )
+    assert out3.status == "done", "an early non-python task must be observed, not demoted"
 
 
 # ── Args-only: no shell injection ────────────────────────────────────────────
@@ -389,7 +480,11 @@ async def test_applicable_pkg_unresolvable_demotes_vs_notapplicable_observes(
     shell = MockShellRunner([])
     state = AgentState()
     out = await verify_task(
-        _agent(applicable_proj, shell, state=state), task_app, _done(task_app), None
+        _agent(applicable_proj, shell, state=state),
+        task_app,
+        _done(task_app),
+        None,
+        should_run_now=True,
     )
     assert out.status == "failed"
     assert state.last_acceptance_reason == "pkg-unresolvable"
@@ -402,7 +497,11 @@ async def test_applicable_pkg_unresolvable_demotes_vs_notapplicable_observes(
     task_na = _derived_task(applicable=False, args="")
     state2 = AgentState()
     out2 = await verify_task(
-        _agent(na_proj, MockShellRunner([]), state=state2), task_na, _done(task_na), None
+        _agent(na_proj, MockShellRunner([]), state=state2),
+        task_na,
+        _done(task_na),
+        None,
+        should_run_now=True,
     )
     assert out2.status == "done"
     assert state2.last_acceptance_reason == "pkg-unresolvable"
@@ -613,7 +712,9 @@ async def test_acceptance_runs_at_yolo_on_skeptic_project(tmp_path: Path) -> Non
     project = _python_cli_project(tmp_path)
     task = _derived_task(applicable=True, args="add x")
     shell = MockShellRunner([ShellResult("error", 1)])
-    out = await verify_task(_agent(project, shell, trust="skeptic"), task, _done(task), None)
+    out = await verify_task(
+        _agent(project, shell, trust="skeptic"), task, _done(task), None, should_run_now=True
+    )
     assert out.status == "failed"
     assert shell.shell_calls == ["python -m notes_cli add x"]
 
@@ -754,9 +855,10 @@ async def test_undecodable_marker_not_fed_as_args(tmp_path: Path) -> None:
     assert spec is not None and spec.source == "floor" and spec.applicable is False
     assert spec.command == "python -m notes_cli --help"
 
-    # And through the verify path: a failing floor must not demote.
+    # And through the verify path: a failing floor must not demote, even at the
+    # last-task enforcement point.
     shell = MockShellRunner([ShellResult("Traceback", 1)])
-    out = await verify_task(_agent(project, shell), task, _done(task), None)
+    out = await verify_task(_agent(project, shell), task, _done(task), None, should_run_now=True)
     assert out.status == "done"
 
 
@@ -771,7 +873,9 @@ async def test_malformed_args_falls_back_not_pkg_unresolvable(tmp_path: Path) ->
     task = _derived_task(applicable=True, args="add 'unterminated")
     shell = MockShellRunner([])
     state = AgentState()
-    out = await verify_task(_agent(project, shell, state=state), task, _done(task), None)
+    out = await verify_task(
+        _agent(project, shell, state=state), task, _done(task), None, should_run_now=True
+    )
     assert out.status == "done", "a malformed-args spec must not demote a healthy package"
     assert state.last_acceptance_verdict == "noop"
     assert state.last_acceptance_reason == "malformed-args"
@@ -790,7 +894,13 @@ async def test_pkg_unresolvable_recovers_source_for_derived(tmp_path: Path) -> N
     (proj / "pyproject.toml").write_text("[project]\nname='x'\n")  # no resolvable pkg
     task = _derived_task(applicable=True, args="run")
     state = AgentState()
-    out = await verify_task(_agent(proj, MockShellRunner([]), state=state), task, _done(task), None)
+    out = await verify_task(
+        _agent(proj, MockShellRunner([]), state=state),
+        task,
+        _done(task),
+        None,
+        should_run_now=True,
+    )
     assert out.status == "failed"
     assert state.last_acceptance_reason == "pkg-unresolvable"
     assert state.last_acceptance_source == "derived"

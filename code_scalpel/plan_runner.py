@@ -67,6 +67,19 @@ class _Streaks:
         return "task_not_done" if self.skips >= self.skip_giveup_threshold else None
 
 
+def _last_not_done_index(tasks: list[Task]) -> int:
+    """Index of the last not-done task, or -1 if every task is done.
+
+    The acceptance-gate position signal: `should_run_now` is `idx == this`.
+    Pure plan structure — no LLM, no filesystem (arch §"Timing fix" Q2).
+    """
+    last = -1
+    for idx, task in enumerate(tasks):
+        if not task.done:
+            last = idx
+    return last
+
+
 class PlanRunner:
     """Executes `.code-scalpel/TASKS.md` task-by-task on behalf of a StepAgent.
 
@@ -139,6 +152,15 @@ class PlanRunner:
         live_tasks: list[Task] = list(tasks)
         stopped_reason = "all_done"
 
+        # Position signal for acceptance enforcement: the index of the last
+        # not-done task at loop start. Pure plan structure — no LLM, no I/O.
+        # By the last task an applicable-intent CLI should be runnable
+        # end-to-end; earlier tasks may not be, so the acceptance gate only
+        # *enforces* (demotes) here. See `acceptance-spec-in-tasks_arch.md`
+        # §"Timing fix" Q2 — the position discriminator that flips an
+        # applicable-intent task from observe to enforce.
+        last_not_done_index = _last_not_done_index(live_tasks)
+
         for idx, task in enumerate(live_tasks):
             if task.done:
                 continue
@@ -150,7 +172,8 @@ class PlanRunner:
                 stopped_reason = "plan_modified"
                 break
 
-            outcome = await self._run_task(task, on_tool_executed)
+            should_run_now = idx == last_not_done_index
+            outcome = await self._run_task(task, should_run_now, on_tool_executed)
 
             outcomes.append(outcome)
             if on_task_end is not None:
@@ -234,9 +257,16 @@ class PlanRunner:
     async def _run_task(
         self,
         task: Task,
+        should_run_now: bool,
         on_tool_executed: Callable[[ToolCall, ToolResult], None] | None,
     ) -> TaskOutcome:
-        """Dispatch one task and run the verification block."""
+        """Dispatch one task and run the verification block.
+
+        `should_run_now` is the position signal threaded into `verify_task`:
+        True only on the last not-done task, where an applicable-intent
+        deliverable should be runnable end-to-end (the acceptance gate
+        enforces only there — earlier tasks observe).
+        """
         from code_scalpel.agent import _build_task_prompt, _classify_outcome
 
         agent = self._agent
@@ -260,7 +290,14 @@ class PlanRunner:
         )
 
         outcome = _classify_outcome(task, step_result)
-        return await verify_task(self._agent, task, outcome, head_before, on_tool_executed)
+        return await verify_task(
+            self._agent,
+            task,
+            outcome,
+            head_before,
+            on_tool_executed,
+            should_run_now=should_run_now,
+        )
 
     def _persist_task_end(self, task: Task, outcome: TaskOutcome) -> None:
         # Persist task-end: on success, mark the task done and clear
