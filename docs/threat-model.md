@@ -64,7 +64,7 @@ self-inflicted blast radius).
 | External content → context | URL / web → model prompt | `(inferred)` no injection sanitisation today — fetched text is inserted verbatim |
 | Config / env → secrets | `.env`/env → adapter | keys env-only, never in YAML/logs/context (SC5) |
 | Autonomous loop → git | `run_plan` → repository | per-task HEAD validation; net-new files kept, no destructive git in the loop |
-| Autonomous loop → deliverable run (run-smoke) | `run_plan` verification #4 runs the project's own code (`python -m <pkg> --help`) | **no new boundary** — reuses the model-output→shell path: `policy.decide` + trust gate (SC1), `bwrap` sandbox (SC3), cwd pinned (SC2). The floor command is code-owned/deterministic (resolved by `resolve_pkg`, not model-emitted) |
+| Autonomous loop → deliverable run (run-smoke) | `run_plan` verification #4 runs the project's own code (`python -m <pkg> <args>`); since v0.14 `<args>` may be model-derived | **no new boundary** — reuses the model-output→shell path: `policy.decide` + trust gate (SC1), `bwrap` sandbox (SC3), cwd pinned (SC2). The verb is code-owned (`run_smoke` builds the argv); model input is **args-only**, tokenized via `shlex`, never a free-form shell string (SC7). The floor command stays code-owned/deterministic (`resolve_pkg`) |
 
 ## Threats
 
@@ -80,7 +80,8 @@ self-inflicted blast radius).
 | T08 | Prompt injection via `/learn --url` / web fetch overrides agent intent | A1, A5 | M | M | `(inferred)` partial — note size cap (SC6-adjacent) limits one vector; no content sanitisation `[?]` (PM to scope) |
 | T09 | Poisoned project memory note steers future turns | A5 | L | M | notes are user-authored + size-capped; no auto-ingest of model claims |
 | T10 | Wrong auto-resolved fork (yolo/optimist timeout) makes a bad architectural choice | A1 | M | M | critical forks force a human window; overrides recorded for review; overrides never auto-rewrite code |
-| T11 | Autonomous acceptance run-smoke executes the project's own (model-influenced) code at `trust="yolo"` | A1, A2 | M | M | **no new boundary** — runs through the existing trust-gated + `bwrap`-sandboxed + `policy.py`-blocked `execute()` shell path (SC1/SC2/SC3); the floor run-smoke command is **code-owned and deterministic** (`python -m <pkg> --help`, `resolve_pkg`-resolved), not a model-emitted string. *Forward:* feature 4's task-declared / narrow-pass-derived acceptance commands would re-introduce model-derived text at yolo — a separate provenance question to scope there, not in this feature |
+| T11 | Autonomous acceptance run-smoke executes the project's own code at `trust="yolo"` | A1, A2 | M | M | **no new boundary** — runs through the existing trust-gated + `bwrap`-sandboxed + `policy.py`-blocked `execute()` shell path (SC1/SC2/SC3); the floor run-smoke command is **code-owned and deterministic** (`python -m <pkg> --help`, `resolve_pkg`-resolved). *Resolved (v0.14):* the model-derived acceptance commands feature 4 added are **args-only**, not free-form shell — see T12 |
+| T12 | Model-derived acceptance **args** executed at `trust="yolo"` (v0.14 `feat/acceptance-spec-in-tasks`): the narrow pass derives subcommand args that reach the deliverable run | A1, A2 | M | M | **args-only (SC7)** — the model supplies only subcommand args + an expected substring, never a shell command; the **adapter** builds the argv (`python -m <pkg> <args>`), tokenized via `shlex`, so metacharacters become literal tokens (verified: `add; rm -rf ~`, `$(whoami)`, backticks, `&&`, `\|`, `>` all neutralized). Execution stays on the SC1/SC2/SC3 boundary. **Residual:** the model-derived *args* still reach a yolo shell as a tokenized argv, and `bwrap` degrades to policy-only on restricted-userns hosts (SC3) — blast radius is "the deliverable run with odd args", not "arbitrary command". Mitigated by args-only (SC7), the sandbox where available, cwd-pinning (SC2), and the derived spec being surfaced pre-run for inspection (written back into the plan before first execution) |
 
 Likelihood and Impact: L / M / H
 
@@ -113,6 +114,15 @@ Reviewed 2026-06-06 for `feat/acceptance-gate-run-plan` (acceptance
 run-smoke, verification #4): the autonomous deliverable run reuses the
 existing model-output→shell boundary (SC1/SC2/SC3) with a code-owned,
 deterministic floor command — **no new boundary or constraint** (T11).
-Re-examine the run-smoke command provenance when feature 4
-(`feat/acceptance-spec-in-tasks`) lets task-declared / model-derived
-acceptance commands reach the yolo shell path.
+
+Reviewed 2026-06-06 for `feat/acceptance-spec-in-tasks` (acceptance gate now
+enforcing; model-derived acceptance specs): the forward flag on T11 is
+**resolved**. Model-derived acceptance is **args-only** — the model never
+emits a shell command; the adapter builds the argv and `shlex`-tokenizes it
+(verified to neutralize every metacharacter payload), executed through the
+**existing** SC1/SC2/SC3 path. A new constraint **SC7** (args-only,
+adapter-owned argv) records the rule; a new threat row **T12** records the
+residual risk (model-derived *args* still reach a yolo shell as a tokenized
+argv; `bwrap` degrades to policy-only on restricted-userns hosts), mitigated
+by SC7 + sandbox + cwd-pinning + pre-run surfacing of the derived spec. No
+new trust boundary beyond T11.

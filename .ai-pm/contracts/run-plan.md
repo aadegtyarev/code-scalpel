@@ -24,21 +24,28 @@ execution on a weak local model, controlling autonomy via the trust level.
 - At a fork, the trust level decides human vs auto resolution; the run
   summary reports tasks done/failed, commits, and pending upstream forks.
 - For each completed task, the run-loop **runs the deliverable's run-smoke**
-  (`python -m <pkg> --help` for a python-cli project) and **records +
-  surfaces** the verdict (`passed`/`failed`/`noop`) — so the user can see
-  whether the deliverable actually ran, not just whether tests passed.
+  and **records + surfaces** the verdict (`passed`/`failed`/`noop`) — so the
+  user can see whether the deliverable actually ran, not just whether tests
+  passed — AND, **where an *applicable* acceptance spec exists**, **enforces**
+  it: a failing run-smoke demotes the task `done → failed`. The spec is a
+  narrow-pass-derived, args-only `{applicable, args, expected}` (the adapter
+  builds the argv; the model never emits a shell command) written back into
+  the plan; a human-declared prose acceptance is a hint to the derivation,
+  not an executed command.
 - `/escalate` (or end of `/go`) flushes pending forks through the upstream
   model and surfaces disagreements as overrides.
 
 ## Must not break
 
-- A task is `done` only if its tests pass and git HEAD advanced; otherwise
-  it is `failed`. (The acceptance run-smoke is **recorded, not enforced** —
-  it never demotes a task in this iteration; enforcement, gated by a
-  CLI-vs-library signal, lands with `feat/acceptance-spec-in-tasks`.)
-- The acceptance run-smoke **must not break any existing `/go` flow** — it
-  is observational for every project type, so no task that was `done`
-  before is failed by it (incl. python libraries with no CLI entrypoint).
+- A task is `done` only if its tests pass and git HEAD advanced; **and,
+  where an *applicable* acceptance spec exists, the deliverable's run-smoke
+  passed** — otherwise it is `failed`. (Taxonomy unchanged; enforcement
+  reuses the existing `done → failed` edge.)
+- The acceptance gate **must not break any `/go` flow that has no applicable
+  acceptance spec** — the default-floor is never applicable, so python
+  **libraries** with no CLI entrypoint (and any project type without a
+  runnable deliverable) are **never wrongly failed**; they keep the
+  observational behavior. This is the load-bearing no-regression invariant.
 - The loop stops after N consecutive failures and keeps partial progress
   on disk (no silent discard).
 - Editing `TASKS.md` mid-run is detected and stops the loop.
@@ -52,12 +59,11 @@ execution on a weak local model, controlling autonomy via the trust level.
 - `run_plan` tests — task status transitions, stop reasons (max_failures,
   plan_modified, all_done, no_tasks), HEAD validation, auto-commit hook.
 - Fork wiring / `UpstreamPendingQueue` / `flush_upstream` tests.
-- Acceptance run-smoke plumbing — verdict recorded/persisted/surfaced,
-  never demotes (`test_acceptance_records_failed_but_does_NOT_demote*`,
-  `test_acceptance_library_project_not_demoted`).
-- Outcome probe (`notes_cli`, N≥3, task_solved verdict) — the release-gate
-  integration check; gains teeth in `feat/acceptance-spec-in-tasks`
-  (feature 4) when the acceptance gate becomes enforcing.
+- Acceptance gate — demotes `done → failed` on an applicable spec failure;
+  never demotes a not-applicable / floor / library task (no-regression).
+- Outcome probe (`notes_cli`, **N≥3** to `task_solved`) — the **enforced
+  release gate**: `notes_cli` reaches 3/3 via the derived (args-only)
+  acceptance path, now with teeth.
 
 ## Out of scope
 
@@ -74,3 +80,4 @@ execution on a weak local model, controlling autonomy via the trust level.
 
 - (legacy — pre-protocol; v0.7–v0.14)
 - [acceptance-gate-run-plan](../../docs/features/acceptance-gate-run-plan_plan.md) — run-smoke plumbing + observability (recorded, not enforced)
+- [acceptance-spec-in-tasks](../../docs/features/acceptance-spec-in-tasks_plan.md) — acceptance gate now enforces where an applicable spec exists (derived args-only spec + write-back); `notes_cli` 3/3 the live enforced release gate

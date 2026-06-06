@@ -122,11 +122,13 @@ narratives about "watershed" versions were repeatedly disproven.
 **Status:** the N≥3 outcome probe is run **manually** today; it is **not**
 wired as an automated CI gate (the lint/type/test CI is — see Release
 flow). The automated outcome gate is v0.13 backlog `(inferred)`.
-**The `notes_cli` 3/3 `task_solved` release teeth move to feature 4**
-(`feat/acceptance-spec-in-tasks`): the acceptance run-smoke that gives
-`done` real meaning is observational in v0.14 (see *Acceptance run-smoke
-(verification #4)* below), so the 3/3 gate only becomes the binding
-release signal once the gate can demote on a CLI deliverable.
+**The `notes_cli` 3/3 `task_solved` signal now has teeth (v0.14,
+`feat/acceptance-spec-in-tasks`):** the acceptance run-smoke that gives
+`done` real meaning is now **enforcing** where an applicable spec exists
+(see *Acceptance gate enforcement (verification #4)* below), so the 3/3
+gate is the live, enforced release signal — a task that doesn't actually
+run its derived CLI deliverable is demoted, no longer just recorded. The
+3/3 probe is still run manually before ship.
 
 ### ProjectAdapter — `Skill` as a superset run/scaffold/acceptance contract (v0.14)
 
@@ -165,11 +167,11 @@ src-layout), and the package gets a real `__main__.py` (a
 work). The scaffold never clobbers existing files (fails loud) and rejects
 invalid package names before writing anything.
 **Status — contract landed; first run-loop consumer is the observational
-acceptance run-smoke (v0.14, see below).** This feature only made the
-contract *exist*; the run-loop consumer arrived with
-`feat/acceptance-gate-run-plan`, which reads `acceptance_spec` /
-`run_smoke` via a registry-resolved adapter but does **not** yet let them
-change a task verdict. `build_install`/`scaffold` remain unconsumed by the
+acceptance run-smoke (v0.14, see below); now enforcing (v0.14, feature 4).**
+This feature only made the contract *exist*; the run-loop consumer arrived
+with `feat/acceptance-gate-run-plan` (observational), and
+`feat/acceptance-spec-in-tasks` gave it teeth (see *Acceptance gate
+enforcement* below). `build_install`/`scaffold` remain unconsumed by the
 run loop.
 Source: `.ai-pm/arch/backend-redesign_arch.md` (Fork 1-A, migration step 1);
 `docs/features/project-adapter-abstraction_plan.md`; shipped in
@@ -219,7 +221,10 @@ decision).** This iteration ships the run-smoke **plumbing + observability
 only**: it records and surfaces the verdict but **never demotes a task to
 `failed`**. The `done | failed | skipped` taxonomy is **unchanged** and a
 `done` task does **not** require run-smoke to pass — checks 1–3 alone still
-decide the verdict. **Why deferral:** the floor adapter (`PythonCliAdapter`)
+decide the verdict. **Superseded (v0.14):** verification #4 now **enforces**
+where an *applicable* spec exists — see *Acceptance gate enforcement
+(verification #4)* below; this entry documents the observational phase the
+enforcing gate grew out of. **Why deferral (then):** the floor adapter (`PythonCliAdapter`)
 detects *any* Python project and cannot tell a CLI deliverable from a plain
 library without a CLI-intent signal; demoting now would wrongly fail `/go`
 runs over Python **libraries** (a net-new regression). Hard enforcement
@@ -246,6 +251,58 @@ Source: `.ai-pm/arch/backend-redesign_arch.md` (migration step 2);
 shipped in `code_scalpel/plan_runner.py` + `plan_loading.py` +
 `plan_post_checks.py` + `plan_verify.py` (`_verify_acceptance`),
 `skills/base.py` + `python_cli_adapter.py` + `registry.py`, `state.py`.
+
+### Acceptance gate enforcement + derived/declared acceptance specs (v0.14)
+
+**Chosen:** verification #4 (the acceptance run-smoke) flips from
+record-only to **enforcing** — it demotes `done → failed` — but **only
+where an *applicable* acceptance spec exists**. The whole shape:
+- **`AcceptanceSpec(command, expected, applicable, source)`** (frozen
+  dataclass) replaces the old `(command, expected)` tuple. `command` is the
+  adapter-built argv-string; `expected` is the observable substring (`""` =
+  exit-0-only); **`applicable` is the CLI-vs-library discriminator that
+  gates enforcement**; `source ∈ {declared, derived, floor}`.
+- **The default-floor never sets `applicable=True`** — the structural lock
+  so libraries and no-spec projects are **never** demoted (the feature-2
+  no-regression invariant cannot return).
+- **Spec precedence: derived (C) → floor (A).** A **narrow-pass-derived**
+  spec (C) is **args-only**: the model returns `{applicable, args,
+  expected}` and the **adapter** builds the run argv from `args` (no
+  free-form shell — PM security decision; see `## Security constraints`
+  `SC7` and `docs/threat-model.md` T12). The derived spec is **written back
+  into the plan** so it is deterministic on every later run (no
+  re-derivation). A **human-declared prose acceptance (B) is a HINT to the
+  derivation, NOT executed as a command** — `Task.acceptance` is free prose
+  with no runnable-args shape, so executing it as argv false-demoted tasks;
+  direct enforcement of a *structured* declared spec is a follow-up.
+- **The run-loop is language-agnostic.** It asks the `detect()`-selected
+  adapter for an `AcceptanceSpec`, runs `spec.command`, and branches on
+  `spec.applicable` — **zero language strings in the loop**. A future Node
+  adapter (feature 5) plugs in with no run-loop edit. A single
+  `acceptance_applicable(task)` adapter method is the one source of the
+  enforce-or-observe decision (used by both the normal and the
+  pkg-unresolvable paths, so applicability never diverges).
+**Why:** feature 2 shipped the run-smoke as observational because a
+demoting gate over *any* Python project wrongly fails libraries with no CLI
+deliverable. The applicability discriminator is what lets the gate finally
+have teeth without re-creating that regression — a `done` task with an
+applicable spec now means the deliverable actually ran, while libraries and
+spec-less projects keep feature-2's observational behavior untouched.
+**Taxonomy unchanged.** No new status — enforcement reuses the existing
+`done → failed` demotion (the edge that was inert in feature 2 now fires
+where an applicable spec exists). See `### Task outcome status` and
+`## State model`.
+**Config:** `auto_derive_acceptance` (default `True`) gates the pre-loop
+derivation LLM pass (mirrors `auto_annotate_plan`); a headless/hermetic
+caller can disable it.
+Source: `.ai-pm/arch/acceptance-spec-in-tasks_arch.md` (resolutions 1–5);
+`docs/features/acceptance-spec-in-tasks_plan.md`; PM args-only security
+decision + the post-review B-is-a-hint resolution
+(`.ai-pm/reviews/acceptance-spec-in-tasks_review.md`); shipped in
+`code_scalpel/plan_verify.py`, `plan_loading.py`, `skills/base.py`
+(`AcceptanceSpec` + `acceptance_applicable`), `skills/python_cli_adapter.py`,
+`agent.py` (`derive_acceptance_args`), `config.py` (`auto_derive_acceptance`),
+`state.py`.
 
 ## Architectural constraints
 
@@ -278,6 +335,10 @@ shipped in `code_scalpel/plan_runner.py` + `plan_loading.py` +
 - Per-call timeouts: `llm_timeout 120s`, `shell_exec_timeout 30s`,
   `test_timeout 60s`, `git_timeout 10s`, `lint_pass_timeout 15s`. The
   acceptance run-smoke reuses `shell_exec_timeout` (no new tunable).
+- `auto_derive_acceptance` (default `True`) — gates the pre-loop
+  acceptance-spec derivation (one narrow-pass LLM call per acceptance-less
+  task at `/go`, mirroring `auto_annotate_plan`); disable for a
+  headless/hermetic run.
 - Fork human-decision timers: optimist `120s`, yolo+critical `60s`.
 - **No RAM / boot budget asserted by code — `[?]`.** Single-GPU VRAM is the
   real constraint behind the upstream model-swap, but no number is pinned;
@@ -295,7 +356,7 @@ shipped in `code_scalpel/plan_runner.py` + `plan_loading.py` +
 | `code_scalpel/plan_runner.py` | **PlanRunner** — the per-task `run_plan` execution loop strangled out of `agent.py` (re-hash/plan_modified, streak/threshold, auto-commit hook, callback timing); `StepAgent.run_plan` delegates `PlanRunner(self).run(...)` |
 | `code_scalpel/plan_loading.py` | TASKS.json/TASKS.md load + per-iteration re-hash + skill annotation for the run loop (extracted alongside the strangle) |
 | `code_scalpel/plan_post_checks.py` | post-task hooks for the run loop (auto-commit, plan annotation) extracted alongside the strangle |
-| `code_scalpel/plan_verify.py` | per-task Definition-of-Done machine checks: `Files:` exist, `Test command:` exit-0, git HEAD advanced (all demoting), and **verification #4 `_verify_acceptance`** — the registry-resolved acceptance run-smoke that **records/surfaces but never demotes** (observational; see the Acceptance run-smoke decision) |
+| `code_scalpel/plan_verify.py` | per-task Definition-of-Done machine checks: `Files:` exist, `Test command:` exit-0, git HEAD advanced (all demoting), and **verification #4 `_verify_acceptance`** — the registry-resolved acceptance run-smoke that **demotes `done → failed` where an *applicable* `AcceptanceSpec` exists, else records/surfaces only** (v0.14; see the Acceptance gate enforcement decision) |
 | `code_scalpel/config.py` | pydantic config (`AppConfig`/`AgentConfig`/`ModelProfile`/`ModeTemperatures`), layered YAML loader, context autodetect |
 | `code_scalpel/classifier.py` | pure keyword heuristic → `TaskType` (question/design/implement/debug/refactor/new_project) |
 | `code_scalpel/policy.py` | trust-level decisions + hard-block command patterns (`decide`, `auto_confirm`) |
@@ -410,13 +471,17 @@ Pure keyword heuristic, word-boundary regex, first rule wins:
 `(inferred)`). `skipped` is a stop reason — the model must perform a task.
 Per-task git HEAD must advance (sha ≠ prev) or the task is `failed`;
 auto-commit hook commits `<task.id>: <task.title>` if the model forgot.
-**A 4th machine check (acceptance run-smoke, verification #4) also runs but
-is observational — it records a separate run-smoke verdict
-(`passed`/`failed`/`noop`) and never changes this status enum**: a `done`
-task does **not** (yet) require run-smoke to pass. The run-smoke verdict is
-a distinct `AgentState` field, not an outcome status; hard enforcement
-(demote-on-failure) lands in feature 4 (see the Acceptance run-smoke
-decision in `## Architectural decisions` and `## State model`).
+**A 4th machine check (acceptance run-smoke, verification #4) also runs and,
+since v0.14 (`feat/acceptance-spec-in-tasks`), ENFORCES — it demotes
+`done → failed` — but ONLY where an *applicable* acceptance spec exists**
+(a narrow-pass-derived spec marked `applicable=True`; the default-floor
+never is, so libraries/no-spec projects keep feature-2's observational
+behavior and are never demoted). **The taxonomy is unchanged** — no new
+status; enforcement reuses the existing `done → failed` edge. Where no
+applicable spec exists the run-smoke is still recorded/surfaced and never
+demotes. The run-smoke verdict (`passed`/`failed`/`noop`) is also a distinct
+`AgentState` field. See the *Acceptance gate enforcement* decision in
+`## Architectural decisions` and `## State model`.
 
 ### Tool surface (function-calling schemas)
 
@@ -469,9 +534,13 @@ for json_schema fork resolution, not for tool loops.
   `## State model`.
 - **Dispatch never raises:** the tool boundary returns a `ToolResult`,
   never an exception — stated inline above (tool surface).
-- **Acceptance run-smoke is observational:** verification #4 records and
-  surfaces a run-smoke verdict but never demotes a task — stated inline
-  above (task outcome status) and in `## State model`.
+- **Acceptance enforcement is applicability-gated (v0.14):** verification
+  #4 demotes `done → failed` only where an *applicable* acceptance spec
+  exists (the default-floor never is, so libraries/no-spec projects are
+  never demoted — the feature-2 no-regression lock); elsewhere it records
+  and surfaces only — stated inline above (task outcome status) and in
+  `## State model`. Model-derived acceptance is args-only — enforced by
+  `SC7` (`## Security constraints`).
 - **Endpoint reachability:** the *First-time setup* journey requires a
   reachable LLM endpoint before any turn produces output (see
   `docs/user-journeys.md`).
@@ -495,15 +564,19 @@ edges/triggers.
 | `failed` | — | tests fail / HEAD didn't move / verify fails; ≥ `stop_after_failures` consecutive → stop "max_failures" | net-new files kept on disk for inspection |
 | `skipped` | — | model skipped a required task | stop reason — not allowed silently |
 
-**Acceptance run-smoke verdict (per task, observational — does NOT gate the
-status above):** a separate field set on `AgentState`
-(`last_acceptance_verdict`): `passed` (run-smoke exit 0, and the non-empty
-`expected` observable present) · `failed` (non-zero exit / `timeout` /
-`pkg-unresolvable`, reason persisted) · `noop` (no acceptance adapter
-detected the project type) · `unknown` (default, never recorded). A `noop`
-never clobbers a prior `passed`/`failed`. This verdict is **recorded and
-surfaced only** — no edge in the table above is driven by it in v0.14
-(hard enforcement is feature 4).
+**Acceptance run-smoke verdict (per task):** a separate field set on
+`AgentState` (`last_acceptance_verdict`): `passed` (run-smoke exit 0, and
+the non-empty `expected` observable present) · `failed` (non-zero exit /
+`timeout` / `pkg-unresolvable` / `malformed-args`, reason persisted) ·
+`noop` (no acceptance adapter detected the project type) · `unknown`
+(default, never recorded). A `noop` never clobbers a prior
+`passed`/`failed`. **Since v0.14 this verdict drives the `done → failed`
+edge above WHERE an *applicable* acceptance spec exists** (derived +
+`applicable=True`): a `failed` acceptance run-smoke demotes the task. Where
+no applicable spec exists (the default-floor, a derived not-applicable
+library, no adapter) the verdict is **recorded and surfaced only** — it
+drives no edge, exactly as in feature 2. The spec is derived once pre-loop
+and written back, so the gate is deterministic across resume/re-run.
 
 Loop-level stops: `all_done`, `no_tasks`, `plan_modified` (TASKS.md hash
 changed mid-run), `CancelledError` (ESC — already-marked tasks stay).
@@ -566,6 +639,13 @@ cancel.
 - **SC6** — `write_file` rejects empty `content`; `mkdir` bare-form is a
   no-op (write_file creates parents) to keep model file ops on the
   canonical path.
+- **SC7** — Model-derived acceptance input is **args-only**: the
+  acceptance-spec narrow pass may supply only subcommand args + an expected
+  substring, never a free-form shell command. Argv assembly is
+  **adapter-owned** (`run_smoke(args)` builds `python -m <pkg> <args>`),
+  tokenized via `shlex`, so model-supplied metacharacters become literal
+  argv tokens, never shell operators; execution stays on the SC1/SC2/SC3
+  gated `execute()` path. (Referenced by `docs/threat-model.md` T12.)
 
 ### Recovery & key-loss posture
 
