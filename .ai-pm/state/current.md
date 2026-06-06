@@ -8,58 +8,48 @@ PM reads this when curious about progress; PM never edits it. Agents read it as 
 
 ## Task
 
-Implement feature 1 of the backend redesign: `feat/project-adapter-abstraction` — extend the `Skill` ABC into a ProjectAdapter contract (scaffold / build_install / run_smoke / acceptance_spec) and ship `PythonCliAdapter`. Pure-additive; no run-loop change. Plan: `docs/features/project-adapter-abstraction_plan.md`.
+Implement feature 2 of the backend redesign: `feat/acceptance-gate-run-plan` — add a 4th mandatory machine check to `run_plan`'s Definition-of-Done that runs the deliverable as a user would (`python -m <pkg>`) via a registry-resolved ProjectAdapter, so a task can no longer be `done` on proxies. Strangle `run_plan` into its own module first (behavior-preserving), then add the gate. Plan: `docs/features/acceptance-gate-run-plan_plan.md`. Arch: `.ai-pm/arch/acceptance-gate-run-plan_arch.md`. Decision authority: autonomous (per-feature, PM "на автомате").
 
 ## Status
 
-Pass-2 review findings 1–6 addressed — ready for re-review
+planning complete — ready for coder handoff
 
 ## Done
 
-- Bootstrap: legacy adoption (full documentation mode) completed.
-- Spike: diagnosed "doesn't work as a product" — 19% task_solved across 107 probe runs; root cause = no acceptance/run gate in Definition-of-Done. Language-agnostic.
-- pm-architect arch note written: `.ai-pm/arch/backend-redesign_arch.md`.
-- **feat/project-adapter-abstraction implemented (this task):**
-  - `Skill` ABC gained 4 non-abstract ProjectAdapter methods with safe defaults (`build_install`→`[]`, `run_smoke`→`[]`, `scaffold`→`[]` no-op, `acceptance_spec`→`None`) + `ScaffoldSpec` dataclass. No existing skill became abstract.
-  - `PythonCliAdapter` (`code_scalpel/skills/python_cli_adapter.py`): detect (=PythonSkill), `build_install`→`pip install -e .`, `test()`==PythonSkill.test_cmd, `run_smoke`→`python -m <pkg>` (pkg resolved deterministically), `scaffold` (src-layout skeleton, clobber-guard + invalid-name guard), `acceptance_spec` default-floor.
-  - Deterministic package resolution helper `code_scalpel/skills/python_pkg.py`.
-  - Registration decision: adapter registered EXPLICITLY in `__init__.py` (module not named `*_skill.py`, so not auto-discovered) with `provides_test_runner = False` → discoverable via get_skill/all_skills, never selected by `default_runnable` (no test-path hijack). Proven by `test_registry_default_runner_unchanged_after_adapter_registered`.
-  - Full Test plan written in `tests/test_python_cli_adapter.py` incl. execution test `test_scaffold_smoke` (runs `python -m <pkg>` against scaffolded temp project).
-- **Pass-2 review fixes (this task) — findings 1–6:**
-  - (1, blocking) Added `hidden: bool = False` trait on `Skill`; `SkillRegistry.all()`/`active()` now exclude hidden skills while `get()`/`default()`/`default_runnable()` keep their unfiltered scan. `PythonCliAdapter.hidden = True` → out of model catalog / detected-stack hint / `/skills` panel, still `get_skill('python-cli')`-discoverable. No other skill affected.
-  - (2, blocking) `acceptance_spec` resolves the real package via `resolve_pkg(self._root)` when root-bound; raises the same clear "project root" error as `run_smoke` for the rootless singleton — no more literal `<pkg>` placeholder.
-  - (3, blocking) `run_smoke` now uses `shlex.split` (parity with `test_cmd`); ABC `run_smoke` + `test_cmd` docstrings corrected to say "split with shlex".
-  - (4) Removed inert `priority = 15` from the adapter.
-  - (5) Adapter holds a single `self._py = PythonSkill()`; `detect`/`test_cmd`/`lint_cmd` delegate to it.
-  - (6) Dropped the `test()` alias (kept `test_cmd`); updated the new-on-branch test that referenced it.
-  - New tests: hidden-from-listings + discoverable, default_skill/default_runnable regression guard, hidden-trait isolation, shlex-split run_smoke, root-bound + rootless acceptance_spec.
+- Feature 1 (`feat/project-adapter-abstraction`) merged: PR #168 (squash `0f79f95`). ProjectAdapter contract + PythonCliAdapter + registry `hidden` trait. Archived prior state.
+- Repo housekeeping: probe-run corpus committed; `.ai-pm/tooling/` + probe `.workdir/` gitignored.
+- **This task (planning):**
+  - Read context: arch note (parent), run-plan contract, architecture.md (taxonomy/release-gate/invariants), stack-notes (subprocess/python-m/bwrap/asyncio), user-journeys Journey 5, security-surfaces, decision-authority.
+  - Mapped the run-loop AS-IS: `run_plan` agent.py:1219–1695 (477 lines), verification block 1459–1526 (3 checks), `_classify_outcome` 694–719, `execute(..., trust="yolo")` shell path, `PythonCliAdapter(root=...)` resolution, `AgentState`/STATE.json, `on_task_end`/`on_tool_executed` TUI seam. `Task.acceptance` exists but unused (feature 4 input).
+  - Ran focused `pm-architect` → `.ai-pm/arch/acceptance-gate-run-plan_arch.md` (design confirmed with refinements: no exit-4/5 leniency; `pkg-unresolvable`→failed reason-string, no new status; `PlanRunner(self)` strangle; yolo provenance flagged forward to feature 4).
+  - Wrote plan `docs/features/acceptance-gate-run-plan_plan.md` (9 scenarios incl. 3 failure paths; contracts; stack expectations; interaction scenarios; full test plan; docs-to-update; out-of-scope).
+  - Product-readiness gate (`pm-product-advocate`): **clean** — all 5 foundational questions answered. `.ai-pm/reviews/acceptance-gate-run-plan_advocate.md`.
 
 ## Remaining
 
-- Pass 2 re-review of the fix pass (code-review).
-- pm-architect post-coding doc update (docs/architecture.md: ProjectAdapter decision + file-layout) — per plan "Docs to update" handoff.
-- Later features: feat/acceptance-gate-run-plan (2), self-fix-loop (3), acceptance-spec-in-tasks (4), node-cli-adapter (5).
+- Coder: implement on `feat/acceptance-gate-run-plan` — commit 1 behavior-preserving `run_plan`→`plan_runner.py` strangle (existing tests green), commit 2 the acceptance gate + `provides_acceptance`/`bind`/`acceptance_adapter` + state fields + TUI card surfacing.
+- Review loop: Pass 1 `pm-plan-checker`, Pass 2 `code-review`.
+- Post-coding doc handoff (`pm-architect`): architecture.md + user-journeys.md + threat-model.md per plan "Docs to update".
+- Update `.ai-pm/contracts/run-plan.md` Must-not-break; append feature to contract Built/changed-by; regenerate `docs/product-map.md`; mark v0.14 progress in docs/plan.md.
+- Verify the feature's own acceptance criterion: `notes_cli` 3/3 task_solved (manual outcome probe).
+- Ship: pr-prep + PR (manual merge by PM).
+- Later features: self-fix-loop (3), acceptance-spec-in-tasks (4), node-cli-adapter (5).
 
 ## Touched files
 
-- code_scalpel/skills/base.py (ScaffoldSpec + 4 new methods + `hidden` trait + docstring fixes)
-- code_scalpel/skills/registry.py (all()/active() honor `hidden`)
-- code_scalpel/skills/python_cli_adapter.py (new; Pass-2 fixes 2–6)
-- code_scalpel/skills/python_pkg.py (new)
-- code_scalpel/skills/__init__.py (explicit registration + exports)
-- tests/test_python_cli_adapter.py (new + Pass-2 fix tests)
+(to be filled by coder) — expected: code_scalpel/plan_runner.py (new), code_scalpel/agent.py (run_plan delegation), code_scalpel/skills/base.py (provides_acceptance + bind), code_scalpel/skills/python_cli_adapter.py (bind override + provides_acceptance), code_scalpel/skills/registry.py (acceptance_adapter), code_scalpel/state.py (run-smoke fields), tests/*.
 
 ## Next step
 
-re-review (Pass 2 technical re-check of the fix pass).
+hand off to pm-coder.
 
 ## Validation
 
-pytest: 1226 passed, 40 skipped (full suite; +5 new tests). ruff check + ruff format --check: clean. mypy code_scalpel/: clean except the KNOWN PRE-EXISTING (not this diff) error in `code_scalpel/tools/files.py:8` (unused type:ignore) present on the base commit — confirmed via stash, surfaced not papered over.
+Per plan Test plan. Pipeline: pytest / ruff check / ruff format --check / mypy code_scalpel/. Feature acceptance: notes_cli 3/3 task_solved (manual probe).
 
 ## Notes
 
-Project adopted the protocol over an existing mature codebase (v0.12.5.dev0, v0.14 open in docs/plan.md §31). docs/plan.md remains the long-range design narrative.
+Project adopted the protocol over an existing mature codebase (v0.12.5.dev1, v0.14 open in docs/plan.md §31). docs/plan.md remains the long-range design narrative. Autonomous mode active for this batch ("на автомате") — per-feature override line in the plan.
 
 ---
 
