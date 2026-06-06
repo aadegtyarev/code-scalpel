@@ -2,6 +2,76 @@
 
 <!-- Pass-1 plan-compliance will be prepended by pm-plan-checker after the doc handoff. -->
 
+## Plan compliance (Pass 1 — pm-plan-checker, 2026-06-06)
+
+Verdict against the post-review plan (`docs/features/acceptance-spec-in-tasks_plan.md`).
+
+- ✓ Scenario 1 (declared/applicable spec enforces — demote on fail) — `plan_verify.py:167` (`if applicable and not ok`); tests `test_enforce_on_derived_applicable_spec`, `test_enforce_on_derived_applicable_spec`/`test_expected_observable_enforced_on_applicable`.
+- ✓ Scenario 2 (no-declared → derive args-only, write back, enforce if applicable) — `plan_loading._derive_acceptance` + `_derive_specs_for_tasks`; tests `test_enforce_on_derived_applicable_spec`, `test_derived_spec_written_back_not_rederived`.
+- ✓ Scenario 3 (not-applicable / floor-only → observational, NOT demoted — load-bearing no-regression) — gate at `plan_verify.py:167`; floor `applicable=False` lock at `python_cli_adapter.py:191-201`; tests `test_observational_when_derivation_not_applicable` (real library shape, src-layout no `__main__`), `test_floor_only_is_observational`.
+- ✓ Scenario 4 (write-back, deterministic next run) — `_persist_derived_tasks` writes TASKS.json + re-renders sentinel; tests `test_derived_spec_written_back_not_rederived`, `test_derived_spec_resumes_from_plan`.
+- ✓ Scenario 5 (args-only, adapter-built argv, no free-form shell) — narrow pass returns `{applicable,args,expected}` (`agent.py` `_DERIVE_ACCEPTANCE_SCHEMA` + `derive_acceptance_args`); adapter builds argv via `run_smoke`; `shlex.join(shlex.split(...))` at `plan_verify.py:256`; tests `test_derived_command_is_args_only_adapter_built`, `test_acceptance_command_argv_no_shell`.
+- ✓ Scenario 6 (run-loop language-agnostic) — verify path reads only `spec.applicable`/`spec.command`, no language string; test `test_run_loop_enforces_through_a_nonpython_adapter` (fake non-python adapter, demotes through same path).
+- ✓ Scenario 7 (non-empty `expected` must appear) — `plan_verify.py:272-273`; test `test_expected_observable_enforced_on_applicable`.
+- ✓ Scenario 8 (notes_cli 3/3 via derived path) — manual outcome probe (Step 5.5), not a unit test (per plan); probe-run artifacts present under `docs/article/probe-runs/notes_cli*`.
+- ✓ Failure path 9 (derivation fails → floor, observational, no crash) — `_derive_specs_for_tasks` leaves task untouched on `None`; test `test_derivation_failure_falls_back_observational`.
+- ✓ Failure path 10 (write-back fails → in-memory, old sentinel, no corruption) — `_persist_derived_tasks` swallows OSError, `_derive_acceptance` returns old hash; test `test_writeback_failure_uses_inmemory_and_logs`.
+- ✓ Failure path 11 (applicable timeout/non-zero → demote with reason; timeout from config) — `_failure_reason` + `shell_exec_timeout` from config (no magic number); covered via `test_enforce_on_derived_applicable_spec` / `_failure_reason` mapping.
+- ✓ Failure path 12 (pkg-unresolvable: applicable demotes, not-applicable observes) — `plan_verify.py:231-243` + `_adapter_applicable`; test `test_applicable_pkg_unresolvable_demotes_vs_notapplicable_observes`, `test_pkg_unresolvable_recovers_source_for_derived`.
+
+**KD verification (spawn asks):**
+- ✓ KD2 — demotion gated strictly on `spec.applicable`; floor never sets applicable (`_floor_spec` hard-codes `applicable=False`, asserted noop-never-applicable at `plan_verify.py:161`). Library / not-applicable / floor-only is observational.
+- ✓ KD2b — prose B is NOT executed as argv: adapter precedence is derived (C) → floor (A) (`acceptance_spec` at `python_cli_adapter.py:125-150`); prose feeds derivation as a hint (`_human_acceptance_hint`); `test_acceptance_spec_precedence` + `test_prose_declared_acceptance_is_never_false_demoted` confirm C→A and no prose-as-argv false-demote.
+- ✓ KD3 — args-only json_schema narrow pass; adapter builds argv; stack-spec `test_acceptance_command_argv_no_shell` + `test_derived_command_is_args_only_adapter_built`.
+- ✓ KD1 — no language string in the verify path; `test_run_loop_enforces_through_a_nonpython_adapter`.
+- ✓ Composition / write-back — `_merge_annotated_skills` preserves typed `Task` fields (data-loss fix); write-back not flagged as `plan_modified`; tests `test_pre_passes_preserve_typed_fields`, `test_annotation_and_derivation_compose`, `test_writeback_not_flagged_as_plan_modified`.
+
+**Interaction scenarios (all have concurrent/post-condition tests):**
+- ✓ Write-back not a user mid-run edit — `test_writeback_not_flagged_as_plan_modified`.
+- ✓ Both pre-passes compose — `test_annotation_and_derivation_compose`.
+- ✓ Resume reads written-back spec — `test_derived_spec_resumes_from_plan`.
+- ✓ Runs at yolo on skeptic project — `test_acceptance_runs_at_yolo_on_skeptic_project`.
+- ✓ Demotion produces the feature-3 signal cleanly (source recovered on failure path) — `test_pkg_unresolvable_recovers_source_for_derived` (does NOT route back, per scope).
+
+**Stack expectations:** ✓ json_schema structured output (`test_derivation_uses_json_schema_structured_output`); ✓ subprocess argv/no-shell (`test_acceptance_command_argv_no_shell`, cites asyncio-subprocess security URL); ✓ `python -m <pkg>` adapter argv; ✓ bwrap/execute() boundary inherited.
+
+**Product Contract (`run-plan.md`):** ✓ Must work updated (enforces where applicable). ✓ Must not break updated (library no-regression is the load-bearing invariant — matches code). ✓ Built/changed-by entry appended. ✓ Acceptance check = notes_cli N≥3 enforced release gate. No silent behavior change — the observational→enforcing flip is the intended, documented change.
+
+**Stack expectations / Interaction sections present in plan** (security-bearing project; feature touches the command-execution surface): ✓ "Stack expectations touched" with source URLs; ✓ "Interaction scenarios"; ✓ `docs/threat-model.md` in Docs to update (T11 resolved + T12 + SC7).
+
+**Docs to update (all on-branch, commit 1fa6855):** ✓ architecture.md (enforcement decision + SC7 defined `:642-648`); ✓ user-journeys.md (Journey 5 — enforcing-where-applicable, libraries unaffected); ✓ threat-model.md (T11 resolved, T12 added, SC7 defined, Last reviewed bumped); ✓ plan.md (v0.14 ✓); ✓ contract. All describe ENFORCING-WHERE-APPLICABLE, not "done always requires run-smoke" — confirmed.
+
+**Out of scope respected:** ✓ no self-fix route-back (feature 3); ✓ no Node adapter (feature 5); ✓ no free-form model commands (args-only); ✓ no enforcement where no applicable spec.
+
+**Selection-citation backstop:** plan `Source:` cites the parent arch note Fork 2 + PM greenlight (`selected autonomously` not the provenance form used — PM-greenlit named feature); n/a. Advocate `auto`-entry citation check: advocate verdict is `clean` (no `## Resolutions` `auto` entries) — n/a.
+
+## Definition of Done
+- [x] All plan scenarios implemented and tested
+- [x] Interaction scenarios have concurrent-state tests
+- [x] Stack expectations respected; stack-spec tests pass
+- [x] Product Contract honored; Acceptance checks pass; no silent behavior change
+- [x] Pipeline green (pytest 1278 passed/40 skipped; ruff check + format clean; mypy clean cacheless — the lone `tools/files.py:8` unused-ignore is a pre-existing env-stub artifact on a file NOT touched by this diff, already noted in the Pass-2 trail; not a feature regression)
+- [x] State file updated (`.ai-pm/state/current.md`)
+- [x] Product Impact Report present (contract touched; Pass-2 trail + advocate cover impact)
+- [x] Docs updates landed (commit 1fa6855)
+- [x] Expected artifacts exist (plan, this review, contract — feature is user-facing)
+- [x] Product-readiness gate resolved (user-facing — advocate `clean`, `.ai-pm/reviews/acceptance-spec-in-tasks_advocate.md`)
+- [n/a] Validation gate (software-kind project — code Pass-2 applies, not a documentation validation stamp)
+- [x] Failure-inventory negative-space tests present (failure paths 9-12 each have a negative-space test)
+
+**DoD: pass**
+
+## Blocking
+None.
+
+## Notes (product)
+1. The acceptance derivation fires one LLM pass per acceptance-less task at every `/go` (default `auto_derive_acceptance: true`), and auto-rewrites TASKS.{json,md} with the derived spec. This matches the existing `auto_annotate_plan` precedent and is surfaced via the pre-loop card, but it is a new per-run, model-driven side effect on a weak local model — worth the PM knowing the deliverable's acceptance command is now model-influenced (args-only) and editable in the plan before first run. Why it matters: the user sees (and can edit/reject) the derived acceptance args before they execute, but the default-on behavior means a `/go` now does extra LLM work and rewrites the plan file unprompted.
+
+## Verdict
+approve
+
+
+
 ## Code review findings
 Pass-2 technical review (code-review skill, high effort: 7 finder angles → verify). **Security (args-only) verified SOLID** — `shlex.join(shlex.split(...))` neutralizes every metacharacter payload (`add; rm -rf ~`, `$(whoami)`, backticks, `&&`, `|`, `>`, newlines); the verb is always code-owned `run_smoke`; only args are model/human-influenced and tokenized; the tuple→`AcceptanceSpec` migration has no stale consumers. The PM's args-only decision is correctly enforced.
 

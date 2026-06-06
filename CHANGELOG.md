@@ -5,6 +5,29 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.12.5.dev3] — 2026-06-06
+### Added
+- Acceptance specs in tasks — the acceptance gate now has teeth. A task can
+  carry a typed `AcceptanceSpec(command, expected, applicable, source)`, and
+  the run loop's verification #4 now **enforces** it: when an *applicable* spec
+  exists and the deliverable fails to satisfy it, the task is demoted
+  `done → failed`. Previously the run-smoke verdict was observational only.
+- Args-only acceptance derivation: a narrow pre-loop pass asks the model only
+  for `{applicable, args, expected}` and the adapter builds the argv from it —
+  no free-form shell is ever derived or executed (security decision). The
+  derived spec is written back into the plan. A human-declared prose acceptance
+  criterion is treated as a **hint** to this derivation, not executed directly.
+- `auto_derive_acceptance` config flag (default **on**) to gate the derivation
+  pass.
+### Changed
+- Enforcement is **applicable-gated**: only deliverables with an applicable
+  acceptance spec can be failed by the gate. The `applicable` flag is the
+  CLI-vs-library discriminator — the default floor never sets it, so libraries
+  and projects without a spec are never wrongly failed (no regression to the
+  prior observational behaviour).
+- The run loop is now **language-agnostic**: it carries zero language-specific
+  strings, so a future adapter (e.g. Node) plugs in without any run-loop edit.
+
 ## [0.12.5.dev2] — 2026-06-06
 ### Added
 - Run-smoke plumbing and observability in `run_plan`: after a plan finishes,
