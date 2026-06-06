@@ -3,6 +3,10 @@ prove the thing it builds actually works when run, the way a user would
 run it.
 
 You will receive one task: its id, title, goal, and the files it touches.
+It MAY also carry a human-written acceptance note — the author's plain-prose
+description of what "done" looks like ("the note appears in the list"). Treat
+that note as a strong HINT: turn the author's intent into concrete `args` and
+an `expected` substring. It is never a shell command and is never run verbatim.
 
 Answer three questions, nothing else:
 

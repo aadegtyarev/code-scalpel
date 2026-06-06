@@ -36,6 +36,7 @@ import shlex
 from pathlib import Path
 
 from code_scalpel.skills.base import (
+    AcceptanceArgError,
     AcceptanceSpec,
     ScaffoldSpec,
     Skill,
@@ -110,15 +111,30 @@ class PythonCliAdapter(Skill):
             raise ValueError("run_smoke needs a project root: construct PythonCliAdapter(root=...)")
         pkg = resolve_pkg(self._root)
         # shlex.split (not str.split) for parity with test_cmd — keeps
-        # quoted argument groups like `--note 'a b'` intact.
-        return ["python", "-m", pkg, *(shlex.split(args) if args else [])]
+        # quoted argument groups like `--note 'a b'` intact. A malformed args
+        # string (unbalanced quotes) is a SPEC error, not a package error:
+        # re-raise as AcceptanceArgError so the run-loop falls back to the
+        # floor instead of mislabeling a healthy package `pkg-unresolvable`
+        # (review finding 5).
+        try:
+            split_args = shlex.split(args) if args else []
+        except ValueError as exc:
+            raise AcceptanceArgError(f"cannot tokenize acceptance args {args!r}: {exc}") from exc
+        return ["python", "-m", pkg, *split_args]
 
     def acceptance_spec(self, task: object) -> AcceptanceSpec | None:
-        """Precedence B (declared) → C (derived) → A (default-floor).
+        """Precedence C (narrow-pass-derived) → A (default-floor).
 
-        Every branch builds `command` through `run_smoke(args)`, so the
-        python-specific `python -m <pkg>` prefix lives only here and a model-
-        or human-supplied `args` is tokenized into argv, never a shell string
+        The EXECUTED spec is always the derived (C, args-only) or floor (A)
+        one. A human-declared acceptance is PROSE intent, not a CLI command —
+        it is fed to the derivation as a hint (in the pre-loop pass) and never
+        executed as argv (review finding 2: prose B must not be run as
+        `python -m <pkg> the note appears in the list`, which would error and
+        false-demote the task every run). So a task with prose acceptance but
+        no derived marker falls through to the observational floor, never
+        demoted. The derived spec's `command` is built through `run_smoke(args)`
+        so the python-specific `python -m <pkg>` prefix lives only here and the
+        model-supplied `args` is tokenized into argv, never a shell string
         (KD3 args-only). The rootless discovery singleton cannot resolve a
         package — the same `ValueError` `run_smoke` raises bubbles up so the
         run-loop records `pkg-unresolvable` rather than running a placeholder.
@@ -131,17 +147,31 @@ class PythonCliAdapter(Skill):
         derived = self._derived_spec(bullets)
         if derived is not None:
             return derived
-        if bullets:
-            return self._declared_spec(bullets)
         return self._floor_spec()
+
+    def acceptance_applicable(self, task: object) -> bool:
+        """Enforcement-applicability WITHOUT building the command (no run_smoke /
+        resolve_pkg). The single source of the C→A precedence rule for callers
+        that need only the gate, not the command — e.g. the run-loop's
+        `pkg-unresolvable` path, where argv assembly already raised (review
+        finding 6, unifies the dual source). A decodable derived marker carries
+        its own `applicable`; everything else (empty, prose, malformed marker)
+        is the observational floor — not applicable.
+        """
+        for line in tuple(getattr(task, "acceptance", ())):
+            data = decode_derived_acceptance(line)
+            if data is not None:
+                return bool(data.get("applicable", False))
+        return False
 
     def _derived_spec(self, bullets: tuple[str, ...]) -> AcceptanceSpec | None:
         """Build the C (narrow-pass-derived) spec from a written-back marker.
 
-        Returns None when no derived marker is present (so the caller falls
-        through to B/A). A derived not-applicable result yields a spec with
-        `applicable=False` — persisted so it is never re-derived, observed
-        not enforced.
+        Returns None when no DECODABLE derived marker is present (so the caller
+        falls through to A). A marker-prefixed-but-undecodable line is ignored
+        (treated as absent → floor), never fed as args (review finding 4). A
+        derived not-applicable result yields a spec with `applicable=False` —
+        persisted so it is never re-derived, observed not enforced.
         """
         for line in bullets:
             data = decode_derived_acceptance(line)
@@ -157,19 +187,6 @@ class PythonCliAdapter(Skill):
                 source="derived",
             )
         return None
-
-    def _declared_spec(self, bullets: tuple[str, ...]) -> AcceptanceSpec:
-        """Build the B (human-declared) spec: the declared bullets are the run
-        args, joined and routed through `run_smoke` so the verb stays code-
-        owned. Human-declared acceptance is trusted CLI intent → applicable.
-        """
-        args = " ".join(b.strip() for b in bullets if b.strip())
-        return AcceptanceSpec(
-            command=self._command(args),
-            expected="",
-            applicable=True,
-            source="declared",
-        )
 
     def _floor_spec(self) -> AcceptanceSpec:
         """Build the A (default-floor) spec: `python -m <pkg> --help`, exit-0

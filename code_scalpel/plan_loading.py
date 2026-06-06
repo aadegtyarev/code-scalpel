@@ -10,6 +10,7 @@ annotation pass, fork detection, and recipe learning — verbatim from the legac
 
 from __future__ import annotations
 
+import dataclasses
 from contextlib import suppress
 from typing import TYPE_CHECKING
 
@@ -150,11 +151,15 @@ async def _annotate_plan(
 ) -> tuple[str, str, tuple[Task, ...]]:
     """Run the one-shot skill-annotation LLM pass and persist its result.
 
-    Returns the (possibly updated) `(original_text, initial_hash, tasks)`. On
-    the no-change path the EXISTING typed `tasks` tuple is returned unchanged
-    rather than re-parsed from markdown — re-parsing would drop the typed
-    `Task` fields (goal/files/acceptance/skills/test_command) when the plan
-    came from TASKS.json (finding 7).
+    Returns the (possibly updated) `(original_text, initial_hash, tasks)`.
+    BOTH the change-path and the no-change path preserve the typed `Task`
+    fields (goal/files/acceptance/skills/test_command): the LLM-added skills
+    are merged BACK INTO the typed tasks tuple, never re-parsed from markdown.
+    Re-parsing the annotated markdown via `parse_tasks_md` would strip every
+    typed field to its empty default when the plan came from TASKS.json
+    (finding 1 / finding 7) — and the acceptance-derivation pre-pass that runs
+    next would then derive from a field-stripped task and persist the emptied
+    plan back to disk, corrupting the user's typed plan.
     """
     from code_scalpel.agent import _atomic_write, _hash_text, _parse_task_skills
 
@@ -164,7 +169,7 @@ async def _annotate_plan(
     new_text = await agent._annotate_plan_with_skills(original_text)
     if new_text and new_text != original_text:
         _atomic_write(tasks_path, new_text)
-        tasks = parse_tasks_md(new_text)
+        tasks = _merge_annotated_skills(tasks, new_text)
         # Surface what got picked, per task — one line each so the user
         # can scan it without reopening TASKS.md.
         lines = ["Plan annotated. Skills per task:"]
@@ -179,6 +184,40 @@ async def _annotate_plan(
         ok=False,
     )
     return original_text, _hash_text(original_text), tasks
+
+
+def _merge_annotated_skills(
+    typed_tasks: tuple[Task, ...],
+    annotated_text: str,
+) -> tuple[Task, ...]:
+    """Merge the LLM-added `Skills:` annotations back into the typed tasks.
+
+    The annotation pass rewrites markdown; re-parsing it would drop every
+    typed `Task` field (the plan came from TASKS.json). Instead, parse only
+    to read each task's annotated `body` + skills, then carry those onto the
+    matching typed task (by id) while preserving goal/files/acceptance/
+    test_command. `_parse_task_skills` reads from `body`, so the body is the
+    field that must carry the annotation; the typed `skills` field is updated
+    in lockstep so both views agree. A typed task the annotation pass dropped
+    (no matching heading) is kept unchanged.
+    """
+    from code_scalpel.agent import _parse_task_skills
+
+    annotated_by_id = {t.id: t for t in parse_tasks_md(annotated_text)}
+    merged: list[Task] = []
+    for task in typed_tasks:
+        ann = annotated_by_id.get(task.id)
+        if ann is None:
+            merged.append(task)
+            continue
+        merged.append(
+            dataclasses.replace(
+                task,
+                body=ann.body,
+                skills=tuple(_parse_task_skills(ann)),
+            )
+        )
+    return tuple(merged)
 
 
 def _emit_annotate_card(
@@ -215,7 +254,18 @@ async def _derive_acceptance(
     from code_scalpel.agent import _hash_text
 
     _emit_annotate_card(on_tool_executed, "Deriving acceptance specs (1 LLM pass/task)…", ok=True)
-    new_tasks, lines = await _derive_specs_for_tasks(agent, tasks)
+    new_tasks, lines, errors = await _derive_specs_for_tasks(agent, tasks)
+    # A WHOLESALE outage (every derivation attempt errored — e.g. the LLM is
+    # down) must not read as "no CLI here": surface it distinctly so silent
+    # floor-everywhere is visible (review finding 7).
+    if errors and new_tasks == tasks:
+        _emit_annotate_card(
+            on_tool_executed,
+            f"Acceptance derivation FAILED for all {errors} task(s) (LLM error?) — "
+            "tasks fall back to the observational floor; rerun to derive.",
+            ok=False,
+        )
+        return original_text, _hash_text(original_text), tasks
     if new_tasks == tasks:
         _emit_annotate_card(
             on_tool_executed, "Acceptance derivation added no enforceable specs.", ok=True
@@ -235,35 +285,66 @@ async def _derive_acceptance(
 async def _derive_specs_for_tasks(
     agent: StepAgent,
     tasks: tuple[Task, ...],
-) -> tuple[tuple[Task, ...], list[str]]:
-    """Run the derivation per task lacking acceptance; return (new_tasks, card_lines).
+) -> tuple[tuple[Task, ...], list[str], int]:
+    """Run the derivation per task lacking usable acceptance.
 
-    Only tasks with an empty `acceptance` are derived (a declared B spec is
-    left untouched). A None derivation (LLM/parse error) leaves the task
-    unchanged so it falls back to the observational floor.
+    Returns `(new_tasks, card_lines, error_count)`. A task is derived when it
+    carries no usable acceptance — empty OR only malformed derived markers
+    (review finding 4: a corrupt marker is treated as absent so it self-heals,
+    never wedges the task). A human-declared (B) prose bullet does NOT block
+    derivation: it is passed to the model as an intent HINT and the EXECUTED
+    spec is always the derived (C) or floor (A) one — human prose is never
+    run as argv (review finding 2). A None derivation (LLM/parse error) leaves
+    the task unchanged so it falls back to the observational floor and is
+    counted as an error for the outage signal (review finding 7).
     """
-    import dataclasses
-
-    from code_scalpel.skills.base import encode_derived_acceptance
+    from code_scalpel.skills.base import (
+        acceptance_needs_derivation,
+        decode_derived_acceptance,
+        encode_derived_acceptance,
+        is_marker_prefixed,
+    )
 
     out: list[Task] = []
     lines: list[str] = []
+    errors = 0
     for task in tasks:
-        if task.acceptance:
+        bullets = tuple(task.acceptance)
+        if not acceptance_needs_derivation(bullets):
             out.append(task)
             continue
-        data = await agent.derive_acceptance_args(task)
+        hint = _human_acceptance_hint(bullets, decode_derived_acceptance, is_marker_prefixed)
+        data = await agent.derive_acceptance_args(task, hint=hint)
         if data is None:
+            errors += 1
             out.append(task)
             continue
         applicable = bool(data.get("applicable", False))
         args = str(data.get("args", ""))
         expected = str(data.get("expected", ""))
         marker = encode_derived_acceptance(applicable=applicable, args=args, expected=expected)
+        # Replace the whole acceptance tuple with the single derived marker:
+        # any prior prose (now consumed as a hint) or malformed marker is
+        # superseded by the canonical derived spec.
         out.append(dataclasses.replace(task, acceptance=(marker,)))
         verdict = "enforced" if applicable else "observed (no runnable CLI)"
         lines.append(f"  {task.id}: {verdict}")
-    return tuple(out), lines
+    return tuple(out), lines, errors
+
+
+def _human_acceptance_hint(
+    bullets: tuple[str, ...],
+    decode: Callable[[str], dict[str, object] | None],
+    is_marker: Callable[[str], bool],
+) -> str:
+    """Join the task's human-declared prose bullets into a derivation hint.
+
+    Excludes derived markers (decodable or malformed) — only genuine
+    human-written prose is intent the model should translate. Empty string
+    when the task has no human prose.
+    """
+    prose = [b.strip() for b in bullets if b.strip() and decode(b) is None and not is_marker(b)]
+    return "; ".join(prose)
 
 
 def _persist_derived_tasks(tasks_path: Path, new_tasks: tuple[Task, ...]) -> tuple[str, bool]:

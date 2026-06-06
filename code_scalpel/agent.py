@@ -2136,7 +2136,7 @@ class StepAgent:
         )
         return await self.run_narrow_pass(pass_spec, truncated)
 
-    async def derive_acceptance_args(self, task: Task) -> dict[str, Any] | None:
+    async def derive_acceptance_args(self, task: Task, *, hint: str = "") -> dict[str, Any] | None:
         """Args-only acceptance derivation — one schema-enforced narrow pass.
 
         Returns `{applicable, args, expected}` parsed from the sampler-enforced
@@ -2145,6 +2145,11 @@ class StepAgent:
         crash, no fabricated enforcement). The model never emits a shell
         command; the adapter builds the argv from `args` (KD3). The prompt is
         adapter-agnostic — it judges task intent, not a specific language.
+
+        `hint` is the task's human-declared acceptance prose (B), if any: it is
+        passed to the model as intent to translate into args+expected, NOT run
+        verbatim. Human prose is never executed as argv (review finding 2) —
+        the executed spec is always the derived (C) or floor (A) one.
         """
         from code_scalpel.narrow_pass import NarrowPass
 
@@ -2153,6 +2158,8 @@ class StepAgent:
             f"Goal: {task.goal}\n"
             f"Files: {', '.join(task.files) if task.files else '(none listed)'}\n"
         )
+        if hint.strip():
+            user_message += f"Human acceptance note (intent hint, not a command): {hint.strip()}\n"
         pass_spec = NarrowPass(
             name="derive_acceptance",
             system_prompt=_prompts.DERIVE_ACCEPTANCE,
@@ -2162,7 +2169,7 @@ class StepAgent:
         try:
             result = await self.run_narrow_pass(pass_spec, user_message)
             data = json.loads(result.text)
-        except (Exception, json.JSONDecodeError):
+        except Exception:
             return None
         if not isinstance(data, dict) or "applicable" not in data:
             return None

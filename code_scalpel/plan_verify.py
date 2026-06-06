@@ -154,6 +154,11 @@ async def _verify_acceptance(
         # An adapter that flags provides_acceptance but yields no runnable
         # spec — a visible no-op, not an unqualified pass (finding 6).
         card_reason = reason
+        # Load-bearing invariant: a noop NEVER demotes. The demotion gate below
+        # is `applicable and not ok`, so every noop return site MUST yield
+        # applicable=False (review finding 8). Asserted here so a future
+        # noop-with-applicable=True can't silently start false-demoting.
+        assert not applicable, "a noop verdict must never be applicable (would false-demote)"
     _record_acceptance(agent, command=command, verdict=verdict, reason=reason, source=source)
     _emit_acceptance_card(on_tool_executed, command=command, ok=ok, reason=card_reason)
     # Enforce iff applicable: an applicable spec that did not pass demotes.
@@ -204,19 +209,38 @@ async def _run_smoke(
     policy / bwrap gating; timeout + sandbox from config — no magic number).
     Exit-0-or-fail: no exit-4/5 leniency. When `spec.expected` is non-empty, a
     `passed` verdict additionally requires it to appear in the output (the
-    floor's `expected == ""` ⇒ exit-0-only). `resolve_pkg` raising →
-    `failed`/`pkg-unresolvable` (applicability read from the task so an
-    applicable spec still demotes and a library still observes — failure-path
-    12); `spec is None` → a visible `noop` (finding 6).
+    floor's `expected == ""` ⇒ exit-0-only). A malformed-args spec
+    (`AcceptanceArgError`) → a `noop` fallback (the package is healthy; the
+    SPEC is broken — never demote it as `pkg-unresolvable`, review finding 5).
+    `resolve_pkg` raising (`ValueError`) → `failed`/`pkg-unresolvable`, with
+    `source` recovered from the task and applicability from the adapter's
+    `acceptance_applicable` (the single precedence source, review findings 3+6)
+    so an applicable spec still demotes and a library still observes
+    (failure-path 12); `spec is None` → a visible `noop` (finding 6).
     """
+    from code_scalpel.skills.base import AcceptanceArgError
+
     try:
         spec = adapter.acceptance_spec(task)  # type: ignore[attr-defined]
+    except AcceptanceArgError:
+        # The args string could not be tokenized — a broken SPEC, not a broken
+        # package. Recording a visible noop (no demotion) keeps a healthy
+        # project from being false-failed; the malformed marker self-heals on
+        # the next derivation run. Recover source from the task for feature 3.
+        return "noop", None, "malformed-args", False, _task_acceptance_source(task)
     except ValueError:
-        # `resolve_pkg` could not resolve a runnable package. Applicability is
-        # a property of the TASK's acceptance representation, not of pkg
-        # resolution — read it directly so an applicable spec still demotes
-        # (pkg-unresolvable) while a library observes (failure-path 12).
-        return "failed", None, "pkg-unresolvable", _task_acceptance_applicable(task), None
+        # `resolve_pkg` could not resolve a runnable package. Applicability and
+        # source are properties of the TASK's acceptance representation, not of
+        # pkg resolution — recover both so an applicable spec still demotes
+        # (pkg-unresolvable) while a library observes (failure-path 12), and the
+        # recorded verdict carries the real provenance feature 3 needs.
+        return (
+            "failed",
+            None,
+            "pkg-unresolvable",
+            _adapter_applicable(adapter, task),
+            _task_acceptance_source(task),
+        )
     if spec is None:
         # An adapter that flags provides_acceptance but returns no spec — a
         # self-contradictory state. Record a visible no-op rather than passing
@@ -250,22 +274,38 @@ async def _run_smoke(
     return "passed", command, None, spec.applicable, spec.source
 
 
-def _task_acceptance_applicable(task: Task) -> bool:
-    """Read enforcement-applicability from the task's acceptance representation.
+def _adapter_applicable(adapter: object, task: Task) -> bool:
+    """Enforcement-applicability via the adapter's single source.
 
     Used only on the `pkg-unresolvable` path where argv assembly raised before
-    a spec could be built. A derived marker carries its own `applicable`; a
-    human-declared (non-marker) acceptance is applicable (CLI intent); an empty
-    acceptance is the floor — not applicable. No language string here.
+    a spec could be built. Delegates to `adapter.acceptance_applicable(task)`
+    — the SAME C→A precedence the adapter's `acceptance_spec` encodes — so the
+    two never silently diverge (review finding 6). An adapter without the
+    method (a future / minimal adapter) is treated as not-applicable (observe).
+    No language string here.
+    """
+    fn = getattr(adapter, "acceptance_applicable", None)
+    if fn is None:
+        return False
+    try:
+        return bool(fn(task))
+    except Exception:
+        return False
+
+
+def _task_acceptance_source(task: Task) -> str | None:
+    """Recover the spec `source` from the task when argv assembly raised.
+
+    A decodable derived marker → "derived"; otherwise None (the floor / no
+    enforceable spec). Lets the recorded verdict carry the real provenance
+    feature 3's self-fix keys off, even on the failure path (review finding 3).
     """
     from code_scalpel.skills.base import decode_derived_acceptance
 
-    bullets = tuple(getattr(task, "acceptance", ()))
-    for line in bullets:
-        data = decode_derived_acceptance(line)
-        if data is not None:
-            return bool(data.get("applicable", False))
-    return bool(bullets)
+    for line in tuple(getattr(task, "acceptance", ())):
+        if decode_derived_acceptance(line) is not None:
+            return "derived"
+    return None
 
 
 def _failure_reason(result: ToolResult) -> str:

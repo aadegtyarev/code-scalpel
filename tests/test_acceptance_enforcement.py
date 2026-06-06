@@ -95,8 +95,16 @@ def _derived_task(*, applicable: bool, args: str = "add x", expected: str = "") 
     return Task(id="T001", title="ship cli", body="", done=False, acceptance=(marker,))
 
 
-# A task with a human-DECLARED acceptance (the B path) — non-marker bullets.
-_DECLARED_TASK = Task(id="T001", title="ship cli", body="", done=False, acceptance=("add x",))
+# A task with a human-DECLARED acceptance (the B path) — free PROSE bullets,
+# never executed as argv (review finding 2). With no derived marker it falls
+# through to the observational floor and is NEVER demoted.
+_DECLARED_TASK = Task(
+    id="T001",
+    title="ship cli",
+    body="",
+    done=False,
+    acceptance=("the note appears in the list",),
+)
 
 
 # ── AcceptanceSpec dataclass + encoding helpers ──────────────────────────────
@@ -146,8 +154,10 @@ def test_derived_marker_roundtrips() -> None:
 
 
 def test_acceptance_spec_precedence(tmp_path: Path) -> None:
-    """Declared (B) wins over derived (C) wins over floor (A); `source` reflects
-    which. A task carrying BOTH a derived marker and a human bullet → derived."""
+    """Precedence is derived (C) → floor (A); human PROSE (B) is NOT a directly
+    enforced spec — it falls through to the floor (review finding 2). A task
+    carrying BOTH a derived marker and a prose bullet → derived; a task with
+    ONLY prose → floor (observational, not applicable)."""
     from code_scalpel.skills.python_cli_adapter import PythonCliAdapter
 
     project = _python_cli_project(tmp_path)
@@ -157,9 +167,11 @@ def test_acceptance_spec_precedence(tmp_path: Path) -> None:
     floor = adapter.acceptance_spec(Task(id="T", title="t", body="", done=False))
     assert floor is not None and floor.source == "floor" and floor.applicable is False
 
-    # B: human-declared bullets → declared, applicable.
+    # B: human PROSE bullets are NOT a directly-enforced spec → fall to floor.
     declared = adapter.acceptance_spec(_DECLARED_TASK)
-    assert declared is not None and declared.source == "declared" and declared.applicable is True
+    assert declared is not None and declared.source == "floor" and declared.applicable is False
+    # Crucially the floor runs `--help`, never the prose joined as argv.
+    assert declared.command == "python -m notes_cli --help"
 
     # C: a derived marker present (even alongside a prose bullet) → derived.
     marker = encode_derived_acceptance(applicable=True, args="list", expected="x")
@@ -173,31 +185,37 @@ def test_acceptance_spec_precedence(tmp_path: Path) -> None:
 
 
 @pytest.mark.asyncio
-async def test_enforce_demotes_when_declared_acceptance_fails(tmp_path: Path) -> None:
-    """A task with a declared (applicable B) acceptance whose run-smoke fails →
-    demoted `done → failed` (the gate has teeth)."""
+async def test_prose_declared_acceptance_is_never_false_demoted(tmp_path: Path) -> None:
+    """Review finding 2 (binding invariant): a task with PROSE human acceptance
+    and NO derived marker is NOT executed as argv — it falls through to the
+    observational floor and STAYS `done` even when the floor run-smoke fails.
+    Prose ("the note appears in the list") must never run as
+    `python -m <pkg> the note appears in the list` and false-demote the task."""
     project = _python_cli_project(tmp_path)
     shell = MockShellRunner([ShellResult("Traceback", 1)])
     state = AgentState()
     out = await verify_task(
         _agent(project, shell, state=state), _DECLARED_TASK, _done(_DECLARED_TASK), None
     )
-    assert out.status == "failed"
-    assert state.last_acceptance_verdict == "failed"
-    assert state.last_acceptance_source == "declared"
+    assert out.status == "done", "prose acceptance must never false-demote"
+    # The floor ran `--help`, NOT the prose joined as argv.
+    assert shell.shell_calls == ["python -m notes_cli --help"]
+    assert state.last_acceptance_source == "floor"
 
 
 @pytest.mark.asyncio
-async def test_enforce_keeps_done_when_declared_acceptance_passes(tmp_path: Path) -> None:
-    """A declared acceptance that exits 0 keeps the task `done`."""
+async def test_prose_declared_acceptance_floor_passes_stays_done(tmp_path: Path) -> None:
+    """The floor (`--help`) exits 0 for a prose-acceptance task → stays `done`,
+    recorded as the floor (observational), never as a demoting declared spec."""
     project = _python_cli_project(tmp_path)
-    shell = MockShellRunner([ShellResult("ok", 0)])
+    shell = MockShellRunner([ShellResult("usage: notes_cli", 0)])
     state = AgentState()
     out = await verify_task(
         _agent(project, shell, state=state), _DECLARED_TASK, _done(_DECLARED_TASK), None
     )
     assert out.status == "done"
     assert state.last_acceptance_verdict == "passed"
+    assert state.last_acceptance_source == "floor"
 
 
 @pytest.mark.asyncio
@@ -620,3 +638,183 @@ async def test_state_persists_source(tmp_path: Path) -> None:
     (project / ".code-scalpel").mkdir(exist_ok=True)
     (project / ".code-scalpel" / "STATE.json").write_text(legacy)
     assert AgentState.load(project).last_acceptance_source is None
+
+
+# ── Review-fix coverage: composition preserves typed fields, marker self-heal ─
+
+
+@pytest.mark.asyncio
+async def test_pre_passes_preserve_typed_fields(tmp_path: Path) -> None:
+    """Review finding 1 (BLOCKING): a fresh JSON plan with goal+files+
+    test_command but NO skills and NO acceptance must keep ALL typed fields
+    intact after BOTH pre-passes run (skill annotation + acceptance derivation).
+    The annotation change-path must merge skills into the TYPED tasks (not
+    re-parse markdown, which strips typed fields), and derivation must run on
+    the full typed task and never persist a field-stripped plan."""
+    from code_scalpel.plan import parse_tasks_json
+    from code_scalpel.plan_loading import load_plan
+
+    project = _python_cli_project(tmp_path)
+    _write_plan_json(
+        project,
+        [
+            _plan_task(
+                goal="ship the notes cli",
+                files=["src/notes_cli/__main__.py"],
+                test_command="pytest -q",
+            )
+        ],
+    )
+    # Annotation reply adds Skills; derivation reply adds the marker.
+    annotated = "## T001: ship cli\n\nGoal: ship the notes cli\nSkills: python\n"
+    llm = MockLLMAdapter(
+        [annotated, json.dumps({"applicable": True, "args": "add x", "expected": "x"})]
+    )
+    cfg = _config(derive=True)
+    cfg.agent.auto_annotate_plan = True
+    agent = StepAgent(llm=llm, cwd=project, config=cfg, shell_runner=MockShellRunner([]))
+    loaded = await load_plan(agent, None, None)
+    assert loaded is not None
+    tasks, _path, _hash = loaded
+
+    # In-loop typed task keeps every typed field AND carries the derived marker.
+    t = tasks[0]
+    assert t.goal == "ship the notes cli"
+    assert t.files == ("src/notes_cli/__main__.py",)
+    assert t.test_command == "pytest -q"
+    assert "python" in t.skills
+    assert any(decode_derived_acceptance(b) for b in t.acceptance)
+
+    # The on-disk TASKS.json was NOT field-stripped — goal/files/test_command
+    # survive the write-back, and the derived marker is persisted.
+    on_disk = parse_tasks_json((project / ".code-scalpel" / "TASKS.json").read_text())[0]
+    assert on_disk.goal == "ship the notes cli"
+    assert on_disk.files == ("src/notes_cli/__main__.py",)
+    assert on_disk.test_command == "pytest -q"
+    assert any(decode_derived_acceptance(b) for b in on_disk.acceptance)
+
+
+@pytest.mark.asyncio
+async def test_prose_acceptance_feeds_derivation_as_hint(tmp_path: Path) -> None:
+    """Review finding 2: a task with PROSE human acceptance and an acceptance
+    adapter gets DERIVED (the prose is passed to the model as a hint, not run
+    as argv). The derived marker replaces the prose; the executed spec is the
+    derived (C) one."""
+    from code_scalpel.plan_loading import load_plan
+
+    project = _python_cli_project(tmp_path)
+    _write_plan_json(project, [_plan_task(acceptance=["the note appears in the list"])])
+    llm = MockLLMAdapter([json.dumps({"applicable": True, "args": "list", "expected": "note"})])
+    agent = _agent(project, MockShellRunner([]), llm=llm, derive=True)
+    loaded = await load_plan(agent, None, None)
+    assert loaded is not None
+    tasks, _path, _hash = loaded
+    # Prose triggered derivation (one LLM call) and was replaced by the marker.
+    assert llm._index == 1
+    data = next(decode_derived_acceptance(b) for b in tasks[0].acceptance)
+    assert data == {"applicable": True, "args": "list", "expected": "note"}
+    assert "the note appears in the list" not in tasks[0].acceptance
+
+
+@pytest.mark.asyncio
+async def test_undecodable_marker_is_rederived(tmp_path: Path) -> None:
+    """Review finding 4: a `derived-acceptance:`-prefixed line with malformed
+    JSON is treated as ABSENT — the derivation gate re-derives it (rather than
+    skipping because acceptance is non-empty), so a corrupt write-back self-
+    heals instead of wedging the task."""
+    from code_scalpel.plan_loading import load_plan
+
+    project = _python_cli_project(tmp_path)
+    _write_plan_json(project, [_plan_task(acceptance=["derived-acceptance:{not json"])])
+    llm = MockLLMAdapter([json.dumps({"applicable": True, "args": "add x", "expected": "x"})])
+    agent = _agent(project, MockShellRunner([]), llm=llm, derive=True)
+    loaded = await load_plan(agent, None, None)
+    assert loaded is not None
+    tasks, _path, _hash = loaded
+    assert llm._index == 1, "an undecodable marker must be re-derived (treated as absent)"
+    assert any(decode_derived_acceptance(b) for b in tasks[0].acceptance)
+
+
+@pytest.mark.asyncio
+async def test_undecodable_marker_not_fed_as_args(tmp_path: Path) -> None:
+    """Review finding 4 (adapter side): an undecodable marker is NOT fed as a
+    derived spec — `acceptance_spec` falls through to the observational floor
+    (never enforces garbage), and the verify path does NOT demote."""
+    from code_scalpel.skills.python_cli_adapter import PythonCliAdapter
+
+    project = _python_cli_project(tmp_path)
+    task = Task(
+        id="T001",
+        title="t",
+        body="",
+        done=False,
+        acceptance=("derived-acceptance:{broken",),
+    )
+    spec = PythonCliAdapter(root=project).acceptance_spec(task)
+    assert spec is not None and spec.source == "floor" and spec.applicable is False
+    assert spec.command == "python -m notes_cli --help"
+
+    # And through the verify path: a failing floor must not demote.
+    shell = MockShellRunner([ShellResult("Traceback", 1)])
+    out = await verify_task(_agent(project, shell), task, _done(task), None)
+    assert out.status == "done"
+
+
+@pytest.mark.asyncio
+async def test_malformed_args_falls_back_not_pkg_unresolvable(tmp_path: Path) -> None:
+    """Review finding 5: a derived spec whose `args` have unbalanced quotes
+    raises AcceptanceArgError inside run_smoke — a SPEC error, NOT a package
+    error. The verify path records a `noop`/`malformed-args` fallback and does
+    NOT demote the (healthy) project as `pkg-unresolvable`."""
+    project = _python_cli_project(tmp_path)
+    # Unbalanced quote in the derived args → shlex.split raises.
+    task = _derived_task(applicable=True, args="add 'unterminated")
+    shell = MockShellRunner([])
+    state = AgentState()
+    out = await verify_task(_agent(project, shell, state=state), task, _done(task), None)
+    assert out.status == "done", "a malformed-args spec must not demote a healthy package"
+    assert state.last_acceptance_verdict == "noop"
+    assert state.last_acceptance_reason == "malformed-args"
+    assert state.last_acceptance_reason != "pkg-unresolvable"
+    assert shell.shell_calls == []  # never dispatched
+
+
+@pytest.mark.asyncio
+async def test_pkg_unresolvable_recovers_source_for_derived(tmp_path: Path) -> None:
+    """Review finding 3: when resolve_pkg raises for a DERIVED task, the recorded
+    verdict carries the real `source` (derived) — not None — so feature 3's
+    self-fix has the provenance it keys off, and the applicable spec still
+    demotes (`pkg-unresolvable`)."""
+    proj = tmp_path / "app"
+    proj.mkdir()
+    (proj / "pyproject.toml").write_text("[project]\nname='x'\n")  # no resolvable pkg
+    task = _derived_task(applicable=True, args="run")
+    state = AgentState()
+    out = await verify_task(_agent(proj, MockShellRunner([]), state=state), task, _done(task), None)
+    assert out.status == "failed"
+    assert state.last_acceptance_reason == "pkg-unresolvable"
+    assert state.last_acceptance_source == "derived"
+
+
+@pytest.mark.asyncio
+async def test_wholesale_derivation_outage_surfaces(tmp_path: Path) -> None:
+    """Review finding 7: when EVERY derivation errors (LLM down), a distinct
+    not-ok card is surfaced so the silent floor-everywhere is visible — it must
+    NOT read as a quiet 'no enforceable specs' success."""
+    from code_scalpel.plan_loading import load_plan
+    from code_scalpel.tools.agent_tools import ToolCall, ToolResult
+
+    project = _python_cli_project(tmp_path)
+    _write_plan_json(project, [_plan_task()])
+    llm = MockLLMAdapter(["not json at all"])  # derivation errors
+    agent = _agent(project, MockShellRunner([]), llm=llm, derive=True)
+
+    cards: list[tuple[str, bool]] = []
+
+    def _on(call: ToolCall, res: ToolResult) -> None:
+        cards.append((res.output, res.ok))
+
+    loaded = await load_plan(agent, _on, None)
+    assert loaded is not None
+    outage = [c for c in cards if "FAILED for all" in c[0]]
+    assert outage and outage[0][1] is False, "a wholesale outage must surface a not-ok card"

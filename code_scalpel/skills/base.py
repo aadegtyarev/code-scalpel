@@ -36,6 +36,20 @@ from pathlib import Path
 from typing import Literal
 
 
+class AcceptanceArgError(ValueError):
+    """A derived/declared acceptance `args` string could not be tokenized.
+
+    Raised by `run_smoke` when `shlex.split(args)` fails (unbalanced quotes
+    in a model-supplied args string). Distinct from the `ValueError`
+    `resolve_pkg` raises for an unresolvable package: a malformed-args error
+    is a property of the SPEC (fall back to floor/observational), not of the
+    package (which is healthy) — so the run-loop must not mislabel it
+    `pkg-unresolvable` and demote a sound project (review finding 5). Subclasses
+    ValueError so existing `except ValueError` sites stay backward-compatible,
+    but the run-loop catches this FIRST to route it differently.
+    """
+
+
 @dataclass(frozen=True)
 class AcceptanceSpec:
     """The "does the deliverable actually work?" check the run-loop runs.
@@ -97,6 +111,31 @@ def decode_derived_acceptance(line: str) -> dict[str, object] | None:
     if not isinstance(data, dict) or "applicable" not in data:
         return None
     return data
+
+
+def is_marker_prefixed(line: str) -> bool:
+    """True for any line carrying the derived-marker prefix, decodable or not.
+
+    Lets a caller distinguish a *malformed* derived marker (prefix present,
+    JSON unparseable → `decode_derived_acceptance` returns None) from a real
+    human-declared prose bullet (no prefix). A malformed marker must be
+    treated as ABSENT (re-derive) — never as a declared spec or enforceable
+    args (review finding 4).
+    """
+    return line.startswith(_DERIVED_MARKER_PREFIX)
+
+
+def acceptance_needs_derivation(bullets: tuple[str, ...]) -> bool:
+    """True when the task should run the derivation pre-pass.
+
+    Derivation is SKIPPED only when a DECODABLE derived marker (C) is already
+    present — that run is done and deterministic. Everything else needs
+    derivation: an empty tuple; a human-declared PROSE bullet (B), which is
+    fed to the model as an intent HINT, never run as argv (review finding 2);
+    and a MALFORMED derived marker, treated as absent so a corrupt write-back
+    self-heals instead of wedging the task (review finding 4).
+    """
+    return all(decode_derived_acceptance(line) is None for line in bullets)
 
 
 @dataclass(frozen=True)
