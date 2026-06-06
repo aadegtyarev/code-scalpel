@@ -366,6 +366,111 @@ async def test_library_still_never_demoted_at_last_task(tmp_path: Path) -> None:
     assert state.last_acceptance_source == "derived"
 
 
+# ── Loop-level position guard (regression: should_run_now is computed ONCE) ──
+
+
+class _SplitShellRunner(MockShellRunner):
+    """Routes test runs (`runner.run`, argv) to success and acceptance
+    run-smoke (`runner.run_shell`, the `python -m <pkg> …` string) to a
+    caller-fixed result.
+
+    The two acceptance surfaces use different ShellRunner methods (run_tests →
+    `run`; the shell_exec run-smoke → `run_shell`), so this split lets a single
+    loop drive PASSING tests (every task reaches `done`) while the CLI
+    run-smoke is BROKEN — the exact condition under which only the last task
+    may legitimately demote.
+    """
+
+    def __init__(self, *, run_smoke: ShellResult) -> None:
+        super().__init__()
+        self._run_smoke = run_smoke
+
+    async def run(self, cmd: list[str], cwd: str | None = None, timeout: int = 30) -> ShellResult:
+        self.calls.append(cmd)
+        return ShellResult("1 passed", 0)
+
+    async def run_shell(
+        self, command: str, cwd: str | None = None, timeout: int = 30
+    ) -> ShellResult:
+        self.shell_calls.append(command)
+        return self._run_smoke
+
+
+class _PerTaskPatchLLM(MockLLMAdapter):
+    """Returns the SEARCH/REPLACE patch keyed by which target file the task
+    prompt names — order-independent, so the run-loop's per-task LLM
+    bookkeeping cannot shift a positional response queue out from under us.
+    Each task patches its own file once; tests then pass and the task lands
+    `done`, leaving the acceptance gate as the only thing that can demote it.
+    """
+
+    def __init__(self, patches: dict[str, str]) -> None:
+        super().__init__(["(no matching patch)"])
+        self._patches = patches
+
+    def _next(self) -> tuple[str, list[object]]:  # type: ignore[override]
+        prompt = str(self.calls[-1][-1].get("content", "")) if self.calls else ""
+        for fname, patch in self._patches.items():
+            if fname in prompt:
+                return patch, []
+        return "(no matching patch)", []
+
+
+@pytest.mark.asyncio
+async def test_run_loop_demotes_only_the_final_applicable_task(tmp_path: Path) -> None:
+    """Loop-level regression guard for the `should_run_now` POSITION logic.
+
+    Drives the production `PlanRunner.run` loop over a 3-task CLI plan where
+    every task is derived-applicable and the CLI run-smoke is BROKEN. Tests
+    pass, so each task reaches `done`; the acceptance gate then re-evaluates.
+    Only the LAST task is the deliverable-runnable point, so ONLY it may
+    demote (`done → failed`); the earlier applicable tasks must stay `done`
+    (observed, not enforced).
+
+    This catches the refactor where `_last_not_done_index` is recomputed
+    INSIDE the loop (after a task flips done): that would make `should_run_now`
+    True for every task in turn and false-demote T001/T002. The index must be
+    a single pre-loop snapshot — this test is the lock on that.
+    """
+    project = _python_cli_project(tmp_path)
+    for n in (1, 2, 3):
+        (project / f"f{n}.py").write_text("VALUE = 0\n")
+
+    marker = encode_derived_acceptance(applicable=True, args="add x", expected="")
+    _write_plan_json(
+        project,
+        [
+            _plan_task(
+                tid=f"T00{n}", title=f"edit f{n}.py", files=[f"f{n}.py"], acceptance=[marker]
+            )
+            for n in (1, 2, 3)
+        ],
+    )
+
+    def _patch(n: int) -> str:
+        return (
+            f"f{n}.py\n```python\n"
+            "<<<<<<< SEARCH\nVALUE = 0\n=======\n"
+            f"VALUE = {n}\n>>>>>>> REPLACE\n```\n"
+        )
+
+    llm = _PerTaskPatchLLM({f"f{n}.py": _patch(n) for n in (1, 2, 3)})
+    shell = _SplitShellRunner(run_smoke=ShellResult("Traceback: not runnable", 1))
+    cfg = _config(derive=False)
+    cfg.agent.iterative_patch_loop = True
+    cfg.agent.max_debug_attempts = 0
+    agent = StepAgent(llm=llm, cwd=project, config=cfg, shell_runner=shell)
+
+    result = await agent.run_plan()
+
+    statuses = [(o.task.id, o.status) for o in result.outcomes]
+    assert statuses == [("T001", "done"), ("T002", "done"), ("T003", "failed")], statuses
+    # The broken run-smoke is observed at every applicable task but DEMOTES at
+    # exactly one — the final position. Earlier applicable tasks stay `done`.
+    assert shell.shell_calls == ["python -m notes_cli add x"] * 3
+    assert sum(1 for _id, s in statuses if s == "failed") == 1
+
+
 # ── Generality: enforce through a non-python adapter ─────────────────────────
 
 

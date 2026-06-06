@@ -21,6 +21,14 @@ Answer three questions, nothing else:
    config with nothing a user runs → `applicable: false`. Decide from
    what the task is FOR, never from what files happen to be present.
 
+   When in genuine doubt — the deliverable could plausibly be a library /
+   importable utility, a long-running service, or the wording is ambiguous
+   about whether a user runs it from a terminal — prefer `applicable: false`
+   (observe, don't enforce). Only mark `applicable: true` when the task/plan
+   CLEARLY intends a user-runnable command-line program. This hedge is for
+   real ambiguity, NOT for the greenfield "not built yet" case: a from-scratch
+   CLI build is still `applicable: true` even before a line exists.
+
 2. **What subcommand arguments exercise the deliverable?** Return ONLY
    the arguments — the words you would type AFTER the program's own
    invocation. NOT the program name, NOT a full shell command, NOT a
