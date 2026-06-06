@@ -123,6 +123,75 @@ narratives about "watershed" versions were repeatedly disproven.
 wired as an automated CI gate (the lint/type/test CI is — see Release
 flow). The automated outcome gate is v0.13 backlog `(inferred)`.
 
+### ProjectAdapter — `Skill` as a superset run/scaffold/acceptance contract (v0.14)
+
+**Chosen:** the existing per-stack `Skill` ABC (test/lint/format) gains
+four **non-abstract** capability methods — `build_install()`,
+`run_smoke(args)`, `scaffold(spec)`, `acceptance_spec(task)` — that turn a
+skill into a full *project adapter*: not just how to test, but how to
+build/run/scaffold the actual deliverable. A `ScaffoldSpec` dataclass
+(`root`, `pkg`) carries the scaffold inputs. The first concrete adapter is
+`PythonCliAdapter`, which delegates `detect`/`test_cmd`/`lint_cmd` to
+`PythonSkill` (the test path never drifts), adds `pip install -e .`,
+`python -m <pkg> <args>` run-smoke, a code-owned src-layout scaffold, and a
+built-in default-floor acceptance spec.
+**Why:** the proven `notes_cli` failure is that the agent never runs the
+deliverable as a user would and the `__main__.py` entrypoint was a
+model-emitted coin-flip (`.ai-pm/arch/backend-redesign_arch.md`, step 1 of
+the backend redesign). Moving run/scaffold/acceptance into a deterministic,
+code-owned adapter is what removes that whim; extending `Skill` (rather than
+a parallel hierarchy) reuses detect + registry + priority and keeps one
+mental model (Fork 1-A in the design note).
+**Non-abstract invariant:** all four ship with safe defaults
+(`build_install`/`run_smoke`/`scaffold` → `[]`, `acceptance_spec` → `None`),
+so **no existing skill becomes abstract** — Go/JS/Docker/Postgres/SQLite/
+Markdown all still instantiate unchanged.
+**`<pkg>` deterministic resolution (`python_pkg.resolve_pkg`):** the
+package run as `python -m <pkg>` is resolved from the project, never
+guessed, in fixed precedence — (1) the hatchling wheel target declared in
+`pyproject.toml`, (2) a single `-m`-runnable package under `src/` (has
+`__main__.py`), (3) a single package dir under `src/`; ambiguity or absence
+raises rather than guess.
+**Scaffold honors the stack invariants (`docs/stack-notes.md`):** the
+emitted `pyproject.toml` declares
+`[tool.hatch.build.targets.wheel] packages = ["src/<pkg>"]` (hatchling
+src-layout), and the package gets a real `__main__.py` (a
+`[project.scripts]` console entry alone does **not** make `python -m <pkg>`
+work). The scaffold never clobbers existing files (fails loud) and rejects
+invalid package names before writing anything.
+**Status — contract-only / inert.** This feature only makes the contract
+*exist* and proves it with unit tests; **nothing in the run loop consumes
+these methods yet** — no change to `run_plan`, `code_with_retry`, or any
+verification step. The acceptance gate that consumes them is the next
+feature (`feat/acceptance-gate-run-plan`).
+Source: `.ai-pm/arch/backend-redesign_arch.md` (Fork 1-A, migration step 1);
+`docs/features/project-adapter-abstraction_plan.md`; shipped in
+`code_scalpel/skills/base.py` + `python_cli_adapter.py` + `python_pkg.py`.
+
+### Registry `hidden` trait — discoverable without advertising (v0.14)
+
+**Chosen:** a `Skill` gains a `hidden: bool = False` class trait. A hidden
+skill stays **registry-discoverable** (`get_skill(name)`, `default`,
+`default_runnable` still see it) yet is **excluded from every model-facing
+listing** — the catalog `all()`, the active-skills listing `active()`, the
+detected-stack hint, and the `/skills` panel that build on them.
+`PythonCliAdapter` sets `hidden = True`: it shares `PythonSkill`'s
+`detect()`, so on a Python project it would otherwise show a duplicate
+catalog row backed by no `prompts/skills/python-cli.md` guidance.
+**Why:** the adapter must be reachable for the future run-loop that
+constructs it deliberately, without polluting the model's skill catalog or
+hijacking the test path (it is also registered with
+`provides_test_runner = False`, so `default_runnable` keeps selecting
+`PythonSkill`). This is the **listing-vs-selection split** in the registry:
+`all()`/`active()` (listing) filter on `hidden`; `default`/`default_runnable`/
+`get` (selection/detection) keep their own unfiltered scan, so detection
+behavior is unaffected. Registration is explicit in `skills/__init__.py`
+(the module is `python_cli_adapter.py`, not `*_skill.py`, so the
+auto-scanner skips it).
+Source: `docs/features/project-adapter-abstraction_plan.md` (scenario 7 +
+interaction scenarios); shipped in `code_scalpel/skills/base.py`,
+`registry.py`, `__init__.py`.
+
 ## Architectural constraints
 
 - **Stay inside the project root.** Subprocess cwd is pinned to the
@@ -193,7 +262,7 @@ flow). The automated outcome gate is v0.13 backlog `(inferred)`.
 | `code_scalpel/index/` | tree-sitter symbol index: `parser.py`, `walkers.py`, `signatures.py`, `shape.py`, `builder.py`, `model.py`, `retrieve.py` (BM25), `__init__.py` |
 | `code_scalpel/tools/` | agent tool surface: `agent_tools.py` (dispatch + JSON schemas), `files.py`, `git.py`, `search.py`, `shell.py`, `sandbox.py` (bwrap), `web_search.py` |
 | `code_scalpel/checks/` | machine checks: `lint_pass.py`, `import_graph.py`, `empty_tests.py`, `syntax_check.py` |
-| `code_scalpel/skills/` | per-stack test/lint/format contracts: `base.py` ABC, `registry.py`, `python_skill.py`, `js_skill.py`, `go_skill.py`, `docker_skill.py`, `postgres_skill.py`, `sqlite_skill.py` |
+| `code_scalpel/skills/` | per-stack test/lint/format contracts + the ProjectAdapter superset: `base.py` (`Skill` ABC + `ScaffoldSpec`), `registry.py`, `python_skill.py`, `js_skill.py`, `go_skill.py`, `docker_skill.py`, `postgres_skill.py`, `sqlite_skill.py`, `python_cli_adapter.py` (first `ProjectAdapter`, `hidden`), `python_pkg.py` (`resolve_pkg` — deterministic `python -m <pkg>` resolution) |
 | `code_scalpel/patch/` | `edit_block.py` — SEARCH/REPLACE parse + apply (fallback patch engine) |
 | `code_scalpel/mermaid/` | mermaid parse + ASCII layout/render (`parser.py`, `layout.py`, `render.py`, `classes.py`, `sequence.py`) |
 | `code_scalpel/prompts/` | all model-facing prompts as `.md` (system, mode_*, narrow passes, `retry/*`, `skills/*`); `__init__.py` is the single loader |
