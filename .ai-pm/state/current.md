@@ -12,7 +12,12 @@ Feature 4 of the backend redesign: `feat/acceptance-spec-in-tasks` — give the 
 
 ## Status
 
-coding complete — ready for review loop. Pipeline green (1271 passed / 40 skipped, ruff + format clean, mypy clean) EXCEPT one pre-existing, unrelated mypy error in code_scalpel/tools/files.py:8 (unused `# type: ignore`) that already exists on the base commit c518078 in untouched code — surfaced, NOT papered over. Cause: local pathspec 0.12.1 ships py.typed, so the bare ignore is now unused; an environment discrepancy, not a feature regression.
+⚠️ PASS-2 FIX PASS INTERRUPTED (session limit) — DO NOT trust/commit blindly.
+- Committed (verified-green earlier): 27ca34c, 4a0dbb0, c986f36, 1aa91ce — the feature-4 impl + tests (1271 passed at that point).
+- UNCOMMITTED working-tree changes (7 files: agent.py, plan_loading.py, plan_verify.py, prompts/derive_acceptance.md, skills/base.py, skills/python_cli_adapter.py, tests/test_acceptance_enforcement.py) = the in-progress code-review fix pass, **NOT verified, NOT committed**. The coder run was cut off before reporting + before pipeline confirmation; a safety-classifier-unavailable note was attached — VERIFY before trusting.
+- RESUME: (1) review the uncommitted diff against the 8 findings in `.ai-pm/reviews/acceptance-spec-in-tasks_review.md`; (2) run full pipeline (pytest / ruff check / ruff format --check / mypy cacheless); (3) if sound → commit; if not → finish/redo the fixes. Then continue the loop below.
+
+(prior status: coding complete — ready for review loop.) Pipeline green (1271 passed / 40 skipped, ruff + format clean, mypy clean) EXCEPT one pre-existing, unrelated mypy error in code_scalpel/tools/files.py:8 (unused `# type: ignore`) that already exists on the base commit c518078 in untouched code — surfaced, NOT papered over. Cause: local pathspec 0.12.1 ships py.typed, so the bare ignore is now unused; an environment discrepancy, not a feature regression.
 
 ## Done
 
