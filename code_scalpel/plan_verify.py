@@ -3,23 +3,29 @@
 Extracted from the run_plan body alongside the strangle so PlanRunner stays
 within the AI-specific file-length minimum, and so the verification block has a
 cohesive home. A task that `code_with_retry` reported as `done` is demoted to
-`failed` unless every machine check passes:
+`failed` unless the enforcing machine checks pass:
 
-  1. `Files:` — every declared path exists on disk.
-  2. `Test command:` — exits 0 (with the legacy exit-4/5 leniency).
-  3. Git HEAD advanced — the model (or the auto-commit hook) committed.
-  4. Acceptance run-smoke — when an acceptance adapter resolves for the
-     project root, run the deliverable as a user would (`python -m <pkg>
-     --help`) and demote unless it exits 0 (exit-0-or-fail; NO exit-4/5
-     leniency — a finished deliverable has no test-ordering excuse).
+  1. `Files:` — every declared path exists on disk.            (demoting)
+  2. `Test command:` — exits 0 (with the legacy exit-4/5 leniency).  (demoting)
+  3. Git HEAD advanced — the model (or the auto-commit hook) committed. (demoting)
+  4. Acceptance run-smoke — OBSERVATIONAL ONLY. When an acceptance adapter
+     resolves for the project root, run the deliverable as a user would
+     (`python -m <pkg> --help`), record the verdict (passed/failed/noop)
+     and surface a card — but NEVER demote. (plumbing only)
 
-These guard against the model claiming `done` after only partly executing a
-task. Demotion is done→failed only; no new status is introduced. The
-acceptance run-smoke command/verdict/reason are persisted to AgentState.
+Checks 1-3 guard against the model claiming `done` after only partly executing
+a task; they demote done→failed (no new status). Check 4 is plumbing-only in
+this feature (PM "plumbing only" decision, `.ai-pm/reviews/
+acceptance-gate-run-plan_review.md` `## Resolutions` #1): `PythonCliAdapter`
+detects ANY python project, so a demoting gate would wrongly fail `/go` runs
+over python LIBRARIES. Hard enforcement (demote behind a CLI-intent signal) is
+deferred to feature 4 (`feat/acceptance-spec-in-tasks`). The acceptance
+run-smoke command/verdict/reason are persisted to AgentState for feature 3/4.
 """
 
 from __future__ import annotations
 
+import dataclasses
 import json
 import shlex
 from contextlib import suppress
@@ -37,6 +43,16 @@ if TYPE_CHECKING:
     OnToolExecuted = Callable[[ToolCall, ToolResult], None] | None
 
 
+def _demote(outcome: TaskOutcome) -> TaskOutcome:
+    """Demote a `done` outcome to `failed`, preserving every other field.
+
+    `dataclasses.replace` keeps task/step_result (and any field a future
+    TaskOutcome gains) intact — the three enforcing checks share this so a
+    new field can't be silently dropped on a demotion path.
+    """
+    return dataclasses.replace(outcome, status="failed")
+
+
 async def verify_task(
     agent: StepAgent,
     task: Task,
@@ -44,22 +60,26 @@ async def verify_task(
     head_before: str | None,
     on_tool_executed: OnToolExecuted = None,
 ) -> TaskOutcome:
-    """Run checks 1-4 on a `done` outcome; return it (possibly demoted)."""
-    from code_scalpel.agent import TaskOutcome, _parse_task_test_command, _verify_task_files
+    """Run checks 1-4 on a `done` outcome.
+
+    Checks 1-3 may demote done→failed; check 4 (acceptance) is observational
+    and returns the outcome unchanged (plumbing only — see module docstring).
+    """
+    from code_scalpel.agent import _parse_task_test_command, _verify_task_files
 
     if outcome.status != "done":
         return outcome
 
     files_ok, _missing = _verify_task_files(task, agent._cwd)
     if not files_ok:
-        return TaskOutcome(task=task, step_result=outcome.step_result, status="failed")
+        return _demote(outcome)
 
     cmd = _parse_task_test_command(task)
     # Skip plain `pytest` invocations — `_run_tests` already covered that.
     if cmd and cmd.strip() != "pytest":
         verify_ok = await agent._verify_task_test_command(cmd)
         if not verify_ok:
-            return TaskOutcome(task=task, step_result=outcome.step_result, status="failed")
+            return _demote(outcome)
 
     outcome = await _verify_head_advanced(agent, task, outcome, head_before)
     return await _verify_acceptance(agent, task, outcome, on_tool_executed)
@@ -103,20 +123,21 @@ async def _verify_acceptance(
     outcome: TaskOutcome,
     on_tool_executed: OnToolExecuted = None,
 ) -> TaskOutcome:
-    """Verification #4 — run the deliverable as a user would.
+    """Verification #4 — OBSERVATIONAL run-smoke of the deliverable.
 
     When `acceptance_adapter(root)` resolves (a python-cli project today),
-    run the adapter's run-smoke (`python -m <pkg> --help`); a still-`done`
-    task is demoted to `failed` unless run-smoke exits 0. No acceptance
-    adapter → a logged no-op, the verdict from checks 1-3 stands (no
-    regression for unsupported types). Mandatory-when-resolves: the gate
-    cannot be silently skipped for a type the floor covers.
+    run the adapter's run-smoke (`python -m <pkg> --help`), RECORD the verdict
+    (passed/failed/noop) and SURFACE a card. No acceptance adapter → a logged
+    no-op. **This check never demotes** — `outcome` is always returned
+    unchanged (plumbing only; hard enforcement is feature 4, see module
+    docstring). The library / pkg-unresolvable / timeout / non-zero cases are
+    all recorded `failed` + reason and surfaced, never failing the task.
+
+    `_verify_head_advanced` (the only caller-side step before this) is
+    demotion-incapable by contract — it always returns the outcome it was
+    given — so we needn't re-guard `outcome.status != "done"` to keep a
+    demotion from being swallowed; there is no demotion path here at all.
     """
-    from code_scalpel.agent import TaskOutcome
-
-    if outcome.status != "done":
-        return outcome
-
     adapter = acceptance_adapter(agent._cwd)
     if adapter is None:
         # No acceptance adapter for this project type — logged no-op.
@@ -124,14 +145,18 @@ async def _verify_acceptance(
         _emit_acceptance_card(on_tool_executed, command=None, ok=True, reason="no adapter")
         return outcome
 
-    passed, command, reason = await _run_smoke(agent, adapter, task)
-    if passed:
-        _record_acceptance(agent, command=command, verdict="passed", reason=None)
-        _emit_acceptance_card(on_tool_executed, command=command, ok=True, reason=None)
-        return outcome
-    _record_acceptance(agent, command=command, verdict="failed", reason=reason)
-    _emit_acceptance_card(on_tool_executed, command=command, ok=False, reason=reason)
-    return TaskOutcome(task=task, step_result=outcome.step_result, status="failed")
+    verdict, command, reason = await _run_smoke(agent, adapter, task)
+    ok = verdict == "passed"
+    card_reason = None if ok else reason
+    if verdict == "noop":
+        # An adapter that flags provides_acceptance but yields no runnable
+        # spec — a visible no-op, not an unqualified pass (finding 6).
+        card_reason = reason
+    _record_acceptance(agent, command=command, verdict=verdict, reason=reason)
+    _emit_acceptance_card(on_tool_executed, command=command, ok=ok, reason=card_reason)
+    # Plumbing only: record + surface, never demote. The outcome from
+    # checks 1-3 stands regardless of the run-smoke verdict.
+    return outcome
 
 
 def _emit_acceptance_card(
@@ -164,25 +189,31 @@ async def _run_smoke(
     agent: StepAgent,
     adapter: object,
     task: Task,
-) -> tuple[bool, str | None, str | None]:
-    """Execute the adapter's acceptance run-smoke; return (passed, command, reason).
+) -> tuple[str, str | None, str | None]:
+    """Execute the adapter's acceptance run-smoke; return (verdict, command, reason).
 
-    Runs the code-owned acceptance command at trust="yolo" through the same
-    `execute()` boundary (so it inherits trust / policy / bwrap gating;
-    timeout + sandbox from config — no magic number). Exit-0-or-fail: unlike
-    `_verify_task_test_command` there is no exit-4/5 leniency. `resolve_pkg`
-    raising → `pkg-unresolvable`, the failure the gate exists to catch.
+    `verdict` is one of `passed` / `failed` / `noop`. Runs the code-owned
+    acceptance command at trust="yolo" through the same `execute()` boundary
+    (so it inherits trust / policy / bwrap gating; timeout + sandbox from
+    config — no magic number). Exit-0-or-fail: unlike `_verify_task_test_command`
+    there is no exit-4/5 leniency. When the adapter's `expected` observable is
+    non-empty, a `passed` verdict additionally requires `expected` to appear in
+    the run-smoke output (today's floor uses `expected == ""` ⇒ exit-0-only).
+    `resolve_pkg` raising → `failed`/`pkg-unresolvable`; `spec is None` → a
+    visible `noop`/`unknown` rather than an unqualified pass (finding 6).
     """
     try:
         spec = adapter.acceptance_spec(task)  # type: ignore[attr-defined]
     except ValueError:
-        # `resolve_pkg` could not resolve a runnable package — "not runnable"
-        # is exactly the failure the gate catches (the __main__.py coin-flip).
-        return False, None, "pkg-unresolvable"
+        # `resolve_pkg` could not resolve a runnable package — recorded (not
+        # demoted): plumbing only. Distinguishing "broken CLI" from a
+        # legitimate library is feature 4's CLI-intent signal.
+        return "failed", None, "pkg-unresolvable"
     if spec is None:
-        # An adapter that flags provides_acceptance but returns no spec — treat
-        # as a no-op rather than crashing; nothing runnable to verify.
-        return True, None, None
+        # An adapter that flags provides_acceptance but returns no spec — a
+        # self-contradictory state. Record a visible no-op rather than passing
+        # silently; nothing runnable to verify.
+        return "noop", None, "no acceptance spec"
 
     # The command is the adapter's code-owned acceptance command (deterministic
     # `python -m <pkg> --help`, pkg resolved by resolve_pkg — never model- or
@@ -191,7 +222,7 @@ async def _run_smoke(
     # asyncio-subprocess security considerations: never pass untrusted input to
     # a shell.
     # https://docs.python.org/3/library/asyncio-subprocess.html#security-considerations
-    raw_command, _expected = spec
+    raw_command, expected = spec
     command = shlex.join(shlex.split(raw_command))
     call = ToolCall(name="shell_exec", body=json.dumps({"command": command}))
     result = await execute(
@@ -203,20 +234,41 @@ async def _run_smoke(
         shell_exec_timeout=agent._config.agent.shell_exec_timeout,
         sandbox=agent._config.agent.sandbox,
     )
-    if result.ok:
-        return True, command, None
-    return False, command, _failure_reason(result)
+    if not result.ok:
+        return "failed", command, _failure_reason(result)
+    # Exit 0. With a non-empty `expected` observable the deliverable must also
+    # actually print it — guards the false-green where a CLI exits 0 while
+    # producing nothing. The floor (`expected == ""`) stays exit-0-only.
+    if expected and expected not in result.output:
+        return "failed", command, "expected-missing"
+    return "passed", command, None
 
 
 def _failure_reason(result: ToolResult) -> str:
-    """Map a failed run-smoke ToolResult to a compact reason string."""
-    out = result.output.lower()
-    if "timeout" in out:
+    """Map a failed run-smoke ToolResult to a compact reason string.
+
+    `ToolResult` carries no structured returncode (only `ok` + `output`), so
+    the reason is parsed from the execute()-formatted output, whose shapes are
+    code-owned in `agent_tools._tool_shell_exec`: a timeout is `timeout after
+    <n>s`; a non-zero exit leads with `exit code: <n>`; a policy/sandbox
+    refusal leads with `refused:`; an internal error with `error:`. The
+    pass/fail decision is `result.ok` upstream — only the reason is parsed here.
+    """
+    out = result.output
+    # Anchor the timeout match to the code-owned prefix — the bare substring
+    # "timeout" can appear anywhere in a deliverable's own stdout.
+    if out.startswith("timeout after "):
         return "timeout"
-    for line in result.output.splitlines():
-        stripped = line.strip().lower()
-        if stripped.startswith("exit code:"):
-            return f"exit {stripped.removeprefix('exit code:').strip().split()[0]}"
+    stripped = out.lstrip()
+    if stripped.startswith("refused:") or stripped.startswith("error:"):
+        # Policy block / sandbox-unavailable / internal error — a distinct
+        # reason so feature 3's self-fix can tell it apart from a real
+        # non-zero exit (e.g. a missing-bwrap config, not broken code).
+        return "refused"
+    for line in out.splitlines():
+        low = line.strip().lower()
+        if low.startswith("exit code:"):
+            return f"exit {low.removeprefix('exit code:').strip().split()[0]}"
     return "run-smoke failed"
 
 
@@ -231,8 +283,25 @@ def _record_acceptance(
 
     Defensive suppress + the existing atomic save — acceptance bookkeeping
     must never break /go. No-op when no state is wired.
+
+    A `noop` (the common non-python / no-adapter case) must NOT overwrite an
+    earlier meaningful `passed`/`failed` verdict, and must NOT trigger a
+    redundant atomic STATE.json write per task. We persist only when a real
+    run-smoke verdict was produced, or when the value actually changes
+    (finding 3).
     """
     if agent._state is None:
+        return
+    prior = getattr(agent._state, "last_acceptance_verdict", "unknown")
+    # A noop never clobbers an earlier meaningful verdict.
+    if verdict == "noop" and prior in ("passed", "failed"):
+        return
+    # Skip the redundant write when nothing changes (e.g. repeated noop).
+    if (
+        verdict == prior
+        and getattr(agent._state, "last_acceptance_command", None) == command
+        and getattr(agent._state, "last_acceptance_reason", None) == reason
+    ):
         return
     with suppress(Exception):
         agent._state.last_acceptance_command = command  # type: ignore[attr-defined]

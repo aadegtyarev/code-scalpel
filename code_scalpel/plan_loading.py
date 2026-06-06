@@ -103,7 +103,7 @@ async def _pre_loop_passes(
     # and write the decision back so the user (and the next run) sees it.
     if agent._config.agent.auto_annotate_plan and not any(_parse_task_skills(t) for t in tasks):
         original_text, initial_hash, tasks = await _annotate_plan(
-            agent, tasks_path, original_text, on_tool_executed
+            agent, tasks_path, original_text, tasks, on_tool_executed
         )
 
     # Detect + resolve architectural forks before the first task. Gated on a
@@ -135,11 +135,16 @@ async def _annotate_plan(
     agent: StepAgent,
     tasks_path: Path,
     original_text: str,
+    tasks: tuple[Task, ...],
     on_tool_executed: Callable[[ToolCall, ToolResult], None] | None,
 ) -> tuple[str, str, tuple[Task, ...]]:
     """Run the one-shot skill-annotation LLM pass and persist its result.
 
-    Returns the (possibly updated) `(original_text, initial_hash, tasks)`.
+    Returns the (possibly updated) `(original_text, initial_hash, tasks)`. On
+    the no-change path the EXISTING typed `tasks` tuple is returned unchanged
+    rather than re-parsed from markdown — re-parsing would drop the typed
+    `Task` fields (goal/files/acceptance/skills/test_command) when the plan
+    came from TASKS.json (finding 7).
     """
     from code_scalpel.agent import _atomic_write, _hash_text, _parse_task_skills
 
@@ -163,7 +168,7 @@ async def _annotate_plan(
         "Annotation pass returned no changes — running plan without auto-loaded skills.",
         ok=False,
     )
-    return original_text, _hash_text(original_text), parse_tasks_md(original_text)
+    return original_text, _hash_text(original_text), tasks
 
 
 def _emit_annotate_card(

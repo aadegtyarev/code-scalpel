@@ -12,7 +12,9 @@ Implement feature 2 of the backend redesign: `feat/acceptance-gate-run-plan` —
 
 ## Status
 
-implementation complete — ready for review loop (Pass 1 pm-plan-checker, Pass 2 code-review). Two atomic commits on feat/acceptance-gate-run-plan: 66fed51 (behavior-preserving strangle, existing run_plan tests pass unchanged) + 1bf6cab (acceptance gate + provides_acceptance/bind/acceptance_adapter + state + surfacing + tests). Full pipeline green (pytest 1246 passed / 40 skipped; ruff check + format clean; mypy --strict clean cacheless). NOT pushed.
+RE-SCOPED to PLUMBING ONLY + Pass-2 fixes applied — ready for re-review (Pass 1 pm-plan-checker re-run, then Pass 2 verify). PM decision (review `## Resolutions` #1): verification #4 is now OBSERVATIONAL — it runs the run-smoke, records the verdict (passed/failed/noop) + reason, and surfaces the card, but **NEVER demotes a task to `failed`**. Reason: `PythonCliAdapter.detect` fires on ANY python project, so demoting on run-smoke failure would wrongly fail `/go` over python LIBRARIES (a net-new regression). Hard enforcement (demotion) deferred to feature 4 (`feat/acceptance-spec-in-tasks`), which supplies the CLI-vs-library signal.
+
+Three atomic commits on feat/acceptance-gate-run-plan: 66fed51 (strangle) + 1bf6cab (gate) + the re-scope commit (this pass — observational #4 + review findings 2-8 + tests). Pipeline green: pytest 1249 passed / 40 skipped; ruff check + format clean; mypy --strict clean on touched modules (the lone `code_scalpel/tools/files.py:8 unused-ignore` is a pre-existing env-stub artifact, byte-identical on main, NOT in this branch's diff — documented in review Notes 1). NOT pushed.
 
 ## Done
 
@@ -52,6 +54,11 @@ Commit 2 (1bf6cab — gate):
 - code_scalpel/plan_runner.py — pass on_tool_executed into verify_task.
 - code_scalpel/state.py — last_acceptance_command/verdict/reason fields (forward-compatible).
 - tests/test_acceptance_gate.py (new), tests/test_python_cli_adapter.py (+bind/flag/resolution), tests/test_agent.py (+plan_modified_with_gate, +runsmoke_verdict_resumes).
+
+Commit 3 (re-scope — plumbing only + review findings 2-8):
+- code_scalpel/plan_verify.py — #4 made OBSERVATIONAL: _verify_acceptance always returns the original outcome (TaskOutcome(...,status="failed") removed from the acceptance path); _run_smoke returns a verdict string (passed/failed/noop), honors the non-empty `expected` observable (finding 2), spec-is-None → visible noop (finding 6); _record_acceptance skips persist on noop + never clobbers a prior meaningful verdict (finding 3); _failure_reason anchored to code-owned output prefixes + maps refused/error → `refused` (finding 4); _demote() helper via dataclasses.replace for checks 1-3 (finding 8); redundant re-guard collapsed + documented (finding 5).
+- code_scalpel/plan_loading.py — annotation no-change branch returns the existing typed `tasks` tuple unchanged instead of re-parsing markdown (finding 7).
+- tests/test_acceptance_gate.py — re-scoped: demotion test → test_acceptance_records_failed_but_does_NOT_demote_when_runsmoke_fails; ADD test_acceptance_library_project_not_demoted (src + flat layout), test_acceptance_expected_observable_checked_when_nonempty, test_noop_does_not_clobber_prior_verdict_or_persist, test_acceptance_records_passed_when_runsmoke_succeeds; timeout/pkg-unresolvable/exit-4-5 assertions flipped from "demoted" to "recorded, not demoted".
 
 NOTE: plan named only plan_runner.py; the strangle was split into 4 cohesive modules (plan_loading/plan_post_checks/plan_verify) to honor the ≤300-line/≤50-line AI minimums without lint suppression, per the plan's explicit "split cohesively rather than suppressing" instruction.
 

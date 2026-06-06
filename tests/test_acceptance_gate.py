@@ -1,11 +1,17 @@
-"""Tests for the run_plan acceptance gate (verification #4).
+"""Tests for the run_plan acceptance gate (verification #4) — PLUMBING ONLY.
 
 Drives the production verification entry point `plan_verify.verify_task`
 (the same function `PlanRunner._run_task` calls) against a python-cli project
 with a real `MockShellRunner`, so the run-smoke executes through the production
-`execute()` path — no hand-rolled parallel setup. Covers the plan's Test plan:
-demote / keep / no-op / timeout / pkg-unresolvable / exit-4-5 / yolo / argv /
-cwd / state round-trip, plus the plan-modified interaction with the gate active.
+`execute()` path — no hand-rolled parallel setup.
+
+Per the PM "plumbing only" re-scope (`.ai-pm/reviews/
+acceptance-gate-run-plan_review.md` `## Resolutions` #1), verification #4 is
+OBSERVATIONAL: it records the verdict and surfaces a card but NEVER demotes a
+task. These tests assert "recorded, not demoted". Covers the plan's Test plan:
+record-passed / record-failed-but-keep-done / no-op / library-not-demoted /
+timeout / pkg-unresolvable / exit-4-5 / expected-observable / yolo / argv /
+cwd / state round-trip / noop-no-clobber, plus the plan-modified interaction.
 """
 
 from __future__ import annotations
@@ -90,15 +96,23 @@ async def test_acceptance_gate_keeps_done_when_runsmoke_succeeds(tmp_path: Path)
 
 
 @pytest.mark.asyncio
-async def test_acceptance_gate_demotes_done_to_failed_when_runsmoke_fails(tmp_path: Path) -> None:
+async def test_acceptance_records_failed_but_does_NOT_demote_when_runsmoke_fails(
+    tmp_path: Path,
+) -> None:
+    """Plumbing only: a non-zero run-smoke is recorded `failed` + surfaced but
+    the task STAYS `done` (observational — the load-bearing no-regression guard
+    for the PM "plumbing only" decision; scenario 2)."""
     project = _python_cli_project(tmp_path)
     shell = MockShellRunner([ShellResult("Traceback ... not runnable", 1)])
     outcome = _done(_TASK)
-    out = await verify_task(_agent(project, shell), _TASK, outcome, head_before=None)
-    assert out.status == "failed"
-    # Partial progress preserved — the same task/step_result, just demoted.
+    state = AgentState()
+    out = await verify_task(_agent(project, shell, state=state), _TASK, outcome, head_before=None)
+    # Verdict recorded as failed, but the task is NOT demoted.
+    assert out.status == "done"
     assert out.task is _TASK
     assert out.step_result is outcome.step_result
+    assert state.last_acceptance_verdict == "failed"
+    assert state.last_acceptance_reason == "exit 1"
 
 
 @pytest.mark.asyncio
@@ -116,18 +130,62 @@ async def test_acceptance_gate_noop_when_no_acceptance_adapter(tmp_path: Path) -
 
 
 @pytest.mark.asyncio
-async def test_acceptance_pkg_unresolvable_fails(tmp_path: Path) -> None:
+async def test_acceptance_pkg_unresolvable_records_reason(tmp_path: Path) -> None:
     """A python project that detects (pyproject present) but produces no
-    -m-runnable package → resolve_pkg raises → failed, reason pkg-unresolvable."""
+    -m-runnable package → resolve_pkg raises → verdict `failed`, reason
+    `pkg-unresolvable`, NO new status, and the task is NOT demoted (scenario 8,
+    plumbing only)."""
     # pyproject with no wheel target and no src/ package — resolve_pkg raises.
     (tmp_path / "pyproject.toml").write_text("[project]\nname='x'\n")
     shell = MockShellRunner([])
     state = AgentState()
     out = await verify_task(_agent(tmp_path, shell, state=state), _TASK, _done(_TASK), None)
-    assert out.status == "failed"
+    assert out.status == "done"
+    assert state.last_acceptance_verdict == "failed"
     assert state.last_acceptance_reason == "pkg-unresolvable"
     # The unresolvable failure is detected without ever dispatching a shell.
     assert shell.shell_calls == []
+
+
+@pytest.mark.asyncio
+async def test_acceptance_library_project_not_demoted(tmp_path: Path) -> None:
+    """A python LIBRARY (no CLI) must NOT be demoted — the exact regression the
+    plumbing-only scope prevents. Two layouts: a src-layout single package with
+    no `__main__.py` (run-smoke fails non-zero) and a flat-layout library
+    (`resolve_pkg` raises → pkg-unresolvable). Both record `failed` and stay
+    `done`. (`PythonCliAdapter.detect` fires on ANY python project, so without
+    feature 4's CLI-intent signal a demoting gate would wrongly fail these.)"""
+    # 1) src-layout library: a package, but no __main__.py — `python -m mylib`
+    #    fails. run-smoke returns non-zero; recorded failed, task stays done.
+    src_lib = tmp_path / "srclib"
+    pkg_dir = src_lib / "src" / "mylib"
+    pkg_dir.mkdir(parents=True)
+    (pkg_dir / "__init__.py").write_text("")
+    (src_lib / "pyproject.toml").write_text(
+        "[build-system]\nrequires=['hatchling']\nbuild-backend='hatchling.build'\n"
+        "[project]\nname='mylib'\nversion='0'\n"
+        "[tool.hatch.build.targets.wheel]\npackages=['src/mylib']\n"
+    )
+    shell = MockShellRunner([ShellResult("No module named mylib.__main__", 1)])
+    state = AgentState()
+    out = await verify_task(_agent(src_lib, shell, state=state), _TASK, _done(_TASK), None)
+    assert out.status == "done", "src-layout library must NOT be demoted"
+    assert state.last_acceptance_verdict == "failed"
+
+    # 2) flat-layout library: pyproject with no wheel target / no src package —
+    #    resolve_pkg raises → pkg-unresolvable, recorded, task stays done.
+    flat_lib = tmp_path / "flatlib"
+    flat_lib.mkdir()
+    (flat_lib / "pyproject.toml").write_text("[project]\nname='flat'\n")
+    flat_shell = MockShellRunner([])
+    flat_state = AgentState()
+    out2 = await verify_task(
+        _agent(flat_lib, flat_shell, state=flat_state), _TASK, _done(_TASK), None
+    )
+    assert out2.status == "done", "flat-layout library must NOT be demoted"
+    assert flat_state.last_acceptance_verdict == "failed"
+    assert flat_state.last_acceptance_reason == "pkg-unresolvable"
+    assert flat_shell.shell_calls == []
 
 
 @pytest.mark.asyncio
@@ -147,7 +205,9 @@ async def test_acceptance_runsmoke_timeout_fails(tmp_path: Path) -> None:
     shell = _TimeoutRunner([])
     state = AgentState()
     out = await verify_task(_agent(project, shell, state=state), _TASK, _done(_TASK), None)
-    assert out.status == "failed"
+    # Recorded failed (reason timeout), task NOT demoted (plumbing only).
+    assert out.status == "done"
+    assert state.last_acceptance_verdict == "failed"
     assert state.last_acceptance_reason == "timeout"
 
 
@@ -170,13 +230,17 @@ async def test_acceptance_runsmoke_uses_config_timeout(tmp_path: Path) -> None:
 
 @pytest.mark.asyncio
 async def test_acceptance_does_not_inherit_exit_4_5_leniency(tmp_path: Path) -> None:
-    """run-smoke is exit-0-or-fail: exit 4 and exit 5 are FAILURES, unlike
-    _verify_task_test_command which treats them as pass (arch-note sharpening)."""
+    """run-smoke is exit-0-or-fail: exit 4 and exit 5 are recorded FAILED,
+    unlike _verify_task_test_command which treats them as pass (arch-note
+    sharpening). Plumbing only — the task is not demoted, but the recorded
+    verdict is `failed`, not `passed`."""
     project = _python_cli_project(tmp_path)
     for code in (4, 5):
         shell = MockShellRunner([ShellResult("no tests ran", code)])
-        out = await verify_task(_agent(project, shell), _TASK, _done(_TASK), None)
-        assert out.status == "failed", f"exit {code} must fail run-smoke"
+        state = AgentState()
+        out = await verify_task(_agent(project, shell, state=state), _TASK, _done(_TASK), None)
+        assert out.status == "done", f"plumbing only: exit {code} must not demote"
+        assert state.last_acceptance_verdict == "failed", f"exit {code} must record failed"
 
 
 @pytest.mark.asyncio
@@ -271,15 +335,94 @@ async def test_state_persists_runsmoke_verdict_and_reason(tmp_path: Path) -> Non
 
 
 @pytest.mark.asyncio
-async def test_done_count_means_ran(tmp_path: Path) -> None:
-    """The Must-not-break contract: a task that stays `done` through the gate
-    has a recorded `passed` run-smoke verdict — `done` now means `ran`."""
+async def test_acceptance_records_passed_when_runsmoke_succeeds(tmp_path: Path) -> None:
+    """Scenario 1: a task whose `python -m <pkg> --help` exits 0 has its verdict
+    recorded `passed` and stays `done`. (Plumbing only: the passed verdict is
+    observability, not the demotion driver.)"""
     project = _python_cli_project(tmp_path)
     shell = MockShellRunner([ShellResult("usage", 0)])
     state = AgentState()
     out = await verify_task(_agent(project, shell, state=state), _TASK, _done(_TASK), None)
     assert out.status == "done"
     assert state.last_acceptance_verdict == "passed"
+
+
+@pytest.mark.asyncio
+async def test_acceptance_expected_observable_checked_when_nonempty(tmp_path: Path) -> None:
+    """Finding 2: when an adapter returns a non-empty `expected`, a run-smoke
+    that exits 0 but whose output lacks `expected` is recorded `failed`
+    (guards the false-green); the floor (`expected == ""`) is exit-0-only."""
+    project = _python_cli_project(tmp_path)
+    shell = MockShellRunner([ShellResult("nothing useful printed", 0)])
+    state = AgentState()
+
+    class _ExpectingAdapter:
+        def acceptance_spec(self, task: object) -> tuple[str, str]:
+            return ("python -m notes_cli --help", "usage:")
+
+    agent = _agent(project, shell, state=state)
+    import code_scalpel.plan_verify as pv
+
+    # Patch the registry resolution to hand back an adapter with a non-empty
+    # expected observable; the floor adapter returns expected == "".
+    orig = pv.acceptance_adapter
+    pv.acceptance_adapter = lambda root: _ExpectingAdapter()  # type: ignore[assignment]
+    try:
+        out = await verify_task(agent, _TASK, _done(_TASK), None)
+    finally:
+        pv.acceptance_adapter = orig  # type: ignore[assignment]
+    # Exit 0 but `usage:` absent from output → recorded failed (not demoted).
+    assert out.status == "done"
+    assert state.last_acceptance_verdict == "failed"
+    assert state.last_acceptance_reason == "expected-missing"
+
+    # And when the expected observable IS present, the verdict is passed.
+    shell2 = MockShellRunner([ShellResult("usage: notes_cli [--help]", 0)])
+    state2 = AgentState()
+    agent2 = _agent(project, shell2, state=state2)
+    pv.acceptance_adapter = lambda root: _ExpectingAdapter()  # type: ignore[assignment]
+    try:
+        await verify_task(agent2, _TASK, _done(_TASK), None)
+    finally:
+        pv.acceptance_adapter = orig  # type: ignore[assignment]
+    assert state2.last_acceptance_verdict == "passed"
+
+
+@pytest.mark.asyncio
+async def test_noop_does_not_clobber_prior_verdict_or_persist(tmp_path: Path) -> None:
+    """Finding 3: a later `noop` task does not overwrite an earlier
+    `passed`/`failed` verdict and does not trigger a redundant state write."""
+    # A python-cli project (adapter resolves) → a real verdict first.
+    project = _python_cli_project(tmp_path)
+    shell = MockShellRunner([ShellResult("usage", 0)])
+    state = AgentState()
+    agent = _agent(project, shell, state=state)
+    await verify_task(agent, _TASK, _done(_TASK), None)
+    assert state.last_acceptance_verdict == "passed"
+
+    # Count persist calls across the next (noop) verification.
+    persist_calls = {"n": 0}
+    orig_persist = agent._persist_state
+
+    def _counting_persist() -> None:
+        persist_calls["n"] += 1
+        orig_persist()
+
+    agent._persist_state = _counting_persist  # type: ignore[method-assign]
+
+    # Force a noop by resolving no acceptance adapter for this call.
+    import code_scalpel.plan_verify as pv
+
+    orig = pv.acceptance_adapter
+    pv.acceptance_adapter = lambda root: None  # type: ignore[assignment]
+    try:
+        await verify_task(agent, _TASK, _done(_TASK), None)
+    finally:
+        pv.acceptance_adapter = orig  # type: ignore[assignment]
+
+    # The prior `passed` verdict survives the noop, and no redundant write fired.
+    assert state.last_acceptance_verdict == "passed"
+    assert persist_calls["n"] == 0
 
 
 @pytest.mark.asyncio
