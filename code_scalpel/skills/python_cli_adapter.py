@@ -12,8 +12,17 @@ Why a separate registration (not auto-discovered like *_skill.py):
 if it auto-registered as a runnable test skill it could hijack
 `default_runnable` for ordinary Python projects. It is registered
 explicitly in `__init__.py` with `provides_test_runner = False`, so it is
-discoverable via `get_skill`/`all_skills` but never selected by
-`default_runnable` — the existing PythonSkill stays the test runner.
+never selected by `default_runnable` — the existing PythonSkill stays the
+test runner.
+
+Why `hidden = True`: the adapter shares PythonSkill's detect(), so on a
+Python project it would otherwise show up as a second, duplicate row in
+the model catalog (`all_skills`), the detected-stack hint, and the
+`/skills` panel — and there is no `prompts/skills/python-cli.md`, so a
+model that `load_skill('python-cli')` would get empty guidance and miss
+python.md's pytest/ruff instructions. `hidden` keeps it out of every
+model-facing listing while leaving it `get_skill('python-cli')`-
+discoverable for the future run-loop that constructs it deliberately.
 
 Determinism is the point: the `__main__.py` entrypoint and the hatchling
 src-layout config are code-owned here, not emitted by the model's whim
@@ -23,6 +32,7 @@ src-layout config are code-owned here, not emitted by the model's whim
 from __future__ import annotations
 
 import re
+import shlex
 from pathlib import Path
 
 from code_scalpel.skills.base import ScaffoldSpec, Skill
@@ -44,7 +54,9 @@ class PythonCliAdapter(Skill):
     # Detection-only for the registry's test-path selection: PythonSkill
     # owns the test runner for Python projects. See module docstring.
     provides_test_runner = False
-    priority = 15
+    # Excluded from every model-facing listing (catalog / detected hint /
+    # /skills) while staying get_skill-discoverable. See module docstring.
+    hidden = True
 
     def __init__(self, root: Path | None = None) -> None:
         # `root` lets an adapter instance resolve <pkg> deterministically
@@ -52,22 +64,19 @@ class PythonCliAdapter(Skill):
         # detection/discovery singleton); a caller that wants run_smoke
         # constructs PythonCliAdapter(root=project_root).
         self._root = root
+        # One PythonSkill instance the adapter delegates detect/test/lint
+        # to — a python-cli project IS a Python project, so the adapter
+        # reuses PythonSkill verbatim instead of duplicating its commands.
+        self._py = PythonSkill()
 
     def detect(self, root: Path) -> bool:
-        # Same heuristic as PythonSkill — a python-cli project IS a Python
-        # project; the adapter does not narrow detection further here.
-        return PythonSkill().detect(root)
+        return self._py.detect(root)
 
     def test_cmd(self, args: str = "") -> list[str]:
-        # Reuse PythonSkill verbatim so the test command never drifts.
-        return PythonSkill().test_cmd(args)
-
-    def test(self, args: str = "") -> list[str]:
-        """Alias for `test_cmd` — the ProjectAdapter-facing name."""
-        return self.test_cmd(args)
+        return self._py.test_cmd(args)
 
     def lint_cmd(self) -> list[str]:
-        return PythonSkill().lint_cmd()
+        return self._py.lint_cmd()
 
     def build_install(self) -> list[str]:
         return ["pip", "install", "-e", "."]
@@ -83,14 +92,26 @@ class PythonCliAdapter(Skill):
         if self._root is None:
             raise ValueError("run_smoke needs a project root: construct PythonCliAdapter(root=...)")
         pkg = resolve_pkg(self._root)
-        return ["python", "-m", pkg, *(args.split() if args else [])]
+        # shlex.split (not str.split) for parity with test_cmd — keeps
+        # quoted argument groups like `--note 'a b'` intact.
+        return ["python", "-m", pkg, *(shlex.split(args) if args else [])]
 
     def acceptance_spec(self, task: object) -> tuple[str, str] | None:
         # Default-floor: the deliverable is `-m`-runnable and --help exits
         # cleanly. The expected observable is exit-0 (empty-string sentinel
         # the gate treats as "command must succeed"); a richer round-trip
         # spec is feat/acceptance-spec-in-tasks.
-        return (f"python -m <pkg> {_DEFAULT_FLOOR_HELP_ARGS}", "")
+        #
+        # <pkg> is resolved from the bound root exactly like run_smoke, so
+        # the command is actually runnable. The rootless discovery
+        # singleton cannot resolve a package — raise the same clear error
+        # run_smoke raises rather than hand back a non-runnable placeholder.
+        if self._root is None:
+            raise ValueError(
+                "acceptance_spec needs a project root: construct PythonCliAdapter(root=...)"
+            )
+        pkg = resolve_pkg(self._root)
+        return (f"python -m {pkg} {_DEFAULT_FLOOR_HELP_ARGS}", "")
 
     def scaffold(self, spec: ScaffoldSpec) -> list[Path]:
         """Emit a deterministic, `-m`-runnable python-cli skeleton.

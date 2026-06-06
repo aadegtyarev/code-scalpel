@@ -68,6 +68,15 @@ class Skill(ABC):
     description: str = ""
     provides_test_runner: bool = True
     priority: int = 50  # lower = registered first; controls default_runnable_skill order
+    # `hidden` keeps a skill in the registry (so `get_skill(name)` and the
+    # detection paths `default`/`default_runnable` still see it) while
+    # excluding it from the model-facing listings — the catalog `all()`,
+    # the active-skills listing `active()`, the detected-stack hint and the
+    # `/skills` panel that build on them. Used by adapters like
+    # PythonCliAdapter that share a detect() with a real skill (PythonSkill)
+    # and would otherwise advertise a duplicate row with no prompts/skills
+    # guidance file behind it. Default False — every ordinary skill lists.
+    hidden: bool = False
 
     @abstractmethod
     def detect(self, root: Path) -> bool:
@@ -82,9 +91,9 @@ class Skill(ABC):
     def test_cmd(self, args: str = "") -> list[str]:
         """Shell argv for running the project's tests.
 
-        `args` is appended verbatim (split on whitespace) so the caller
-        can request `-k pattern` or a specific test path without the
-        skill needing to know.
+        `args` is appended after being split with shlex (quoted groups
+        preserved), so the caller can request `-k 'foo or bar'` or a
+        specific test path without the skill needing to know.
         """
 
     @abstractmethod
@@ -158,9 +167,9 @@ class Skill(ABC):
     def run_smoke(self, args: str = "") -> list[str]:
         """Shell argv to run the actual deliverable as a user would.
 
-        Default `[]` — a plain Skill has no run-smoke. `args` is appended
-        (whitespace-split) like `test_cmd`. Adapters override (e.g.
-        python-cli returns `python -m <pkg> <args>`).
+        Default `[]` — a plain Skill has no run-smoke. `args` is split
+        with shlex, like `test_cmd`, then appended. Adapters override
+        (e.g. python-cli returns `python -m <pkg> <args>`).
         """
         return []
 

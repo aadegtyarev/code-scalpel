@@ -25,7 +25,10 @@ from code_scalpel.skills import (
     ScaffoldSpec,
     Skill,
     SqliteSkill,
+    active_skills,
+    all_skills,
     default_runnable_skill,
+    default_skill,
     get_skill,
 )
 
@@ -87,17 +90,24 @@ def test_python_cli_adapter_build_install() -> None:
 
 
 def test_python_cli_adapter_test_matches_python_skill() -> None:
-    """test() must equal PythonSkill.test_cmd() — no behavior drift."""
+    """test_cmd() must equal PythonSkill.test_cmd() — no behavior drift."""
     adapter = PythonCliAdapter()
-    assert adapter.test() == PythonSkill().test_cmd()
-    assert adapter.test("-k foo") == PythonSkill().test_cmd("-k foo")
     assert adapter.test_cmd() == PythonSkill().test_cmd()
+    assert adapter.test_cmd("-k foo") == PythonSkill().test_cmd("-k foo")
 
 
 def test_python_cli_adapter_run_smoke(tmp_path: Path) -> None:
     _make_src_pkg(tmp_path, "myapp")
     adapter = PythonCliAdapter(root=tmp_path)
     assert adapter.run_smoke("add x") == ["python", "-m", "myapp", "add", "x"]
+
+
+def test_run_smoke_shlex_splits_quoted_args(tmp_path: Path) -> None:
+    """run_smoke splits with shlex (like test_cmd), so a quoted group
+    stays one argument instead of being shredded on whitespace."""
+    _make_src_pkg(tmp_path, "myapp")
+    adapter = PythonCliAdapter(root=tmp_path)
+    assert adapter.run_smoke("--note 'a b'") == ["python", "-m", "myapp", "--note", "a b"]
 
 
 def test_run_smoke_pkg_resolution(tmp_path: Path) -> None:
@@ -115,12 +125,22 @@ def test_run_smoke_without_root_is_clear_error() -> None:
         PythonCliAdapter().run_smoke("add x")
 
 
-def test_acceptance_spec_default_floor() -> None:
-    spec = PythonCliAdapter().acceptance_spec(task=None)
+def test_acceptance_spec_default_floor(tmp_path: Path) -> None:
+    """Root-bound: the command must name the RESOLVED package, with no
+    leftover `<pkg>` placeholder, so it is actually runnable."""
+    _make_src_pkg(tmp_path, "notes_cli")
+    spec = PythonCliAdapter(root=tmp_path).acceptance_spec(task=None)
     assert spec is not None
     command, _expected = spec
-    assert "python -m" in command
-    assert "--help" in command
+    assert command == "python -m notes_cli --help"
+    assert "<pkg>" not in command
+
+
+def test_acceptance_spec_without_root_is_clear_error() -> None:
+    """Rootless singleton cannot resolve a package — raise like run_smoke
+    rather than emit a non-runnable `<pkg>` placeholder."""
+    with pytest.raises(ValueError, match="project root"):
+        PythonCliAdapter().acceptance_spec(task=None)
 
 
 # ── scaffold execution + failure paths (scenarios 5, 8, 9) ───────────────────
@@ -209,6 +229,48 @@ def test_registry_default_runner_unchanged_after_adapter_registered(tmp_path: Pa
     adapter = get_skill("python-cli")
     assert isinstance(adapter, PythonCliAdapter)
     assert adapter.provides_test_runner is False
+
+
+def test_adapter_hidden_from_model_facing_listings(tmp_path: Path) -> None:
+    """python-cli must NOT pollute the model catalog (all_skills) or the
+    detected-stack / /skills listing (active_skills) for a Python project,
+    yet stay get_skill-discoverable (Pass-2 finding 1)."""
+    (tmp_path / "pyproject.toml").write_text("[project]\nname='x'\n")
+
+    catalog_names = [s.name for s in all_skills()]
+    assert "python-cli" not in catalog_names
+    assert "python" in catalog_names  # the real Python skill still listed
+
+    active_names = [s.name for s in active_skills(tmp_path)]
+    assert "python-cli" not in active_names
+    assert active_names == ["python"]  # no duplicate Python row
+
+    # Still discoverable by name for the future run-loop.
+    assert isinstance(get_skill("python-cli"), PythonCliAdapter)
+
+
+def test_default_skill_for_python_project_is_python(tmp_path: Path) -> None:
+    """Regression guard: default_skill returns the first DETECTING skill;
+    after the adapter registration it must still be PythonSkill, not the
+    hidden adapter (the adapter is registered after PythonSkill)."""
+    (tmp_path / "pyproject.toml").write_text("[project]\nname='x'\n")
+
+    chosen = default_skill(tmp_path)
+    assert chosen is not None
+    assert chosen.name == "python"
+
+    runnable = default_runnable_skill(tmp_path)
+    assert isinstance(runnable, PythonSkill)
+
+
+def test_hidden_trait_is_isolated_to_adapter() -> None:
+    """The hidden trait must affect ONLY python-cli: every listed skill
+    has hidden = False (default), and the adapter itself is hidden."""
+    for skill in all_skills():
+        assert skill.hidden is False
+    adapter = get_skill("python-cli")
+    assert adapter is not None
+    assert adapter.hidden is True
 
 
 def _make_src_pkg(root: Path, pkg: str) -> None:

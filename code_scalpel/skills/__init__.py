@@ -95,11 +95,14 @@ _auto_register_python_skills(_registry)
 
 # PythonCliAdapter is registered explicitly, NOT via _auto_register_*: its
 # module is python_cli_adapter.py (not *_skill.py), so the auto-scanner
-# skips it. It is registered here with provides_test_runner = False so it
-# is discoverable (get_skill / all_skills) yet never selected by
-# default_runnable — PythonSkill (priority 10) stays the test runner for
-# Python projects. This is the "discoverable without hijacking the test
-# path" decision (plan scenario 7 + interaction scenarios).
+# skips it. It is registered with provides_test_runner = False (never wins
+# default_runnable — PythonSkill, priority 10, stays the test runner) and
+# hidden = True (excluded from the model catalog / detected-stack hint /
+# /skills, since it shares PythonSkill's detect() and has no
+# prompts/skills/python-cli.md behind it). It stays get_skill('python-cli')-
+# discoverable for the future run-loop. This is the "discoverable without
+# hijacking the test path and without polluting the model listings"
+# decision (plan scenario 7 + interaction scenarios + Pass-2 finding 1).
 _registry.register(PythonCliAdapter())
 
 _auto_register_markdown_skills(_registry)
