@@ -12,20 +12,24 @@ Feature 4 of the backend redesign: `feat/acceptance-spec-in-tasks` — give the 
 
 ## Status
 
-planning complete — ready for coder handoff
+coding complete — ready for review loop. Pipeline green (1271 passed / 40 skipped, ruff + format clean, mypy clean) EXCEPT one pre-existing, unrelated mypy error in code_scalpel/tools/files.py:8 (unused `# type: ignore`) that already exists on the base commit c518078 in untouched code — surfaced, NOT papered over. Cause: local pathspec 0.12.1 ships py.typed, so the bare ignore is now unused; an environment discrepancy, not a feature regression.
 
 ## Done
 
 - Features 1 (PR #168) + 2 (PR #169) merged. Acceptance run-smoke plumbing is in main, observational (never demotes).
-- **This task (planning):**
+- **Planning:**
   - PM decisions captured: (a) **generality** — NOT a notes_cli/python special case; run-loop carries zero language strings, all run-strings come from the detect()-selected adapter; (b) **args-only** model-derived checks (model returns {applicable,args,expected}; adapter builds the argv; no free-form shell).
-  - Focused `pm-architect` arch note: `AcceptanceSpec(command,expected,applicable,source)` dataclass (overrules the tuple); enforce iff `spec.applicable`; floor never sets applicable (regression lock); args-only schema; write-back JSON-canonical; T11 provenance resolved + residual risk surfaced.
-  - Plan written (8 scenarios + 4 failure paths; KD1–KD6 + residual-risk; contracts; stack expectations; interaction scenarios; full test plan incl. a non-python adapter generality test; docs-to-update; out-of-scope).
-  - Product-readiness gate (`pm-product-advocate`): **clean**.
+  - Focused `pm-architect` arch note; plan (8 scenarios + 4 failure paths; KD1–KD6); product-readiness gate clean.
+- **Coding (this task) — commits 27ca34c, 4a0dbb0, c986f36:**
+  - `AcceptanceSpec(command,expected,applicable,source)` frozen dataclass + encode/decode_derived_acceptance helpers (skills/base.py); `Skill.acceptance_spec` return type tuple→AcceptanceSpec|None.
+  - PythonCliAdapter precedence B (declared) → C (derived marker) → A (floor); every branch builds command via run_smoke(args); floor never applicable (regression lock).
+  - plan_verify verification #4 flipped to ENFORCING gated on spec.applicable; pkg-unresolvable applicability read from the task (failure-path 12); no language string in the loop path (audited).
+  - Args-only narrow-pass derivation pre-loop (plan_loading._derive_acceptance, beside _annotate_plan) with output_schema {applicable,args,expected}; write-back to TASKS.json canonical + re-rendered/re-hashed markdown sentinel; typed tasks returned (finding 7); LLM/parse error→floor (path 9), disk error→in-memory+old sentinel (path 10). New config auto_derive_acceptance. derive_acceptance.md prompt + DERIVE_ACCEPTANCE export. agent.derive_acceptance_args + _DERIVE_ACCEPTANCE_SCHEMA.
+  - state.last_acceptance_source persisted (forward-compatible default).
+  - Tests: tests/test_acceptance_enforcement.py (22 new) — enforcement, generality (non-python adapter), args-only no-injection, derivation+write-back+resume, failure paths 9/10/12, json_schema + argv-no-shell stack-spec, interaction (plan_modified, compose, yolo-on-skeptic). Feature-2 tuple-shape + "never demotes for applicable" assertions updated per the planned contract change.
 
 ## Remaining
 
-- Coder: implement on `feat/acceptance-spec-in-tasks` — `AcceptanceSpec`; `Skill.acceptance_spec(task)->AcceptanceSpec|None`; PythonCliAdapter precedence B→C→A; the args-only narrow-pass derivation + write-back (pre-loop, beside skill annotation, re-hash-safe); flip `plan_verify._verify_acceptance` to enforce iff applicable; update all current `acceptance_spec` call sites + the feature-2 tests that asserted "never demotes". Keep the run-loop language-agnostic (generality test).
 - Review loop: Pass 1 `pm-plan-checker`, Pass 2 `code-review`.
 - Post-coding doc handoff (`pm-architect`): architecture.md + user-journeys.md + threat-model.md + plan.md per "Docs to update". Contract `run-plan.md` Must-not-break update.
 - Verify feature acceptance: `notes_cli` 3/3 task_solved (manual outcome probe, Step 5.5) BEFORE ship.
@@ -34,11 +38,25 @@ planning complete — ready for coder handoff
 
 ## Touched files
 
-(to be filled by coder) — expected: code_scalpel/skills/base.py (AcceptanceSpec + acceptance_spec signature), python_cli_adapter.py (precedence B→C→A via run_smoke args), plan_verify.py (enforce-iff-applicable), plan_loading.py (derivation pre-pass + write-back), plan.py (acceptance write-back round-trip), narrow_pass usage, state.py (source field?), tests/*.
+- code_scalpel/skills/base.py — AcceptanceSpec dataclass + encode/decode_derived_acceptance; acceptance_spec return type
+- code_scalpel/skills/python_cli_adapter.py — precedence B→C→A via run_smoke(args)
+- code_scalpel/plan_verify.py — enforce-iff-applicable + _task_acceptance_applicable + source plumbing
+- code_scalpel/plan_loading.py — _derive_acceptance pre-pass + write-back (JSON canonical, re-hash-safe)
+- code_scalpel/agent.py — derive_acceptance_args + _DERIVE_ACCEPTANCE_SCHEMA
+- code_scalpel/prompts/derive_acceptance.md (+ prompts/__init__.py export)
+- code_scalpel/config.py — auto_derive_acceptance flag
+- code_scalpel/state.py — last_acceptance_source field
+- tests/test_acceptance_enforcement.py (new), tests/test_acceptance_gate.py, tests/test_python_cli_adapter.py, tests/test_agent.py
+
+NOT touched (per task): docs/*, .ai-pm/contracts/run-plan.md, plan.md — post-coding pm-architect doc handoff. Feature 3 (self-fix) and feature 5 (node adapter) deferred.
 
 ## Next step
 
-hand off to pm-coder.
+review loop (Pass 1 pm-plan-checker; Pass 2 code-review). Then doc handoff + notes_cli 3/3 outcome probe before ship.
+
+## Out-of-scope findings (→ backlog)
+
+- code_scalpel/tools/files.py:8 — pre-existing `# type: ignore` is unused under pathspec 0.12.1 (ships py.typed); mypy flags it. Exists on base commit, unrelated to this feature. Either drop the ignore or pin pathspec; PM/maintainer call.
 
 ## Validation
 
