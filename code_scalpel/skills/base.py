@@ -67,6 +67,12 @@ class Skill(ABC):
     name: str = ""
     description: str = ""
     provides_test_runner: bool = True
+    # Symmetric with `provides_test_runner`: marks an adapter that owns an
+    # acceptance / run-smoke contract (its `acceptance_spec` returns a real
+    # command). The run-loop's verification #4 selects the first detecting
+    # skill with this flag via `SkillRegistry.acceptance_adapter`. Default
+    # False — a plain Skill declares no acceptance contract.
+    provides_acceptance: bool = False
     priority: int = 50  # lower = registered first; controls default_runnable_skill order
     # `hidden` keeps a skill in the registry (so `get_skill(name)` and the
     # detection paths `default`/`default_runnable` still see it) while
@@ -154,6 +160,18 @@ class Skill(ABC):
     # overrides them. They are intentionally inert here: no run-loop
     # consumes them yet (that is a later feature) — this just makes the
     # contract exist.
+
+    def bind(self, root: Path) -> Skill:
+        """Return an instance of this skill bound to `root`, for run-smoke.
+
+        Default is the *identity bind* — a stateless skill (or a component
+        skill / rootless discovery singleton) needs no root context, so it
+        returns `self` unchanged. Adapters that resolve a root-dependent
+        deliverable (python-cli resolves `<pkg>` from the tree) override
+        this to return a root-bound instance. Polymorphic so the registry
+        can root-bind any adapter without knowing its constructor shape.
+        """
+        return self
 
     def build_install(self) -> list[str]:
         """Shell argv to make the deliverable runnable, or `[]` if none.

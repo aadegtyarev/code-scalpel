@@ -56,6 +56,18 @@ class AgentState(BaseModel):
     # упал — нам надо при restore показать пользователю «N forks
     # ждут upstream, /escalate или конец /go их флашит».
     open_fork_questions: list[PersistedFork] = Field(default_factory=list)
+    # Acceptance gate (verification #4) — the last run-smoke the run-loop
+    # executed against the deliverable. Default-valued so older STATE.json
+    # files (pre-acceptance-gate) load unchanged. `verdict`:
+    #   passed — run-smoke exited 0 (the task is genuinely "ran")
+    #   failed — non-zero exit / timeout / unresolvable pkg (reason below)
+    #   noop   — no acceptance adapter detected the project type
+    #   unknown — no run-smoke recorded yet (fresh / resumed pre-gate)
+    # `reason` carries the failure detail (`exit N` / `timeout` /
+    # `pkg-unresolvable`) for resume, metrics, and feature 3's self-fix.
+    last_acceptance_command: str | None = None
+    last_acceptance_verdict: Literal["passed", "failed", "noop", "unknown"] = "unknown"
+    last_acceptance_reason: str | None = None
 
     def save(self, root: Path = Path(".")) -> None:
         state_dir = root / _STATE_DIR

@@ -78,6 +78,21 @@ class SkillRegistry:
                 return s
         return None
 
+    def acceptance_adapter(self, root: Path) -> Skill | None:
+        """First detecting `provides_acceptance` skill, root-bound, or None.
+
+        A selection method like `get`/`default`/`default_runnable`: it scans
+        `_skills` **unfiltered**, so a `hidden` adapter (PythonCliAdapter) is
+        eligible. Detection runs on the rootless registry singleton; the
+        returned instance is `.bind(root)`, so `acceptance_spec`/`run_smoke`
+        are never called on the rootless one (which raises). Returns None when
+        no acceptance adapter detects the root.
+        """
+        for s in self._skills:
+            if s.provides_acceptance and s.detect(root):
+                return s.bind(root)
+        return None
+
     def get(self, name: str) -> Skill | None:
         """Lookup by class-attribute `name`. Returns None if not registered."""
         for s in self._skills:

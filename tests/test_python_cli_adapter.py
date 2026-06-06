@@ -231,6 +231,60 @@ def test_registry_default_runner_unchanged_after_adapter_registered(tmp_path: Pa
     assert adapter.provides_test_runner is False
 
 
+# ── acceptance-gate capability surface (provides_acceptance + bind) ──────────
+
+
+def test_provides_acceptance_flag() -> None:
+    """PythonCliAdapter owns an acceptance contract; existing skills do not."""
+    assert PythonCliAdapter.provides_acceptance is True
+    for cls in (PythonSkill, GoSkill, JsTsSkill, DockerSkill, PostgresSkill, SqliteSkill):
+        assert cls.provides_acceptance is False, cls.__name__
+
+
+def test_bind_default_returns_self() -> None:
+    """A stateless skill's bind(root) is the identity bind — returns itself."""
+    skill = PythonSkill()
+    assert skill.bind(Path("/anywhere")) is skill
+
+
+def test_bind_python_cli_returns_root_bound(tmp_path: Path) -> None:
+    """PythonCliAdapter.bind(root) returns a root-bound instance whose
+    run_smoke / acceptance_spec resolve <pkg> instead of raising rootless."""
+    _make_src_pkg(tmp_path, "notes_cli")
+    bound = PythonCliAdapter().bind(tmp_path)
+    assert isinstance(bound, PythonCliAdapter)
+    # The rootless original raises; the bound one resolves.
+    assert bound.run_smoke("list")[:3] == ["python", "-m", "notes_cli"]
+    spec = bound.acceptance_spec(task=None)
+    assert spec is not None
+    assert spec[0] == "python -m notes_cli --help"
+
+
+def test_acceptance_adapter_resolution_drives_production_registry(tmp_path: Path) -> None:
+    """Test-wiring-parity: the PRODUCTION module-level registry resolves a
+    root-bound PythonCliAdapter via acceptance_adapter for a python project,
+    while default_runnable_skill is unchanged (PythonSkill). Returns None for
+    a project type with no acceptance adapter."""
+    from code_scalpel.skills import acceptance_adapter, default_runnable_skill
+
+    _make_src_pkg(tmp_path, "notes_cli")
+
+    adapter = acceptance_adapter(tmp_path)
+    assert isinstance(adapter, PythonCliAdapter)
+    assert adapter.provides_acceptance is True
+    # Root-bound: it resolves <pkg> without raising the rootless error.
+    assert adapter.acceptance_spec(task=None) == ("python -m notes_cli --help", "")
+
+    # The test-runner path resolves independently and is untouched.
+    runnable = default_runnable_skill(tmp_path)
+    assert runnable is not None and runnable.name == "python"
+
+    # No acceptance adapter for a non-python project type → None.
+    empty = tmp_path / "nothing"
+    empty.mkdir()
+    assert acceptance_adapter(empty) is None
+
+
 def test_adapter_hidden_from_model_facing_listings(tmp_path: Path) -> None:
     """python-cli must NOT pollute the model catalog (all_skills) or the
     detected-stack / /skills listing (active_skills) for a Python project,

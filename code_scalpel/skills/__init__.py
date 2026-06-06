@@ -146,6 +146,15 @@ def default_runnable_skill(root: Path) -> Skill | None:
     return _registry.default_runnable(root)
 
 
+def acceptance_adapter(root: Path) -> Skill | None:
+    """First detecting `provides_acceptance` adapter, root-bound, or None.
+
+    The run-loop's acceptance gate (verification #4) resolves the adapter to
+    run-smoke through this, so adding a language adapter needs no run-loop
+    edit. Returns None for project types with no acceptance adapter."""
+    return _registry.acceptance_adapter(root)
+
+
 __all__ = [
     "DockerSkill",
     "GoSkill",
@@ -158,6 +167,7 @@ __all__ = [
     "Skill",
     "SkillRegistry",
     "SqliteSkill",
+    "acceptance_adapter",
     "active_skills",
     "all_skills",
     "default_runnable_skill",

@@ -260,7 +260,7 @@ class PlanRunner:
         )
 
         outcome = _classify_outcome(task, step_result)
-        return await verify_task(self._agent, task, outcome, head_before)
+        return await verify_task(self._agent, task, outcome, head_before, on_tool_executed)
 
     def _persist_task_end(self, task: Task, outcome: TaskOutcome) -> None:
         # Persist task-end: on success, mark the task done and clear
