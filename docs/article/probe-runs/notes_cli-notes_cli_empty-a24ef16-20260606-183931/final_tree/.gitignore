@@ -1,0 +1,32 @@
+# Byte-compiled / optimized / DLL files
+*.py[cod]
+__pycache__/
+*$py.class
+
+# C extensions
+*.so
+
+# Distribution / packaging
+.Python
+dist/
+bld/
+egg-info/
+.installed.cfg
+wheelhouse/
+
+# PyInstaller
+#  Usually these files are written by a python -m compileall. They can be safely removed.
+__pycache__/
+*.pyc
+
+# Environments
+.env
+.venv/
+venv/
+env/
+
+# VSCode
+.vscode/
+
+# Jupyter Notebook
+.ipynb_checkpoints/

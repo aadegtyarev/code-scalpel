@@ -1,0 +1,121 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Distribution / packaging
+.Python
+dist/
+bld/
+egg-info/
+.installed.cfg
+wheelhouse/
+sdist/
+.pytest_cache/
+
+# Virtual environment
+.venv/
+
+# PyInstaller
+#  Usually these files are written by a python script from a template
+#  before PyInstaller builds the exe, so as to inject date/other infos into it.
+bld/
+dist/
+*.spec
+
+# Installer logs
+pip-log.txt
+pip-delete-this-directory.txt
+
+# Unit test / coverage reports
+htmlcov/
+.tox/
+.nox/
+.coverage
+.pytest_cache/
+.cache
+nosetests.xml
+coverage.xml
+*.cover
+.hypothesis/
+
+# Translations
+*.mo
+*.pot
+
+# Django stuff:
+*.log
+local_settings.py
+db.sqlite3
+media
+staticfiles
+
+# Flask stuff:
+instance/
+.env
+
+# Scrapy stuff:
+.scrapy
+
+# Sphinx documentation
+_build/
+docs/_build/
+
+# PyBuilder
+target/
+
+# Jupyter Notebook
+.ipynb_checkpoints/
+
+# IPython
+profile_default/
+ipython_config.py
+
+# Cython
+*.so
+*.pyd
+*.pyx
+*.c
+*.cpp
+
+# Environments
+.env
+.venv
+env.bak/
+
+# VSCode
+.vscode/
+
+# PyCharm
+.idea/
+
+# Sublime Text
+.sublimetext-project
+.sublimetext-workspace
+
+# macOS
+.DS_Store
+
+# Windows
+Thumbs.db
+
+# Logs
+*.log
+
+# Temporary files
+*.tmp
+*.temp
+*.bak
+*.swp
+*.swo
+*.swn
+*.bak
+*.orig
+*.rej
+*.orig
+*.swp
+*.swo
+*.swn
+*.bak
+*.orig
+*.rej
