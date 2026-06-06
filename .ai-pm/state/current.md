@@ -12,7 +12,7 @@ Implement feature 2 of the backend redesign: `feat/acceptance-gate-run-plan` —
 
 ## Status
 
-planning complete — ready for coder handoff
+implementation complete — ready for review loop (Pass 1 pm-plan-checker, Pass 2 code-review). Two atomic commits on feat/acceptance-gate-run-plan: 66fed51 (behavior-preserving strangle, existing run_plan tests pass unchanged) + 1bf6cab (acceptance gate + provides_acceptance/bind/acceptance_adapter + state + surfacing + tests). Full pipeline green (pytest 1246 passed / 40 skipped; ruff check + format clean; mypy --strict clean cacheless). NOT pushed.
 
 ## Done
 
@@ -27,7 +27,6 @@ planning complete — ready for coder handoff
 
 ## Remaining
 
-- Coder: implement on `feat/acceptance-gate-run-plan` — commit 1 behavior-preserving `run_plan`→`plan_runner.py` strangle (existing tests green), commit 2 the acceptance gate + `provides_acceptance`/`bind`/`acceptance_adapter` + state fields + TUI card surfacing.
 - Review loop: Pass 1 `pm-plan-checker`, Pass 2 `code-review`.
 - Post-coding doc handoff (`pm-architect`): architecture.md + user-journeys.md + threat-model.md per plan "Docs to update".
 - Update `.ai-pm/contracts/run-plan.md` Must-not-break; append feature to contract Built/changed-by; regenerate `docs/product-map.md`; mark v0.14 progress in docs/plan.md.
@@ -37,11 +36,28 @@ planning complete — ready for coder handoff
 
 ## Touched files
 
-(to be filled by coder) — expected: code_scalpel/plan_runner.py (new), code_scalpel/agent.py (run_plan delegation), code_scalpel/skills/base.py (provides_acceptance + bind), code_scalpel/skills/python_cli_adapter.py (bind override + provides_acceptance), code_scalpel/skills/registry.py (acceptance_adapter), code_scalpel/state.py (run-smoke fields), tests/*.
+Commit 1 (66fed51 — strangle):
+- code_scalpel/agent.py — run_plan body replaced by thin `return await PlanRunner(self).run(...)` delegation; dropped now-unused parse_tasks_md/serialize_tasks imports.
+- code_scalpel/plan_runner.py (new) — PlanRunner + _Streaks; the per-task loop.
+- code_scalpel/plan_loading.py (new) — TASKS.{json,md} resolution + pre-loop passes.
+- code_scalpel/plan_post_checks.py (new) — optional per-task quality passes.
+- code_scalpel/plan_verify.py (new) — checks 1-3 (later +4 in commit 2).
+
+Commit 2 (1bf6cab — gate):
+- code_scalpel/skills/base.py — provides_acceptance class attr + bind() identity default.
+- code_scalpel/skills/python_cli_adapter.py — provides_acceptance = True + bind() override.
+- code_scalpel/skills/registry.py — acceptance_adapter(root) selection method.
+- code_scalpel/skills/__init__.py — public acceptance_adapter wrapper + __all__.
+- code_scalpel/plan_verify.py — verification #4 (_verify_acceptance/_run_smoke/_record_acceptance/_emit_acceptance_card).
+- code_scalpel/plan_runner.py — pass on_tool_executed into verify_task.
+- code_scalpel/state.py — last_acceptance_command/verdict/reason fields (forward-compatible).
+- tests/test_acceptance_gate.py (new), tests/test_python_cli_adapter.py (+bind/flag/resolution), tests/test_agent.py (+plan_modified_with_gate, +runsmoke_verdict_resumes).
+
+NOTE: plan named only plan_runner.py; the strangle was split into 4 cohesive modules (plan_loading/plan_post_checks/plan_verify) to honor the ≤300-line/≤50-line AI minimums without lint suppression, per the plan's explicit "split cohesively rather than suppressing" instruction.
 
 ## Next step
 
-hand off to pm-coder.
+Review loop (Pass 1 pm-plan-checker, Pass 2 code-review). Then post-coding doc handoff (pm-architect) + contract update + notes_cli 3/3 outcome probe + ship.
 
 ## Validation
 
