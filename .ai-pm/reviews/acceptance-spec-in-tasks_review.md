@@ -28,4 +28,12 @@ Pass-2 technical review (code-review skill, high effort: 7 finder angles → ver
 
 **Orchestrator decision:** 1–3 block ship; 2 resolved autonomously toward the safe behavior (B = hint, not direct-enforce, this iteration — announced to PM). 4–6 should-fix bundled in; 7–11 cleanups. All routed to `pm-coder`. The notes_cli 3/3 outcome probe (the feature's acceptance criterion) runs at Step 5.5 before ship.
 
-## Code review: RUN — 3 blocking, 3 should-fix, 5 cleanups routed to pm-coder
+## Code review: 2026-06-06 — passed
+
+All findings closed in fix commit `949611f` (verified):
+- **1 (data-loss):** `_merge_annotated_skills` merges LLM skills into the typed tasks tuple — both annotation paths now preserve goal/files/acceptance/test_command; derivation runs on full typed tasks; no field-stripped plan is persisted. (Also fixes the pre-existing annotation change-path bug.)
+- **2 (prose B):** human-declared prose is no longer executed as argv — it feeds derivation as a hint; enforcement is derived (args-only) or floor only. No false-demote of prose-acceptance tasks.
+- **3 + 6:** single applicability source (`acceptance_applicable`) used by the normal and pkg-unresolvable paths; `source` recovered on failure (feature-3 provenance).
+- **4:** undecodable marker re-derives (not treated as declared args). **5:** malformed args → distinct reason (`malformed-args`), not mislabeled `pkg-unresolvable`. **7:** dead JSONDecodeError clause dropped + wholesale-outage surfaced. **8:** noop-never-applicable asserted.
+
+Security args-only invariant preserved; generality (no language string in the run-loop verify path) preserved. Pipeline green: pytest 1278 passed / 40 skipped (the single `test_app.py::test_slash_map_mounts_tool_use_card` failure on the first run was a flaky async-TUI test — green on re-run + passes in isolation + HEAD full suite green); ruff check + format clean; mypy clean cacheless (incl. `tools/files.py:8` — not flagged this run). Both passes clear → ready for doc handoff + outcome probe + ship.
