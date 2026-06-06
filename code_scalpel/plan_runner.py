@@ -396,10 +396,13 @@ class PlanRunner:
     def _self_fix_prompt(task_prompt: str, run_smoke_output: str) -> str:
         """Assemble the self-fix retry prompt from the task + run-smoke output.
 
-        Language-agnostic (KD9): the command and the failure text both come
-        from the `detect()`-selected adapter's run-smoke; this method adds NO
-        language literal. The run-smoke output already begins with the
-        code-owned command line (the adapter's argv) and its stdout/stderr.
+        Target-language/tool agnostic (KD9): this method injects no
+        target-language or tool literal (no `python`, `-m`, `notes_cli`, etc.).
+        The command and the failure text both come from the `detect()`-selected
+        adapter's run-smoke output, which already begins with the code-owned
+        command line (the adapter's argv) and its stdout/stderr. The English
+        instructional framing here is the deliberate, canon-compliant exception
+        (artifacts are English) — it carries no target-language literal.
         """
         return (
             f"{task_prompt}\n\n"

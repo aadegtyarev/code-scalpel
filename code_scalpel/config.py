@@ -141,9 +141,11 @@ class AgentConfig(BaseModel):
     acceptance_self_fix: bool = True
     # Bounded self-fix attempts before the task is finally `failed`. The outer
     # budget is independent of `max_debug_attempts` (the inner code_with_retry
-    # test-retry budget); the combined worst case is ~9 build passes on the one
-    # last applicable task per plan (KD8), accepted because self-fix fires at a
-    # single position (`should_run_now`).
+    # test-retry budget); the compound worst-case ceiling is
+    # `acceptance_self_fix_max_attempts * (max_debug_attempts + 1) + 1` build
+    # passes (the trailing +1 is the initial build), where both factors are
+    # user-configurable. Accepted because self-fix fires at a single position
+    # (`should_run_now`, KD8) — the one last applicable task per plan.
     acceptance_self_fix_max_attempts: int = 3
     # Inference thinking effort — passed to providers that support it
     # (o1/o3, deepseek-r1, qwq). Ignored when ModelProfile.supports_thinking
