@@ -127,13 +127,17 @@ def test_run_smoke_without_root_is_clear_error() -> None:
 
 def test_acceptance_spec_default_floor(tmp_path: Path) -> None:
     """Root-bound: the command must name the RESOLVED package, with no
-    leftover `<pkg>` placeholder, so it is actually runnable."""
+    leftover `<pkg>` placeholder, so it is actually runnable. With no declared
+    or derived acceptance the adapter returns the default-floor — exit-0-only
+    (`expected == ""`) and NEVER applicable (the library no-regression lock)."""
     _make_src_pkg(tmp_path, "notes_cli")
     spec = PythonCliAdapter(root=tmp_path).acceptance_spec(task=None)
     assert spec is not None
-    command, _expected = spec
-    assert command == "python -m notes_cli --help"
-    assert "<pkg>" not in command
+    assert spec.command == "python -m notes_cli --help"
+    assert spec.expected == ""
+    assert spec.applicable is False
+    assert spec.source == "floor"
+    assert "<pkg>" not in spec.command
 
 
 def test_acceptance_spec_without_root_is_clear_error() -> None:
@@ -257,7 +261,7 @@ def test_bind_python_cli_returns_root_bound(tmp_path: Path) -> None:
     assert bound.run_smoke("list")[:3] == ["python", "-m", "notes_cli"]
     spec = bound.acceptance_spec(task=None)
     assert spec is not None
-    assert spec[0] == "python -m notes_cli --help"
+    assert spec.command == "python -m notes_cli --help"
 
 
 def test_acceptance_adapter_resolution_drives_production_registry(tmp_path: Path) -> None:
@@ -273,7 +277,10 @@ def test_acceptance_adapter_resolution_drives_production_registry(tmp_path: Path
     assert isinstance(adapter, PythonCliAdapter)
     assert adapter.provides_acceptance is True
     # Root-bound: it resolves <pkg> without raising the rootless error.
-    assert adapter.acceptance_spec(task=None) == ("python -m notes_cli --help", "")
+    floor = adapter.acceptance_spec(task=None)
+    assert floor is not None
+    assert floor.command == "python -m notes_cli --help"
+    assert floor.applicable is False
 
     # The test-runner path resolves independently and is untouched.
     runnable = default_runnable_skill(tmp_path)

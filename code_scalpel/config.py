@@ -121,6 +121,14 @@ class AgentConfig(BaseModel):
     # when none are present. Fires ONE extra LLM call before the loop
     # starts. Off in tests so the mocked LLM queue stays predictable.
     auto_annotate_plan: bool = True
+    # Auto-derive a per-task acceptance spec (args-only) at /go time for
+    # each task that declares none AND whose project has an acceptance
+    # adapter. Fires one extra LLM call (the narrow `derive_acceptance`
+    # pass) and writes the result back so the next run is deterministic.
+    # Mirrors `auto_annotate_plan`; off keeps the loop hermetic so a
+    # headless / mocked caller stays predictable. On by default because
+    # the v0.14 acceptance gate's teeth depend on the derived spec.
+    auto_derive_acceptance: bool = True
     # Inference thinking effort — passed to providers that support it
     # (o1/o3, deepseek-r1, qwq). Ignored when ModelProfile.supports_thinking
     # is False or None (auto-detected as unsupported). Toggled via Ctrl+K.

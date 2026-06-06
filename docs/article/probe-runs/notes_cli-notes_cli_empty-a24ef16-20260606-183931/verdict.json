@@ -1,0 +1,41 @@
+{
+  "scenario": "notes_cli",
+  "pass_score": 6,
+  "pass_max": 8,
+  "criteria": {
+    "package": {
+      "passed": true,
+      "detail": "2 непустых .py-файла(ов) с исходным кодом"
+    },
+    "four_commands": {
+      "passed": true,
+      "detail": "все 4 команды упомянуты"
+    },
+    "json_storage": {
+      "passed": true,
+      "detail": "json-сериализация + .json-хранилище найдены"
+    },
+    "tests_present": {
+      "passed": true,
+      "detail": "2 тест-файл(ов)"
+    },
+    "docs": {
+      "passed": true,
+      "detail": "README найден (README.md)"
+    },
+    "installable": {
+      "passed": false,
+      "detail": "editable/requirements install не прошёл: et up custom discovery (`find` directive with `include` or `exclude`)\n      2. use a `src-layout`\n      3. explicitly set `py_modules` or `packages` with a list of names\n      \n      To find more information, look for \"package discovery\" on setuptools docs.\n      [end of output]\n  \n  note: This error originates from a subprocess, and is likely not a problem with pip.\nerror: subprocess-exited-with-error\n\n× Getting requirements to build editable did not run successfully.\n│ exit code: 1\n╰─> See above for output.\n\nnote: This error originates from a subprocess, and is likely not a problem with pip."
+    },
+    "tests_pass": {
+      "passed": false,
+      "detail": "pytest упал (rc=1):   notes = list_notes()\n>       assert len(notes) == 1\nE       AssertionError: assert 5 == 1\nE        +  where 5 = len(['Test note 1', 'Test note 2', 'Test note 3', 'Test note 4', 'Test note 5'])\n\ntests/test_notes.py:40: AssertionError\n=========================== short test summary info ============================\nFAILED tests/test_cli.py::test_add - assert 3 == 1\nFAILED tests/test_cli.py::test_list - AssertionError: assert 1 == 0\nFAILED tests/test_cli.py::test_search - AssertionError: assert 3 == 1\nFAILED tests/test_cli.py::test_delete - assert 5 == 0\nFAILED tests/test_notes.py::test_list - AssertionError: assert 3 == 1\nFAILED tests/test_notes.py::test_search - AssertionError: assert 4 == 1\nFAILED tests/test_notes.py::test_delete - AssertionError: assert 5 == 1\n7 failed, 1 passed in 0.37s"
+    },
+    "acceptance": {
+      "passed": true,
+      "detail": "CLI работает: add→list через `cli.py`"
+    }
+  },
+  "ended_reason": "task_solved",
+  "mechanical_solved": false
+}

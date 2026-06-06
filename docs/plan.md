@@ -3305,6 +3305,18 @@ self-contained), но НЕ на консистентность кода/тест
   acceptance-gate-run-plan_review.md` `## Resolutions` #1). Гейт
   `notes_cli` 3/3 task_solved тоже переезжает в feature 4.
 
+✓ backend-redesign step 4 — acceptance-spec-in-tasks (2026-06-06):
+  гейт получил зубы — verification #4 теперь **демоутит** `done → failed`
+  при провале run-smoke, но ТОЛЬКО где есть *applicable* acceptance-спека
+  (default-floor никогда не applicable → библиотеки/no-spec проекты не
+  фейлятся — feature-2 no-regression сохранён). Спека: args-only
+  narrow-pass derivation (C, модель отдаёт `{applicable, args, expected}`,
+  argv строит адаптер, write-back в план) → floor (A); human-declared
+  prose (B) — хинт для derivation, не команда. Run-loop language-agnostic.
+  `notes_cli` 3/3 task_solved — теперь **живой enforced** release-сигнал
+  (probe гоняется руками перед ship). Args-only безопасность: T11 resolved,
+  +T12/+SC7 в threat-model.
+
 Возможные направления для consistency:
 - **a) Усилить prompt в mode_plan.md** — модель часто оставляет
   files/acceptance пустыми (schema их optional). Принудить

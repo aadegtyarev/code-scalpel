@@ -1,0 +1,41 @@
+{
+  "scenario": "notes_cli",
+  "pass_score": 7,
+  "pass_max": 8,
+  "criteria": {
+    "package": {
+      "passed": true,
+      "detail": "2 непустых .py-файла(ов) с исходным кодом"
+    },
+    "four_commands": {
+      "passed": true,
+      "detail": "все 4 команды упомянуты"
+    },
+    "json_storage": {
+      "passed": true,
+      "detail": "json-сериализация + .json-хранилище найдены"
+    },
+    "tests_present": {
+      "passed": true,
+      "detail": "2 тест-файл(ов)"
+    },
+    "docs": {
+      "passed": true,
+      "detail": "README найден (README.md)"
+    },
+    "installable": {
+      "passed": false,
+      "detail": "editable/requirements install не прошёл:       writing dependency_links to notes_cli.egg-info/dependency_links.txt\n      writing entry points to notes_cli.egg-info/entry_points.txt\n      writing top-level names to notes_cli.egg-info/top_level.txt\n      error: package directory 'app' does not exist\n      [end of output]\n  \n  note: This error originates from a subprocess, and is likely not a problem with pip.\nerror: subprocess-exited-with-error\n\n× Getting requirements to build editable did not run successfully.\n│ exit code: 1\n╰─> See above for output.\n\nnote: This error originates from a subprocess, and is likely not a problem with pip."
+    },
+    "tests_pass": {
+      "passed": true,
+      "detail": "pytest зелёный"
+    },
+    "acceptance": {
+      "passed": true,
+      "detail": "CLI работает: add→list через `app.py`"
+    }
+  },
+  "ended_reason": "task_solved",
+  "mechanical_solved": true
+}

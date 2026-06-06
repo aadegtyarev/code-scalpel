@@ -68,6 +68,11 @@ class AgentState(BaseModel):
     last_acceptance_command: str | None = None
     last_acceptance_verdict: Literal["passed", "failed", "noop", "unknown"] = "unknown"
     last_acceptance_reason: str | None = None
+    # Provenance of the last acceptance spec the gate ran: `declared` (human
+    # task acceptance), `derived` (narrow-pass-derived, args-only), `floor`
+    # (the default `--help` floor), or None (no spec / noop). Forward-
+    # compatible default so older STATE.json files load unchanged.
+    last_acceptance_source: Literal["declared", "derived", "floor"] | None = None
 
     def save(self, root: Path = Path(".")) -> None:
         state_dir = root / _STATE_DIR

@@ -8,19 +8,30 @@ cohesive home. A task that `code_with_retry` reported as `done` is demoted to
   1. `Files:` — every declared path exists on disk.            (demoting)
   2. `Test command:` — exits 0 (with the legacy exit-4/5 leniency).  (demoting)
   3. Git HEAD advanced — the model (or the auto-commit hook) committed. (demoting)
-  4. Acceptance run-smoke — OBSERVATIONAL ONLY. When an acceptance adapter
-     resolves for the project root, run the deliverable as a user would
-     (`python -m <pkg> --help`), record the verdict (passed/failed/noop)
-     and surface a card — but NEVER demote. (plumbing only)
+  4. Acceptance run-smoke — ENFORCING WHERE APPLICABLE, AT THE FINAL TASK.
+     The adapter hands back an `AcceptanceSpec`; the run-loop runs
+     `spec.command`, records the verdict + surfaces a card, and demotes
+     `done → failed` ONLY when three signals agree: `spec.applicable`
+     (intent — a task-declared B or derived-and-applicable C spec, judged
+     pre-loop from task text), `should_run_now` (position — the last not-done
+     task, where the deliverable should be runnable end-to-end), and a
+     non-passing run-smoke (state). A not-applicable spec (the default-floor
+     A, or a derivation that found no runnable CLI deliverable — a library),
+     OR an applicable spec on an early not-built-yet task, is observational:
+     recorded + surfaced, never demoted.
 
 Checks 1-3 guard against the model claiming `done` after only partly executing
-a task; they demote done→failed (no new status). Check 4 is plumbing-only in
-this feature (PM "plumbing only" decision, `.ai-pm/reviews/
-acceptance-gate-run-plan_review.md` `## Resolutions` #1): `PythonCliAdapter`
-detects ANY python project, so a demoting gate would wrongly fail `/go` runs
-over python LIBRARIES. Hard enforcement (demote behind a CLI-intent signal) is
-deferred to feature 4 (`feat/acceptance-spec-in-tasks`). The acceptance
-run-smoke command/verdict/reason are persisted to AgentState for feature 3/4.
+a task; they demote done→failed (no new status). Check 4 gates demotion on
+three separated signals — intent (`spec.applicable`, the CLI-vs-library
+discriminator born in the derivation, carried by the adapter), position
+(`should_run_now`, computed in the run-loop as pure plan structure), and state
+(the deterministic run-smoke) — so a greenfield CLI's early task is observed,
+not false-demoted (`feat/acceptance-spec-in-tasks` §"Timing fix"). The
+default-floor NEVER sets `applicable`, so a python LIBRARY (which
+`PythonCliAdapter.detect` over-fires on) stays observational. The path carries
+ZERO language strings — every "how to run this" is assembled inside the
+`detect()`-selected adapter (KD1 generality). The acceptance run-smoke
+command/verdict/reason/source are persisted to AgentState for feature 3.
 """
 
 from __future__ import annotations
@@ -59,11 +70,18 @@ async def verify_task(
     outcome: TaskOutcome,
     head_before: str | None,
     on_tool_executed: OnToolExecuted = None,
+    *,
+    should_run_now: bool = False,
 ) -> TaskOutcome:
     """Run checks 1-4 on a `done` outcome.
 
-    Checks 1-3 may demote done→failed; check 4 (acceptance) is observational
-    and returns the outcome unchanged (plumbing only — see module docstring).
+    Checks 1-3 may demote done→failed; check 4 (acceptance) demotes too, but
+    ONLY where an applicable spec exists AND `should_run_now` is True — the
+    position signal (the last not-done task, where an applicable-intent
+    deliverable should be runnable end-to-end). Otherwise observational: a
+    not-applicable spec (library / floor) OR an applicable spec on an early
+    not-built-yet task records + cards but never demotes (see module
+    docstring; arch §"Timing fix").
     """
     from code_scalpel.agent import _parse_task_test_command, _verify_task_files
 
@@ -82,7 +100,9 @@ async def verify_task(
             return _demote(outcome)
 
     outcome = await _verify_head_advanced(agent, task, outcome, head_before)
-    return await _verify_acceptance(agent, task, outcome, on_tool_executed)
+    return await _verify_acceptance(
+        agent, task, outcome, on_tool_executed, should_run_now=should_run_now
+    )
 
 
 async def _verify_head_advanced(
@@ -122,40 +142,54 @@ async def _verify_acceptance(
     task: Task,
     outcome: TaskOutcome,
     on_tool_executed: OnToolExecuted = None,
+    *,
+    should_run_now: bool = False,
 ) -> TaskOutcome:
-    """Verification #4 — OBSERVATIONAL run-smoke of the deliverable.
+    """Verification #4 — run-smoke of the deliverable, ENFORCING where applicable.
 
     When `acceptance_adapter(root)` resolves (a python-cli project today),
-    run the adapter's run-smoke (`python -m <pkg> --help`), RECORD the verdict
+    ask it for an `AcceptanceSpec`, run `spec.command`, RECORD the verdict
     (passed/failed/noop) and SURFACE a card. No acceptance adapter → a logged
-    no-op. **This check never demotes** — `outcome` is always returned
-    unchanged (plumbing only; hard enforcement is feature 4, see module
-    docstring). The library / pkg-unresolvable / timeout / non-zero cases are
-    all recorded `failed` + reason and surfaced, never failing the task.
-
-    `_verify_head_advanced` (the only caller-side step before this) is
-    demotion-incapable by contract — it always returns the outcome it was
-    given — so we needn't re-guard `outcome.status != "done"` to keep a
-    demotion from being swallowed; there is no demotion path here at all.
+    no-op. Demotion is gated on THREE signals together — `spec.applicable`
+    (intent: task-declared B or derived-applicable C, persisted pre-loop),
+    `should_run_now` (position: the last not-done task, where the deliverable
+    should be runnable end-to-end), and a non-passing verdict (state: the
+    deterministic run-smoke). Only when all three hold does the outcome demote
+    `done → failed`. A not-applicable spec (the default-floor A or a library),
+    OR an applicable spec on an early not-built-yet task (`should_run_now` is
+    False), is recorded + surfaced but the outcome is returned unchanged (the
+    feature-2 no-regression behavior + the greenfield not-built-yet case). The
+    path references NO language string — `applicable` and `should_run_now` are
+    the only signals the loop reads (KD1 generality; arch §"Timing fix").
     """
     adapter = acceptance_adapter(agent._cwd)
     if adapter is None:
         # No acceptance adapter for this project type — logged no-op.
-        _record_acceptance(agent, command=None, verdict="noop", reason=None)
+        _record_acceptance(agent, command=None, verdict="noop", reason=None, source=None)
         _emit_acceptance_card(on_tool_executed, command=None, ok=True, reason="no adapter")
         return outcome
 
-    verdict, command, reason = await _run_smoke(agent, adapter, task)
+    verdict, command, reason, applicable, source = await _run_smoke(agent, adapter, task)
     ok = verdict == "passed"
     card_reason = None if ok else reason
     if verdict == "noop":
         # An adapter that flags provides_acceptance but yields no runnable
         # spec — a visible no-op, not an unqualified pass (finding 6).
         card_reason = reason
-    _record_acceptance(agent, command=command, verdict=verdict, reason=reason)
+        # Load-bearing invariant: a noop NEVER demotes. The demotion gate below
+        # is `applicable and not ok`, so every noop return site MUST yield
+        # applicable=False (review finding 8). Asserted here so a future
+        # noop-with-applicable=True can't silently start false-demoting.
+        assert not applicable, "a noop verdict must never be applicable (would false-demote)"
+    _record_acceptance(agent, command=command, verdict=verdict, reason=reason, source=source)
     _emit_acceptance_card(on_tool_executed, command=command, ok=ok, reason=card_reason)
-    # Plumbing only: record + surface, never demote. The outcome from
-    # checks 1-3 stands regardless of the run-smoke verdict.
+    # Enforce iff intent (applicable) AND position (should_run_now) AND a
+    # non-passing state. A not-applicable spec (floor / library) OR an
+    # applicable spec on an early not-built-yet task is observational — the
+    # outcome from checks 1-3 stands (the load-bearing no-regression invariant
+    # + the greenfield not-built-yet case; arch §"Timing fix").
+    if applicable and should_run_now and not ok:
+        return _demote(outcome)
     return outcome
 
 
@@ -189,41 +223,61 @@ async def _run_smoke(
     agent: StepAgent,
     adapter: object,
     task: Task,
-) -> tuple[str, str | None, str | None]:
-    """Execute the adapter's acceptance run-smoke; return (verdict, command, reason).
+) -> tuple[str, str | None, str | None, bool, str | None]:
+    """Execute the adapter's acceptance run-smoke.
 
-    `verdict` is one of `passed` / `failed` / `noop`. Runs the code-owned
-    acceptance command at trust="yolo" through the same `execute()` boundary
-    (so it inherits trust / policy / bwrap gating; timeout + sandbox from
-    config — no magic number). Exit-0-or-fail: unlike `_verify_task_test_command`
-    there is no exit-4/5 leniency. When the adapter's `expected` observable is
-    non-empty, a `passed` verdict additionally requires `expected` to appear in
-    the run-smoke output (today's floor uses `expected == ""` ⇒ exit-0-only).
-    `resolve_pkg` raising → `failed`/`pkg-unresolvable`; `spec is None` → a
-    visible `noop`/`unknown` rather than an unqualified pass (finding 6).
+    Returns `(verdict, command, reason, applicable, source)`. `verdict` is
+    one of `passed` / `failed` / `noop`; `applicable` is the enforcement gate
+    the caller demotes on. Runs the code-owned acceptance command at
+    trust="yolo" through the same `execute()` boundary (so it inherits trust /
+    policy / bwrap gating; timeout + sandbox from config — no magic number).
+    Exit-0-or-fail: no exit-4/5 leniency. When `spec.expected` is non-empty, a
+    `passed` verdict additionally requires it to appear in the output (the
+    floor's `expected == ""` ⇒ exit-0-only). A malformed-args spec
+    (`AcceptanceArgError`) → a `noop` fallback (the package is healthy; the
+    SPEC is broken — never demote it as `pkg-unresolvable`, review finding 5).
+    `resolve_pkg` raising (`ValueError`) → `failed`/`pkg-unresolvable`, with
+    `source` recovered from the task and applicability from the adapter's
+    `acceptance_applicable` (the single precedence source, review findings 3+6)
+    so an applicable spec still demotes and a library still observes
+    (failure-path 12); `spec is None` → a visible `noop` (finding 6).
     """
+    from code_scalpel.skills.base import AcceptanceArgError
+
     try:
         spec = adapter.acceptance_spec(task)  # type: ignore[attr-defined]
+    except AcceptanceArgError:
+        # The args string could not be tokenized — a broken SPEC, not a broken
+        # package. Recording a visible noop (no demotion) keeps a healthy
+        # project from being false-failed; the malformed marker self-heals on
+        # the next derivation run. Recover source from the task for feature 3.
+        return "noop", None, "malformed-args", False, _task_acceptance_source(task)
     except ValueError:
-        # `resolve_pkg` could not resolve a runnable package — recorded (not
-        # demoted): plumbing only. Distinguishing "broken CLI" from a
-        # legitimate library is feature 4's CLI-intent signal.
-        return "failed", None, "pkg-unresolvable"
+        # `resolve_pkg` could not resolve a runnable package. Applicability and
+        # source are properties of the TASK's acceptance representation, not of
+        # pkg resolution — recover both so an applicable spec still demotes
+        # (pkg-unresolvable) while a library observes (failure-path 12), and the
+        # recorded verdict carries the real provenance feature 3 needs.
+        return (
+            "failed",
+            None,
+            "pkg-unresolvable",
+            _adapter_applicable(adapter, task),
+            _task_acceptance_source(task),
+        )
     if spec is None:
         # An adapter that flags provides_acceptance but returns no spec — a
         # self-contradictory state. Record a visible no-op rather than passing
         # silently; nothing runnable to verify.
-        return "noop", None, "no acceptance spec"
+        return "noop", None, "no acceptance spec", False, None
 
-    # The command is the adapter's code-owned acceptance command (deterministic
-    # `python -m <pkg> --help`, pkg resolved by resolve_pkg — never model- or
-    # user-authored). Re-derive the argv to prove no shell metacharacters/
-    # free-form text reach the shell, then rebuild the string from that argv.
-    # asyncio-subprocess security considerations: never pass untrusted input to
-    # a shell.
+    # `spec.command` is the adapter's code-owned argv-string (the verb is the
+    # adapter's; only the args are model/human-influenced — KD3). Re-derive the
+    # argv to prove no shell metacharacters/free-form text reach the shell,
+    # then rebuild the string from that argv. asyncio-subprocess security
+    # considerations: never pass untrusted input to a shell.
     # https://docs.python.org/3/library/asyncio-subprocess.html#security-considerations
-    raw_command, expected = spec
-    command = shlex.join(shlex.split(raw_command))
+    command = shlex.join(shlex.split(spec.command))
     call = ToolCall(name="shell_exec", body=json.dumps({"command": command}))
     result = await execute(
         call,
@@ -235,13 +289,47 @@ async def _run_smoke(
         sandbox=agent._config.agent.sandbox,
     )
     if not result.ok:
-        return "failed", command, _failure_reason(result)
+        return "failed", command, _failure_reason(result), spec.applicable, spec.source
     # Exit 0. With a non-empty `expected` observable the deliverable must also
     # actually print it — guards the false-green where a CLI exits 0 while
     # producing nothing. The floor (`expected == ""`) stays exit-0-only.
-    if expected and expected not in result.output:
-        return "failed", command, "expected-missing"
-    return "passed", command, None
+    if spec.expected and spec.expected not in result.output:
+        return "failed", command, "expected-missing", spec.applicable, spec.source
+    return "passed", command, None, spec.applicable, spec.source
+
+
+def _adapter_applicable(adapter: object, task: Task) -> bool:
+    """Enforcement-applicability via the adapter's single source.
+
+    Used only on the `pkg-unresolvable` path where argv assembly raised before
+    a spec could be built. Delegates to `adapter.acceptance_applicable(task)`
+    — the SAME C→A precedence the adapter's `acceptance_spec` encodes — so the
+    two never silently diverge (review finding 6). An adapter without the
+    method (a future / minimal adapter) is treated as not-applicable (observe).
+    No language string here.
+    """
+    fn = getattr(adapter, "acceptance_applicable", None)
+    if fn is None:
+        return False
+    try:
+        return bool(fn(task))
+    except Exception:
+        return False
+
+
+def _task_acceptance_source(task: Task) -> str | None:
+    """Recover the spec `source` from the task when argv assembly raised.
+
+    A decodable derived marker → "derived"; otherwise None (the floor / no
+    enforceable spec). Lets the recorded verdict carry the real provenance
+    feature 3's self-fix keys off, even on the failure path (review finding 3).
+    """
+    from code_scalpel.skills.base import decode_derived_acceptance
+
+    for line in tuple(getattr(task, "acceptance", ())):
+        if decode_derived_acceptance(line) is not None:
+            return "derived"
+    return None
 
 
 def _failure_reason(result: ToolResult) -> str:
@@ -278,8 +366,9 @@ def _record_acceptance(
     command: str | None,
     verdict: str,
     reason: str | None,
+    source: str | None,
 ) -> None:
-    """Persist the last run-smoke command + verdict + reason to AgentState.
+    """Persist the last run-smoke command + verdict + reason + source to AgentState.
 
     Defensive suppress + the existing atomic save — acceptance bookkeeping
     must never break /go. No-op when no state is wired.
@@ -288,7 +377,8 @@ def _record_acceptance(
     earlier meaningful `passed`/`failed` verdict, and must NOT trigger a
     redundant atomic STATE.json write per task. We persist only when a real
     run-smoke verdict was produced, or when the value actually changes
-    (finding 3).
+    (finding 3). `source` (declared/derived/floor) rides alongside so
+    feature 3's self-fix and metrics can tell where the spec came from.
     """
     if agent._state is None:
         return
@@ -301,10 +391,12 @@ def _record_acceptance(
         verdict == prior
         and getattr(agent._state, "last_acceptance_command", None) == command
         and getattr(agent._state, "last_acceptance_reason", None) == reason
+        and getattr(agent._state, "last_acceptance_source", None) == source
     ):
         return
     with suppress(Exception):
         agent._state.last_acceptance_command = command  # type: ignore[attr-defined]
         agent._state.last_acceptance_verdict = verdict  # type: ignore[attr-defined]
         agent._state.last_acceptance_reason = reason  # type: ignore[attr-defined]
+        agent._state.last_acceptance_source = source  # type: ignore[attr-defined]
     agent._persist_state()

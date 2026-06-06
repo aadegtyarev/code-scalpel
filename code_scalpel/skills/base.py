@@ -28,10 +28,114 @@ Design notes:
 
 from __future__ import annotations
 
+import json
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from importlib.resources import files
 from pathlib import Path
+from typing import Literal
+
+
+class AcceptanceArgError(ValueError):
+    """A derived/declared acceptance `args` string could not be tokenized.
+
+    Raised by `run_smoke` when `shlex.split(args)` fails (unbalanced quotes
+    in a model-supplied args string). Distinct from the `ValueError`
+    `resolve_pkg` raises for an unresolvable package: a malformed-args error
+    is a property of the SPEC (fall back to floor/observational), not of the
+    package (which is healthy) — so the run-loop must not mislabel it
+    `pkg-unresolvable` and demote a sound project (review finding 5). Subclasses
+    ValueError so existing `except ValueError` sites stay backward-compatible,
+    but the run-loop catches this FIRST to route it differently.
+    """
+
+
+@dataclass(frozen=True)
+class AcceptanceSpec:
+    """The "does the deliverable actually work?" check the run-loop runs.
+
+    `command` is the adapter-built argv-string (code-owned assembly — the
+    verb is always the adapter's, never a model-emitted shell line);
+    `expected` is the observable substring a `passed` verdict requires
+    (`""` ⇒ exit-0-only); `applicable` gates ENFORCEMENT — `True` lets
+    verification #4 demote `done → failed` on failure, `False` keeps it
+    observational (the library no-regression lock; the default-floor and a
+    derivation that found no runnable CLI both set `False`). `source` is the
+    provenance, surfaced on the card and recorded for feature 3's self-fix.
+
+    Replaces feature 2's `(command, expected)` 2-tuple: applicability could
+    not ride a 2-tuple without the run-loop inferring it, which would
+    re-inject language knowledge into the loop (KD4).
+    """
+
+    command: str
+    expected: str
+    applicable: bool
+    source: Literal["declared", "derived", "floor"]
+
+
+# Write-back encoding for a narrow-pass-DERIVED acceptance result. A derived
+# result is persisted into `Task.acceptance` (the JSON-canonical, round-trips
+# via `task_from_json`) as a SINGLE marker line so the next run reads it back
+# instead of re-deriving — and so "derived: not applicable" is distinguishable
+# from "not yet derived" (empty acceptance). The marker is JSON after a stable
+# prefix so it round-trips through the tuple-of-strings field losslessly and a
+# human-declared acceptance bullet (free prose) never collides with it.
+_DERIVED_MARKER_PREFIX = "derived-acceptance:"
+
+
+def encode_derived_acceptance(*, applicable: bool, args: str, expected: str) -> str:
+    """Build the single `Task.acceptance` marker line for a derived spec.
+
+    Carries `applicable` so a derived not-applicable result (a library) is
+    persisted and never re-derived, and `args` so the adapter rebuilds the
+    code-owned argv via `run_smoke(args)` on every later run.
+    """
+    payload = {"applicable": applicable, "args": args, "expected": expected}
+    return _DERIVED_MARKER_PREFIX + json.dumps(payload, ensure_ascii=False, sort_keys=True)
+
+
+def decode_derived_acceptance(line: str) -> dict[str, object] | None:
+    """Parse a derived marker line into `{applicable, args, expected}`, or None.
+
+    None for any line that is not a derived marker (a human-declared
+    acceptance bullet, or malformed JSON) — the caller then treats the
+    acceptance as task-declared (B) or absent.
+    """
+    if not line.startswith(_DERIVED_MARKER_PREFIX):
+        return None
+    try:
+        data = json.loads(line[len(_DERIVED_MARKER_PREFIX) :])
+    except json.JSONDecodeError:
+        return None
+    if not isinstance(data, dict) or "applicable" not in data:
+        return None
+    return data
+
+
+def is_marker_prefixed(line: str) -> bool:
+    """True for any line carrying the derived-marker prefix, decodable or not.
+
+    Lets a caller distinguish a *malformed* derived marker (prefix present,
+    JSON unparseable → `decode_derived_acceptance` returns None) from a real
+    human-declared prose bullet (no prefix). A malformed marker must be
+    treated as ABSENT (re-derive) — never as a declared spec or enforceable
+    args (review finding 4).
+    """
+    return line.startswith(_DERIVED_MARKER_PREFIX)
+
+
+def acceptance_needs_derivation(bullets: tuple[str, ...]) -> bool:
+    """True when the task should run the derivation pre-pass.
+
+    Derivation is SKIPPED only when a DECODABLE derived marker (C) is already
+    present — that run is done and deterministic. Everything else needs
+    derivation: an empty tuple; a human-declared PROSE bullet (B), which is
+    fed to the model as an intent HINT, never run as argv (review finding 2);
+    and a MALFORMED derived marker, treated as absent so a corrupt write-back
+    self-heals instead of wedging the task (review finding 4).
+    """
+    return all(decode_derived_acceptance(line) is None for line in bullets)
 
 
 @dataclass(frozen=True)
@@ -200,11 +304,12 @@ class Skill(ABC):
         """
         return []
 
-    def acceptance_spec(self, task: object) -> tuple[str, str] | None:
-        """`(command, expected_observable)` for "actually works", or None.
+    def acceptance_spec(self, task: object) -> AcceptanceSpec | None:
+        """The "actually works" check for this task, or None.
 
         Default `None` — a plain Skill declares no acceptance contract.
-        Adapters override (python-cli returns the built-in default-floor).
+        Adapters override (python-cli returns the precedence B→C→A spec,
+        the default-floor being `applicable=False`).
         """
         return None
 
