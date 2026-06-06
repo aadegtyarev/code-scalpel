@@ -169,7 +169,9 @@ async def _verify_acceptance(
         _emit_acceptance_card(on_tool_executed, command=None, ok=True, reason="no adapter")
         return outcome
 
-    verdict, command, reason, applicable, source = await _run_smoke(agent, adapter, task)
+    verdict, command, reason, applicable, source, smoke_output = await _run_smoke(
+        agent, adapter, task
+    )
     ok = verdict == "passed"
     card_reason = None if ok else reason
     if verdict == "noop":
@@ -188,6 +190,12 @@ async def _verify_acceptance(
     # applicable spec on an early not-built-yet task is observational — the
     # outcome from checks 1-3 stands (the load-bearing no-regression invariant
     # + the greenfield not-built-yet case; arch §"Timing fix").
+    # Carry the failing run-smoke output inline so the run loop can hand it to
+    # `code_with_retry` as the self-fix failure signal (feature 3, KD2). Set on
+    # any non-passing applicable verdict — the loop reads it only at the
+    # demoting position; a within-turn signal, never persisted (Q2-A).
+    if not ok and applicable and smoke_output is not None:
+        outcome = dataclasses.replace(outcome, acceptance_output=smoke_output)
     if applicable and should_run_now and not ok:
         return _demote(outcome)
     return outcome
@@ -223,12 +231,14 @@ async def _run_smoke(
     agent: StepAgent,
     adapter: object,
     task: Task,
-) -> tuple[str, str | None, str | None, bool, str | None]:
+) -> tuple[str, str | None, str | None, bool, str | None, str | None]:
     """Execute the adapter's acceptance run-smoke.
 
-    Returns `(verdict, command, reason, applicable, source)`. `verdict` is
-    one of `passed` / `failed` / `noop`; `applicable` is the enforcement gate
-    the caller demotes on. Runs the code-owned acceptance command at
+    Returns `(verdict, command, reason, applicable, source, output)`. `verdict`
+    is one of `passed` / `failed` / `noop`; `applicable` is the enforcement gate
+    the caller demotes on; `output` is the raw run-smoke `ToolResult.output` on
+    a failing dispatch (the feature-3 self-fix signal, KD2) and `None` when no
+    command ran. Runs the code-owned acceptance command at
     trust="yolo" through the same `execute()` boundary (so it inherits trust /
     policy / bwrap gating; timeout + sandbox from config — no magic number).
     Exit-0-or-fail: no exit-4/5 leniency. When `spec.expected` is non-empty, a
@@ -251,7 +261,7 @@ async def _run_smoke(
         # package. Recording a visible noop (no demotion) keeps a healthy
         # project from being false-failed; the malformed marker self-heals on
         # the next derivation run. Recover source from the task for feature 3.
-        return "noop", None, "malformed-args", False, _task_acceptance_source(task)
+        return "noop", None, "malformed-args", False, _task_acceptance_source(task), None
     except ValueError:
         # `resolve_pkg` could not resolve a runnable package. Applicability and
         # source are properties of the TASK's acceptance representation, not of
@@ -264,12 +274,13 @@ async def _run_smoke(
             "pkg-unresolvable",
             _adapter_applicable(adapter, task),
             _task_acceptance_source(task),
+            None,
         )
     if spec is None:
         # An adapter that flags provides_acceptance but returns no spec — a
         # self-contradictory state. Record a visible no-op rather than passing
         # silently; nothing runnable to verify.
-        return "noop", None, "no acceptance spec", False, None
+        return "noop", None, "no acceptance spec", False, None, None
 
     # `spec.command` is the adapter's code-owned argv-string (the verb is the
     # adapter's; only the args are model/human-influenced — KD3). Re-derive the
@@ -289,13 +300,27 @@ async def _run_smoke(
         sandbox=agent._config.agent.sandbox,
     )
     if not result.ok:
-        return "failed", command, _failure_reason(result), spec.applicable, spec.source
+        return (
+            "failed",
+            command,
+            _failure_reason(result),
+            spec.applicable,
+            spec.source,
+            result.output,
+        )
     # Exit 0. With a non-empty `expected` observable the deliverable must also
     # actually print it — guards the false-green where a CLI exits 0 while
     # producing nothing. The floor (`expected == ""`) stays exit-0-only.
     if spec.expected and spec.expected not in result.output:
-        return "failed", command, "expected-missing", spec.applicable, spec.source
-    return "passed", command, None, spec.applicable, spec.source
+        return (
+            "failed",
+            command,
+            "expected-missing",
+            spec.applicable,
+            spec.source,
+            result.output,
+        )
+    return "passed", command, None, spec.applicable, spec.source, None
 
 
 def _adapter_applicable(adapter: object, task: Task) -> bool:
