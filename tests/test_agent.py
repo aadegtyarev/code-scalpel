@@ -1045,6 +1045,9 @@ def _retry_config(*, max_debug_attempts: int = 2, require_tests: bool = False) -
             # Plan-annotation pass fires an extra LLM call; mocks have
             # a fixed response queue. Tests opt back in explicitly.
             auto_annotate_plan=False,
+            # Acceptance derivation also fires an extra LLM call/task; off
+            # here for the same fixed-queue reason. Dedicated tests opt in.
+            auto_derive_acceptance=False,
         ),
     )
 

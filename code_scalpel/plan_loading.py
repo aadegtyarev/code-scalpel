@@ -14,6 +14,7 @@ from contextlib import suppress
 from typing import TYPE_CHECKING
 
 from code_scalpel.plan import Task, parse_tasks_md
+from code_scalpel.skills import acceptance_adapter
 from code_scalpel.tools.agent_tools import ToolCall, ToolResult
 
 if TYPE_CHECKING:
@@ -106,6 +107,15 @@ async def _pre_loop_passes(
             agent, tasks_path, original_text, tasks, on_tool_executed
         )
 
+    # Derive an args-only acceptance spec for each task that declares none AND
+    # whose project has an acceptance adapter, then write it back so the next
+    # run is deterministic (KD5). Composes with the annotation pass above: each
+    # re-hashes after its own write, neither clobbers the other.
+    if agent._config.agent.auto_derive_acceptance and acceptance_adapter(agent._cwd) is not None:
+        original_text, initial_hash, tasks = await _derive_acceptance(
+            agent, tasks_path, original_text, tasks, on_tool_executed
+        )
+
     # Detect + resolve architectural forks before the first task. Gated on a
     # resolver actually being wired (no resolver → headless run, nothing to do).
     if (
@@ -182,3 +192,94 @@ def _emit_annotate_card(
     call = ToolCall(name="annotate_plan", body="{}")
     with suppress(Exception):
         on_tool_executed(call, ToolResult(call, output=output, ok=ok))
+
+
+async def _derive_acceptance(
+    agent: StepAgent,
+    tasks_path: Path,
+    original_text: str,
+    tasks: tuple[Task, ...],
+    on_tool_executed: Callable[[ToolCall, ToolResult], None] | None,
+) -> tuple[str, str, tuple[Task, ...]]:
+    """Derive an args-only acceptance spec for each task lacking one, write back.
+
+    Returns the (possibly updated) `(original_text, initial_hash, tasks)`. The
+    write-back targets the JSON-canonical representation (round-trips via
+    `task_from_json`) and the typed `tasks` tuple is returned directly — never
+    re-parsed from markdown, which drops typed fields (finding 7). The markdown
+    sentinel is re-rendered + re-hashed so the loop sees its OWN write, not a
+    user mid-run edit. A failed derivation leaves the task untouched (falls
+    back to the observational floor — failure-path 9); a write-back disk error
+    keeps the in-memory derived tasks for this run (failure-path 10).
+    """
+    from code_scalpel.agent import _hash_text
+
+    _emit_annotate_card(on_tool_executed, "Deriving acceptance specs (1 LLM pass/task)…", ok=True)
+    new_tasks, lines = await _derive_specs_for_tasks(agent, tasks)
+    if new_tasks == tasks:
+        _emit_annotate_card(
+            on_tool_executed, "Acceptance derivation added no enforceable specs.", ok=True
+        )
+        return original_text, _hash_text(original_text), tasks
+
+    new_text, persisted = _persist_derived_tasks(tasks_path, new_tasks)
+    _emit_annotate_card(on_tool_executed, "\n".join(["Acceptance specs derived:", *lines]), ok=True)
+    # When the write-back failed (disk error), the new tasks are used in-memory
+    # this run but the on-disk sentinel is unchanged — return the OLD hash so
+    # the loop matches disk and does NOT stop with `plan_modified` (failure-
+    # path 10); the next run re-derives.
+    sentinel = _hash_text(new_text) if persisted else _hash_text(original_text)
+    return new_text, sentinel, new_tasks
+
+
+async def _derive_specs_for_tasks(
+    agent: StepAgent,
+    tasks: tuple[Task, ...],
+) -> tuple[tuple[Task, ...], list[str]]:
+    """Run the derivation per task lacking acceptance; return (new_tasks, card_lines).
+
+    Only tasks with an empty `acceptance` are derived (a declared B spec is
+    left untouched). A None derivation (LLM/parse error) leaves the task
+    unchanged so it falls back to the observational floor.
+    """
+    import dataclasses
+
+    from code_scalpel.skills.base import encode_derived_acceptance
+
+    out: list[Task] = []
+    lines: list[str] = []
+    for task in tasks:
+        if task.acceptance:
+            out.append(task)
+            continue
+        data = await agent.derive_acceptance_args(task)
+        if data is None:
+            out.append(task)
+            continue
+        applicable = bool(data.get("applicable", False))
+        args = str(data.get("args", ""))
+        expected = str(data.get("expected", ""))
+        marker = encode_derived_acceptance(applicable=applicable, args=args, expected=expected)
+        out.append(dataclasses.replace(task, acceptance=(marker,)))
+        verdict = "enforced" if applicable else "observed (no runnable CLI)"
+        lines.append(f"  {task.id}: {verdict}")
+    return tuple(out), lines
+
+
+def _persist_derived_tasks(tasks_path: Path, new_tasks: tuple[Task, ...]) -> tuple[str, bool]:
+    """Write derived tasks to TASKS.json (canonical) + re-render the markdown
+    sentinel; return (new_markdown_text, persisted). A disk error is swallowed
+    so the derived tasks are still used in-memory this run (failure-path 10);
+    `persisted=False` then tells the caller to keep the on-disk sentinel.
+    """
+    from code_scalpel.agent import _atomic_write
+    from code_scalpel.plan import render_tasks_markdown, serialize_tasks_json
+
+    new_text = render_tasks_markdown(new_tasks)
+    try:
+        json_path = tasks_path.parent / "TASKS.json"
+        _atomic_write(json_path, serialize_tasks_json(new_tasks))
+        _atomic_write(tasks_path, new_text)
+    except OSError:
+        return new_text, False
+    return new_text, True

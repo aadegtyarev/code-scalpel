@@ -222,6 +222,22 @@ _DEBUG_PASS_SCHEMA = {
     "additionalProperties": False,
 }
 
+# Args-only acceptance derivation (KD3): the model may return ONLY whether a
+# runnable CLI deliverable exists, the subcommand args that exercise it, and
+# the output substring that proves it worked — NEVER a free-form shell command.
+# The adapter builds the actual argv from `args`. Kept to the loose three-field
+# top-level shape per the PLAN_JSON_SCHEMA lesson (14b ignores tight schemas).
+_DERIVE_ACCEPTANCE_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "applicable": {"type": "boolean"},
+        "args": {"type": "string"},
+        "expected": {"type": "string"},
+    },
+    "required": ["applicable", "args", "expected"],
+    "additionalProperties": False,
+}
+
 
 @dataclass(frozen=True)
 class PatchAttempt:
@@ -2119,6 +2135,38 @@ class StepAgent:
             temperature=0.2,
         )
         return await self.run_narrow_pass(pass_spec, truncated)
+
+    async def derive_acceptance_args(self, task: Task) -> dict[str, Any] | None:
+        """Args-only acceptance derivation — one schema-enforced narrow pass.
+
+        Returns `{applicable, args, expected}` parsed from the sampler-enforced
+        JSON, or None on any error / non-conforming reply (the caller then
+        falls back to the observational default-floor — failure-path 9, no
+        crash, no fabricated enforcement). The model never emits a shell
+        command; the adapter builds the argv from `args` (KD3). The prompt is
+        adapter-agnostic — it judges task intent, not a specific language.
+        """
+        from code_scalpel.narrow_pass import NarrowPass
+
+        user_message = (
+            f"Task {task.id}: {task.title}\n"
+            f"Goal: {task.goal}\n"
+            f"Files: {', '.join(task.files) if task.files else '(none listed)'}\n"
+        )
+        pass_spec = NarrowPass(
+            name="derive_acceptance",
+            system_prompt=_prompts.DERIVE_ACCEPTANCE,
+            temperature=0.0,
+            output_schema=_DERIVE_ACCEPTANCE_SCHEMA,
+        )
+        try:
+            result = await self.run_narrow_pass(pass_spec, user_message)
+            data = json.loads(result.text)
+        except (Exception, json.JSONDecodeError):
+            return None
+        if not isinstance(data, dict) or "applicable" not in data:
+            return None
+        return data
 
     async def per_step_review(
         self,
