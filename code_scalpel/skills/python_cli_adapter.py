@@ -54,6 +54,9 @@ class PythonCliAdapter(Skill):
     # Detection-only for the registry's test-path selection: PythonSkill
     # owns the test runner for Python projects. See module docstring.
     provides_test_runner = False
+    # Owns the python-cli acceptance/run-smoke contract — the run-loop's
+    # verification #4 selects this adapter via `acceptance_adapter`.
+    provides_acceptance = True
     # Excluded from every model-facing listing (catalog / detected hint /
     # /skills) while staying get_skill-discoverable. See module docstring.
     hidden = True
@@ -68,6 +71,15 @@ class PythonCliAdapter(Skill):
         # to — a python-cli project IS a Python project, so the adapter
         # reuses PythonSkill verbatim instead of duplicating its commands.
         self._py = PythonSkill()
+
+    def bind(self, root: Path) -> Skill:
+        """Return a root-bound adapter so `run_smoke`/`acceptance_spec` resolve.
+
+        The registry holds a rootless discovery singleton (detect only); the
+        run-loop binds it to the project root before asking for the run-smoke
+        command, so `<pkg>` resolves deterministically instead of raising.
+        """
+        return PythonCliAdapter(root=root)
 
     def detect(self, root: Path) -> bool:
         return self._py.detect(root)

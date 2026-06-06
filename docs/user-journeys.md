@@ -101,17 +101,21 @@ work through it.
 |---|---|---|---|
 | 1. | Runs `/go` and picks a scope (next task / full plan / manual retry) | The agent ensures a git repo exists, then executes tasks one by one | No git repo — the agent auto-inits one with a starter `.gitignore` |
 | 2. | Watches per-task progress cards | Each task: read → write → test → commit, with optional per-step review and test-sanity checks | A task fails repeatedly — the loop stops after N consecutive failures, keeping partial progress on disk |
-| 3. | (at a fork) Sees a choice card or auto-resolution | At skeptic a choice card waits; at optimist a timed card; at yolo it auto-resolves (critical forks still pause) | The auto-pick is wrong — recorded for later override review |
-| 4. | Sees the run summary | Tasks done/failed, commits made, any pending upstream forks | The model forgot to commit — an auto-commit hook commits the task for it |
-| 5. | (optional) Runs `/escalate` or lets `/go` end | Pending forks are flushed through a stronger upstream model in one batch; disagreements are surfaced as overrides | Upstream model swap fails — forks reported unresolved, no silent code rewrite |
+| 3. | Sees, per task, whether the deliverable actually ran | A card showing the agent ran the finished deliverable the way a user would (e.g. asking it for its help text) and whether it ran cleanly — surfaced as information about the deliverable | The deliverable doesn't run at all (the classic "looked done but never executed" case) — the failed run is shown, but in this version it does **not** change whether the task counts as done; for project types with no run-check the card just notes it was skipped |
+| 4. | (at a fork) Sees a choice card or auto-resolution | At skeptic a choice card waits; at optimist a timed card; at yolo it auto-resolves (critical forks still pause) | The auto-pick is wrong — recorded for later override review |
+| 5. | Sees the run summary | Tasks done/failed, commits made, any pending upstream forks | The model forgot to commit — an auto-commit hook commits the task for it |
+| 6. | (optional) Runs `/escalate` or lets `/go` end | Pending forks are flushed through a stronger upstream model in one batch; disagreements are surfaced as overrides | Upstream model swap fails — forks reported unresolved, no silent code rewrite |
 
 **Drop-off points:** a stalled task that keeps failing; an auto-resolved
 fork the developer disagrees with.
 
 **Invariants:** per-task git HEAD must advance or the task is `failed`;
-overrides never auto-rewrite code. Trust-driven fork resolution, status
-taxonomy, and stop reasons — see `docs/architecture.md` `## Behavioral
-contract` and `## State model`.
+overrides never auto-rewrite code. The deliverable run-check (run-smoke) is
+**informational in this version** — its verdict is recorded and surfaced
+but does **not** decide which tasks are marked done or failed (enforcement
+arrives in a later feature). Trust-driven fork resolution, status taxonomy,
+the run-smoke verdict values, and stop reasons — see
+`docs/architecture.md` `## Behavioral contract` and `## State model`.
 
 ---
 

@@ -3041,3 +3041,95 @@ async def test_run_plan_uses_task_test_command_when_not_pytest(project: Path) ->
 
     assert [o.status for o in result.outcomes] == ["failed"]
     assert result.tasks_completed == 0
+
+
+# ── acceptance gate active in the full run_plan loop ─────────────────────────
+
+
+def _python_cli_layout(project: Path, pkg: str = "notes_cli") -> None:
+    """Make `project` a python-cli root so `acceptance_adapter` resolves —
+    the run_plan acceptance gate (#4) becomes active."""
+    pkg_dir = project / "src" / pkg
+    pkg_dir.mkdir(parents=True)
+    (pkg_dir / "__init__.py").write_text("")
+    (pkg_dir / "__main__.py").write_text("")
+    (project / "pyproject.toml").write_text(
+        "[build-system]\nrequires=['hatchling']\nbuild-backend='hatchling.build'\n"
+        "[project]\nname='x'\nversion='0'\n"
+        f"[tool.hatch.build.targets.wheel]\npackages=['src/{pkg}']\n"
+    )
+
+
+@pytest.mark.asyncio
+async def test_plan_modified_still_stops_with_gate_active(project: Path) -> None:
+    """With the 4th check (acceptance gate) active on a python-cli project,
+    editing TASKS.md mid-run still yields stopped_reason == 'plan_modified' —
+    the new check does not suppress or race the plan-modified detection."""
+    from code_scalpel.tools.shell import ShellResult
+    from tests.mocks import MockShellRunner
+
+    _python_cli_layout(project)
+    tasks_path = _write_tasks(project, _TASKS_THREE)
+
+    called = {"n": 0}
+
+    def _meddle(task: Task) -> None:
+        called["n"] += 1
+        if called["n"] == 2:
+            tasks_path.write_text("## T999: foreign\n\nGoal: meddled\n")
+
+    # Task 1: pytest (from code_with_retry) passes, then run-smoke (gate)
+    # passes. Task 2 never runs — the meddle fires on its start hook.
+    llm = MockLLMAdapter([_GOOD_PATCH_NOOP])
+    shell = MockShellRunner(
+        [
+            ShellResult("1 passed", 0),  # code_with_retry pytest, task 1
+            ShellResult("usage: notes_cli", 0),  # acceptance run-smoke, task 1
+        ]
+    )
+    agent = StepAgent(llm=llm, cwd=project, config=_retry_config(), shell_runner=shell)
+
+    result = await agent.run_plan(on_task_start=_meddle)
+
+    assert result.stopped_reason == "plan_modified"
+    assert result.tasks_completed == 1
+    assert [o.status for o in result.outcomes] == ["done"]
+    # The gate ran the deliverable for task 1.
+    assert "python -m notes_cli --help" in shell.shell_calls
+    assert "foreign" in tasks_path.read_text()
+
+
+@pytest.mark.asyncio
+async def test_runsmoke_verdict_resumes_from_state(project: Path) -> None:
+    """A run records the run-smoke verdict in AgentState; a resumed run reads
+    the persisted verdict so acceptance-verified tasks are known."""
+    from code_scalpel.state import AgentState
+    from code_scalpel.tools.shell import ShellResult
+    from tests.mocks import MockShellRunner
+
+    _python_cli_layout(project)
+    _write_tasks(
+        project,
+        "## T001: ship cli\n\nGoal: ship\nFiles: hello.py\n"
+        "Acceptance:\n- runs\nTest command: pytest\n",
+    )
+
+    state = AgentState()
+    llm = MockLLMAdapter([_GOOD_PATCH_NOOP])
+    shell = MockShellRunner(
+        [
+            ShellResult("1 passed", 0),  # code_with_retry pytest
+            ShellResult("usage: notes_cli", 0),  # acceptance run-smoke
+        ]
+    )
+    agent = StepAgent(llm=llm, cwd=project, config=_retry_config(), shell_runner=shell, state=state)
+
+    result = await agent.run_plan()
+    assert result.tasks_completed == 1
+    assert state.last_acceptance_command == "python -m notes_cli --help"
+    assert state.last_acceptance_verdict == "passed"
+
+    # Persisted + reloaded → a resumed run sees the verdict.
+    state.save(project)
+    reloaded = AgentState.load(project)
+    assert reloaded.last_acceptance_verdict == "passed"

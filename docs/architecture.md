@@ -122,6 +122,11 @@ narratives about "watershed" versions were repeatedly disproven.
 **Status:** the N≥3 outcome probe is run **manually** today; it is **not**
 wired as an automated CI gate (the lint/type/test CI is — see Release
 flow). The automated outcome gate is v0.13 backlog `(inferred)`.
+**The `notes_cli` 3/3 `task_solved` release teeth move to feature 4**
+(`feat/acceptance-spec-in-tasks`): the acceptance run-smoke that gives
+`done` real meaning is observational in v0.14 (see *Acceptance run-smoke
+(verification #4)* below), so the 3/3 gate only becomes the binding
+release signal once the gate can demote on a CLI deliverable.
 
 ### ProjectAdapter — `Skill` as a superset run/scaffold/acceptance contract (v0.14)
 
@@ -159,11 +164,13 @@ src-layout), and the package gets a real `__main__.py` (a
 `[project.scripts]` console entry alone does **not** make `python -m <pkg>`
 work). The scaffold never clobbers existing files (fails loud) and rejects
 invalid package names before writing anything.
-**Status — contract-only / inert.** This feature only makes the contract
-*exist* and proves it with unit tests; **nothing in the run loop consumes
-these methods yet** — no change to `run_plan`, `code_with_retry`, or any
-verification step. The acceptance gate that consumes them is the next
-feature (`feat/acceptance-gate-run-plan`).
+**Status — contract landed; first run-loop consumer is the observational
+acceptance run-smoke (v0.14, see below).** This feature only made the
+contract *exist*; the run-loop consumer arrived with
+`feat/acceptance-gate-run-plan`, which reads `acceptance_spec` /
+`run_smoke` via a registry-resolved adapter but does **not** yet let them
+change a task verdict. `build_install`/`scaffold` remain unconsumed by the
+run loop.
 Source: `.ai-pm/arch/backend-redesign_arch.md` (Fork 1-A, migration step 1);
 `docs/features/project-adapter-abstraction_plan.md`; shipped in
 `code_scalpel/skills/base.py` + `python_cli_adapter.py` + `python_pkg.py`.
@@ -192,6 +199,54 @@ Source: `docs/features/project-adapter-abstraction_plan.md` (scenario 7 +
 interaction scenarios); shipped in `code_scalpel/skills/base.py`,
 `registry.py`, `__init__.py`.
 
+### Acceptance run-smoke (verification #4) in `run_plan` — observational (v0.14)
+
+**Chosen:** `run_plan` runs a 4th machine check after the existing three
+(declared `Files:` exist, `Test command:` exits 0, per-task git HEAD
+advanced). When a registry-resolved acceptance adapter detects the project
+root, the runner **runs the deliverable the way a user would** — the
+adapter's `acceptance_spec(task)` command (`python -m <pkg> --help` at the
+floor) through the existing gated `execute(...)` shell path — and
+**records + surfaces** the verdict (`passed` / `failed` / `noop`). The
+resolution is generic: `provides_acceptance: bool` flag on `Skill`, a
+polymorphic `Skill.bind(root)` (default `return self`; the adapter owns
+how it root-binds), and `SkillRegistry.acceptance_adapter(root)` (an
+unfiltered scan returning the first detecting `provides_acceptance` skill,
+root-bound) — so a future language adapter (feature 5) needs no run-loop
+edit.
+**Observational, not enforcing — never demotes (PM "plumbing only"
+decision).** This iteration ships the run-smoke **plumbing + observability
+only**: it records and surfaces the verdict but **never demotes a task to
+`failed`**. The `done | failed | skipped` taxonomy is **unchanged** and a
+`done` task does **not** require run-smoke to pass — checks 1–3 alone still
+decide the verdict. **Why deferral:** the floor adapter (`PythonCliAdapter`)
+detects *any* Python project and cannot tell a CLI deliverable from a plain
+library without a CLI-intent signal; demoting now would wrongly fail `/go`
+runs over Python **libraries** (a net-new regression). Hard enforcement
+(demote-on-failure behind the CLI-intent signal) is deferred to feature 4
+(`feat/acceptance-spec-in-tasks`).
+**Floor only.** The recorded `passed` is exit-0 at the floor
+(`expected == ""`); when an adapter returns a non-empty `expected`
+observable the run-smoke output must additionally contain it. A failing
+exit, a timeout, or an unresolvable package records `failed` with a reason
+string (`run-smoke exit N` / `timeout` / `pkg-unresolvable`); no adapter
+detecting the type records a logged `noop`. Richer round-trip specs
+(`add 'x' → list shows it`) and task-declared `Acceptance:` consumption are
+feature 4; the floor catches only the diagnosed "does not run at all"
+failure. The run-smoke command is **code-owned and deterministic** (resolved
+by `resolve_pkg`, never model-emitted) and executes at `trust="yolo"` as a
+plan-owned machine check, mirroring `_verify_task_test_command` (see
+`docs/threat-model.md` and `SC2`/`SC3`). Unlike the test-command check it
+does **not** inherit the pytest exit-4/5 leniency — a finished deliverable
+has no test-ordering excuse.
+Source: `.ai-pm/arch/backend-redesign_arch.md` (migration step 2);
+`.ai-pm/arch/acceptance-gate-run-plan_arch.md`;
+`docs/features/acceptance-gate-run-plan_plan.md`; PM re-scope in
+`.ai-pm/reviews/acceptance-gate-run-plan_review.md` `## Resolutions` #1;
+shipped in `code_scalpel/plan_runner.py` + `plan_loading.py` +
+`plan_post_checks.py` + `plan_verify.py` (`_verify_acceptance`),
+`skills/base.py` + `python_cli_adapter.py` + `registry.py`, `state.py`.
+
 ## Architectural constraints
 
 - **Stay inside the project root.** Subprocess cwd is pinned to the
@@ -210,7 +265,7 @@ interaction scenarios); shipped in `code_scalpel/skills/base.py`,
 - **AI-minimums (max ~300 lines/file, ~50/function, complexity ≤ 10) are
   convention, not linter-enforced today** — see `### AI-specific
   minimums`. Several core modules exceed the file ceiling (`agent.py`
-  ~3289 lines, `tui/app.py` ~2129 lines).
+  ~2840 lines, `tui/app.py` ~2129 lines).
 
 ## Operational limits & budgets
 
@@ -221,7 +276,8 @@ interaction scenarios); shipped in `code_scalpel/skills/base.py`,
 - `max_files: 3`, `max_file_lines: 400`, `max_output_tokens: 8192`
   defaults.
 - Per-call timeouts: `llm_timeout 120s`, `shell_exec_timeout 30s`,
-  `test_timeout 60s`, `git_timeout 10s`, `lint_pass_timeout 15s`.
+  `test_timeout 60s`, `git_timeout 10s`, `lint_pass_timeout 15s`. The
+  acceptance run-smoke reuses `shell_exec_timeout` (no new tunable).
 - Fork human-decision timers: optimist `120s`, yolo+critical `60s`.
 - **No RAM / boot budget asserted by code — `[?]`.** Single-GPU VRAM is the
   real constraint behind the upstream model-swap, but no number is pinned;
@@ -235,12 +291,16 @@ interaction scenarios); shipped in `code_scalpel/skills/base.py`,
 | `code_scalpel/__init__.py` | package init; `__version__` resolved from installed metadata (no hardcoded literal) |
 | `code_scalpel/__main__.py` | `python -m code_scalpel` entry → `cli.app` |
 | `code_scalpel/runtime.py` | **Composition channel**: owns session+llm+memory+agent; `stream/ask/code_with_retry/fork/flush_upstream`; the one path every entry point shares |
-| `code_scalpel/agent.py` | **StepAgent** — the core engine (~3289 LOC): tool loop, `stream_ask`, `code_with_retry`, `run_plan`, narrow passes, compaction, fork detection, plan execution |
+| `code_scalpel/agent.py` | **StepAgent** — the core engine (~2840 LOC): tool loop, `stream_ask`, `code_with_retry`, narrow passes, compaction, fork detection; `run_plan` is now a thin delegator to `PlanRunner` (strangled out — agent.py shrank ~450 lines) |
+| `code_scalpel/plan_runner.py` | **PlanRunner** — the per-task `run_plan` execution loop strangled out of `agent.py` (re-hash/plan_modified, streak/threshold, auto-commit hook, callback timing); `StepAgent.run_plan` delegates `PlanRunner(self).run(...)` |
+| `code_scalpel/plan_loading.py` | TASKS.json/TASKS.md load + per-iteration re-hash + skill annotation for the run loop (extracted alongside the strangle) |
+| `code_scalpel/plan_post_checks.py` | post-task hooks for the run loop (auto-commit, plan annotation) extracted alongside the strangle |
+| `code_scalpel/plan_verify.py` | per-task Definition-of-Done machine checks: `Files:` exist, `Test command:` exit-0, git HEAD advanced (all demoting), and **verification #4 `_verify_acceptance`** — the registry-resolved acceptance run-smoke that **records/surfaces but never demotes** (observational; see the Acceptance run-smoke decision) |
 | `code_scalpel/config.py` | pydantic config (`AppConfig`/`AgentConfig`/`ModelProfile`/`ModeTemperatures`), layered YAML loader, context autodetect |
 | `code_scalpel/classifier.py` | pure keyword heuristic → `TaskType` (question/design/implement/debug/refactor/new_project) |
 | `code_scalpel/policy.py` | trust-level decisions + hard-block command patterns (`decide`, `auto_confirm`) |
 | `code_scalpel/session.py` | per-turn token/cost accounting, `prepare_turn`, compact baselines |
-| `code_scalpel/state.py` | `AgentState` — `STATE.json` atomic persist/load for full resume |
+| `code_scalpel/state.py` | `AgentState` — `STATE.json` atomic persist/load for full resume; holds the `last_acceptance_command`/`_verdict`/`_reason` run-smoke fields (default-valued, forward-compatible) |
 | `code_scalpel/memory.py` | `MemoryStore` — sqlite+FTS5 project notes (`/remember`, `/recall`, auto-recall) |
 | `code_scalpel/recipes.py` | load `/learn`-generated recipes (eager/lazy) into context |
 | `code_scalpel/learn.py` | `/learn` — generate recipe/skill markdown from model knowledge or a URL |
@@ -262,7 +322,7 @@ interaction scenarios); shipped in `code_scalpel/skills/base.py`,
 | `code_scalpel/index/` | tree-sitter symbol index: `parser.py`, `walkers.py`, `signatures.py`, `shape.py`, `builder.py`, `model.py`, `retrieve.py` (BM25), `__init__.py` |
 | `code_scalpel/tools/` | agent tool surface: `agent_tools.py` (dispatch + JSON schemas), `files.py`, `git.py`, `search.py`, `shell.py`, `sandbox.py` (bwrap), `web_search.py` |
 | `code_scalpel/checks/` | machine checks: `lint_pass.py`, `import_graph.py`, `empty_tests.py`, `syntax_check.py` |
-| `code_scalpel/skills/` | per-stack test/lint/format contracts + the ProjectAdapter superset: `base.py` (`Skill` ABC + `ScaffoldSpec`), `registry.py`, `python_skill.py`, `js_skill.py`, `go_skill.py`, `docker_skill.py`, `postgres_skill.py`, `sqlite_skill.py`, `python_cli_adapter.py` (first `ProjectAdapter`, `hidden`), `python_pkg.py` (`resolve_pkg` — deterministic `python -m <pkg>` resolution) |
+| `code_scalpel/skills/` | per-stack test/lint/format contracts + the ProjectAdapter superset: `base.py` (`Skill` ABC + `ScaffoldSpec` + `provides_acceptance`/`bind`), `registry.py` (+ `acceptance_adapter(root)` selector), `python_skill.py`, `js_skill.py`, `go_skill.py`, `docker_skill.py`, `postgres_skill.py`, `sqlite_skill.py`, `python_cli_adapter.py` (first `ProjectAdapter`, `hidden`, `provides_acceptance=True`, root-binding `bind`), `python_pkg.py` (`resolve_pkg` — deterministic `python -m <pkg>` resolution) |
 | `code_scalpel/patch/` | `edit_block.py` — SEARCH/REPLACE parse + apply (fallback patch engine) |
 | `code_scalpel/mermaid/` | mermaid parse + ASCII layout/render (`parser.py`, `layout.py`, `render.py`, `classes.py`, `sequence.py`) |
 | `code_scalpel/prompts/` | all model-facing prompts as `.md` (system, mode_*, narrow passes, `retry/*`, `skills/*`); `__init__.py` is the single loader |
@@ -350,6 +410,13 @@ Pure keyword heuristic, word-boundary regex, first rule wins:
 `(inferred)`). `skipped` is a stop reason — the model must perform a task.
 Per-task git HEAD must advance (sha ≠ prev) or the task is `failed`;
 auto-commit hook commits `<task.id>: <task.title>` if the model forgot.
+**A 4th machine check (acceptance run-smoke, verification #4) also runs but
+is observational — it records a separate run-smoke verdict
+(`passed`/`failed`/`noop`) and never changes this status enum**: a `done`
+task does **not** (yet) require run-smoke to pass. The run-smoke verdict is
+a distinct `AgentState` field, not an outcome status; hard enforcement
+(demote-on-failure) lands in feature 4 (see the Acceptance run-smoke
+decision in `## Architectural decisions` and `## State model`).
 
 ### Tool surface (function-calling schemas)
 
@@ -402,6 +469,9 @@ for json_schema fork resolution, not for tool loops.
   `## State model`.
 - **Dispatch never raises:** the tool boundary returns a `ToolResult`,
   never an exception — stated inline above (tool surface).
+- **Acceptance run-smoke is observational:** verification #4 records and
+  surfaces a run-smoke verdict but never demotes a task — stated inline
+  above (task outcome status) and in `## State model`.
 - **Endpoint reachability:** the *First-time setup* journey requires a
   reachable LLM endpoint before any turn produces output (see
   `docs/user-journeys.md`).
@@ -424,6 +494,16 @@ edges/triggers.
 | `done` | — | tests pass + git HEAD advanced (or auto-commit hook commits) | terminal success; marked `[✓]` in TASKS.md |
 | `failed` | — | tests fail / HEAD didn't move / verify fails; ≥ `stop_after_failures` consecutive → stop "max_failures" | net-new files kept on disk for inspection |
 | `skipped` | — | model skipped a required task | stop reason — not allowed silently |
+
+**Acceptance run-smoke verdict (per task, observational — does NOT gate the
+status above):** a separate field set on `AgentState`
+(`last_acceptance_verdict`): `passed` (run-smoke exit 0, and the non-empty
+`expected` observable present) · `failed` (non-zero exit / `timeout` /
+`pkg-unresolvable`, reason persisted) · `noop` (no acceptance adapter
+detected the project type) · `unknown` (default, never recorded). A `noop`
+never clobbers a prior `passed`/`failed`. This verdict is **recorded and
+surfaced only** — no edge in the table above is driven by it in v0.14
+(hard enforcement is feature 4).
 
 Loop-level stops: `all_done`, `no_tasks`, `plan_modified` (TASKS.md hash
 changed mid-run), `CancelledError` (ESC — already-marked tasks stay).
@@ -458,7 +538,9 @@ cancel.
 - **Outcome release-gate is N/A as an automated gate today.** The
   end-to-end probe (`notes_cli`, N≥3 to `task_solved`) is the *aspirational*
   release signal but is run **manually**; it is not wired as a required CI
-  check (v0.13 backlog `(inferred)`).
+  check (v0.13 backlog `(inferred)`). The `notes_cli` 3/3 teeth move to
+  feature 4 (`feat/acceptance-spec-in-tasks`), where the acceptance gate
+  can demote on a CLI deliverable.
 
 ## Security constraints
 
@@ -518,8 +600,11 @@ ruff-enforced today.** The live ruff `lint.select` is
 (too-many-statements/branches/returns/args/locals) and `C901` (mccabe
 complexity) families that would encode these numbers — so every minimum
 above is currently AI-self-policed, not linter-blocked. Several legacy
-modules already exceed the file ceiling (`agent.py` ~3289 lines,
-`tui/app.py` ~2129 lines, `tools/agent_tools.py`, `fork.py`).
+modules already exceed the file ceiling (`agent.py` ~2840 lines,
+`tui/app.py` ~2129 lines, `tools/agent_tools.py`, `fork.py`). The
+`run_plan` strangle (v0.14) cut `agent.py` from ~3289 to ~2840 lines and
+the extracted run-loop modules (`plan_runner.py`, `plan_loading.py`,
+`plan_post_checks.py`, `plan_verify.py`) are each within the file ceiling.
 **ruff cannot express max-lines-per-file or copy-paste detection at all**
 — those stay AI-review-backstopped (smell/hygiene review type) regardless
 of config.
