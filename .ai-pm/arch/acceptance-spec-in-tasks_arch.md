@@ -492,3 +492,294 @@ not return; *(b)* a `done` task WITH an applicable spec means the spec passed �
 no regression to record-only "done". Both halves are the discriminator's two
 failure modes; both must be tested (a library stays green/observational, a
 non-running CLI demotes).
+
+---
+
+## Timing fix (post-probe)
+
+> Added after the 3-run live `notes_cli` probe on `feat/acceptance-spec-in-tasks`
+> @ `caa564f` (fixture `notes_cli_empty` = greenfield/empty). The original note
+> (resolutions 1-5) is correct about *where* applicability lives and *how* the
+> spec is built; it got the **timing** wrong. This section corrects that one axis
+> and is additive — the `AcceptanceSpec` shape, the args-only constraint, the
+> adapter-owns-argv seam, and the library-no-regression lock all stand
+> unchanged. Only **when** applicability is judged and **when** enforcement
+> engages move.
+
+### What the probe exposed (evidence)
+
+Three runs, scores 7,7,4 — never 3/3 `task_solved` (the v0.14 goal). The
+mechanical checker's own `acceptance` criterion was **True at end of run**
+("CLI работает: add→list через app.py") — the deliverable *did* work — yet the
+gate scored it as if it hadn't, because **the gate never engaged**:
+
+- The pre-loop derivation card read `T001..T007: observed (no runnable CLI)` —
+  i.e. `_derive_specs_for_tasks` (`plan_loading.py:330`) wrote
+  `applicable: false` for **every** task.
+- The acceptance card then read `Acceptance run-smoke skipped (pkg-unresolvable)`.
+- Net: verification #4 was observational throughout (resolution 1's A-path),
+  exactly as designed for a library — but `notes_cli` is **not** a library, it
+  is a greenfield CLI build.
+
+### Root cause — applicability is judged against an empty filesystem
+
+`_derive_acceptance` runs **pre-loop** (`plan_loading.py:115-118`,
+`_pre_loop_passes`), before any task executes. On a greenfield fixture the repo
+is empty: no package, no `__main__.py`, nothing `resolve_pkg` can bind. Two
+distinct failure modes compound, and they are NOT the same defect:
+
+1. **Intent vs. state conflation in the derivation.** The prompt
+   (`prompts/derive_acceptance.md`) asks Q1 "**Is there** a runnable
+   command-line deliverable here?" The present-tense "is there" invites a
+   *filesystem* reading. On an empty repo the honest answer to "is there a
+   runnable CLI" is *no* — so the model returned `applicable: false`, and that
+   `false` was **persisted as a derived marker**. Because
+   `acceptance_needs_derivation` (`base.py:128-138`) skips any *decodable*
+   marker forever, the not-applicable verdict is **permanent for the whole run
+   and every resume** — enforcement is structurally disabled before the CLI is
+   ever built. This is the dominant failure mode the probe hit.
+2. **Per-task enforcement timing.** Even with intent correctly `true` for the
+   CLI, `_verify_acceptance` runs **per task** (`plan_runner.py:263` →
+   `plan_verify.py:90`). An early task (`T001 create package skeleton`) cannot
+   run add→list yet — the deliverable legitimately isn't built. A per-task
+   enforcing gate would demote that early task as a false-negative. The original
+   note never addressed "applicable-but-not-built-yet"; it assumed applicability
+   alone is sufficient to enforce. It is not — you also need *"should be
+   runnable **by now**"*.
+
+The crux the spawn names: **"no runnable entrypoint" is the same observable for
+(a) an early greenfield task, (b) a finished library by design, and (c) a CLI
+that should run but is broken** (the diagnosed `__main__.py` coin-flip). The
+fix must demote (c) without false-demoting (a) or (b). Filesystem state alone
+cannot tell them apart — only *intent × position-in-plan × filesystem* can.
+
+### The three signals and what each can answer
+
+| Signal | Source | Derivable on empty repo? | Answers |
+|---|---|---|---|
+| **Intent** — "is this *meant* to be a runnable CLI deliverable?" | plan / task TEXT | **Yes** (pure text) | (b) library vs CLI |
+| **Position** — "has the plan reached the point where it *should* run?" | task index / a wiring marker | Yes (plan structure) | (a) not-built-yet vs should-run |
+| **State** — "does it actually run now?" | filesystem + run-smoke | No (needs files) | (c) should-run-but-broken |
+
+The original design collapsed Intent and State into one pre-loop LLM judgment.
+The fix **separates them**: judge Intent pre-loop (text-only, deterministic
+write-back), check State at verify-time (deterministic run-smoke, no LLM), and
+gate enforcement on Intent **AND** Position so an early greenfield task is
+observed, not demoted.
+
+### Decisions (options → recommendation)
+
+#### Q1 — WHEN to evaluate applicability + enforce
+
+**Recommendation: 1(a) — split intent (pre-loop, text-only) from enforcement
+(verify-time, filesystem), and gate enforcement on a position signal.** This is
+candidate (a) from the spawn, sharpened with (c)'s "enforce only at the point
+the deliverable should be runnable end-to-end".
+
+The decisive change is to **re-scope the derivation prompt from STATE to
+INTENT**. Q1 becomes "is this task's deliverable *meant to be* a runnable
+command-line program?" — answerable from task text on an empty repo, and
+**stable** across the whole build (it does not flip from false→true as files
+appear). notes_cli's tasks describe building a CLI with add/list/search/delete →
+intent `applicable: true`, derivable at task 0.
+
+Enforcement (the actual run-smoke + demote) stays at verify-time
+(`_verify_acceptance`) where files exist — but only **demotes** when three
+conditions hold together:
+
+```
+enforce = spec.applicable          # intent says "this is a CLI deliverable" (pre-loop, text)
+          AND should_run_now(task) # position says "the plan has reached runnability"
+          AND not run_smoke_ok     # state says "it does not actually run" (verify-time, deterministic)
+```
+
+When `spec.applicable` but NOT `should_run_now` → **observe** (record + card,
+no demote): the early-greenfield case (a). When NOT `spec.applicable` →
+**observe**: the library case (b), unchanged from feature 2. Only the
+should-run-now-but-broken case (c) demotes.
+
+- **Rejected 1(b) — single end-of-plan acceptance check.** Tempting (it
+  naturally sidesteps "not built yet" by only checking at the end) but it loses
+  per-task attribution: a 7-task plan that fails add→list at the end can't say
+  *which* task broke it, and feature 3's self-fix route-back keys off a per-task
+  failure signal (`plan_verify.py` records per-task command/verdict/reason). It
+  also can't demote the specific `done` task whose job was to wire the
+  entrypoint. Keep per-task, gate on position.
+- **Rejected 1(c) as stated — per-task derivation at verify-time.** Re-deriving
+  intent per task at verify-time would add an LLM call per task-completion
+  (Q3 forbids) and re-inject per-run nondeterminism into the gate (the exact
+  con resolution 3 closed by writing intent back once). We keep 1(c)'s good
+  half — "enforce only on the task(s) where the deliverable should now be
+  runnable end-to-end" — via the deterministic `should_run_now` position signal,
+  with **no** per-task LLM call.
+
+#### Q2 — HOW to distinguish should-run-but-broken (demote) from not-built-yet / library (observe)
+
+**Recommendation: the position signal `should_run_now(task)` is the new
+discriminator that flips an *applicable-intent* task from observe to enforce.**
+Where the signal lives, in precedence order:
+
+1. **The end-of-plan boundary (zero new model input, recommended baseline).** A
+   task is `should_run_now` when it is the **last not-done task in the plan** (or
+   the plan is on its final task). Rationale: by the last task an
+   applicable-intent project should be runnable end-to-end; earlier tasks may
+   not be. This is a pure plan-structure computation (`idx == last
+   not-done index`), available in `plan_runner.run_plan_inner` where
+   `enumerate(live_tasks)` already gives `idx`. Deterministic, no LLM, no
+   filesystem guess. It directly answers the spawn's "(e.g. only when an
+   applicable-intent project has reached a point where it SHOULD be runnable —
+   last task)". For notes_cli (a single wired deliverable built across tasks)
+   this enforces add→list exactly once, at the end, where the diagnosed
+   coin-flip (`__main__.py` present or not) is decided.
+2. **An optional intent-carried `runnable` / wiring marker (forward, not
+   required for the fix).** The pre-loop derivation already returns a per-task
+   judgment; it can additionally mark the task that *wires the entrypoint* (the
+   one whose Files include `__main__.py` / the console-script) as the
+   runnability point. This is a refinement of (1) for multi-deliverable plans;
+   the last-task baseline is sufficient for notes_cli and every single-deliverable
+   build, so ship (1) and leave (2) as a documented extension. **Both are
+   text/structure derivable on an empty repo** — neither needs files.
+
+Crucially, **State (run-smoke) is consulted ONLY when Intent AND Position both
+say "this should run now".** So:
+- Early greenfield task (a): Intent=true, Position=false → run-smoke is **not
+  run as a gate** (may still be recorded observationally) → never demotes.
+- Library (b): Intent=false → never reaches Position/State → observes. The
+  feature-2 / resolution-1 floor-never-applicable lock is **untouched**.
+- Should-run-but-broken (c): Intent=true, Position=true, run-smoke fails →
+  **demote**. This is the case that scored 4 in the probe and must turn into a
+  real failure signal so the model is forced to produce a runnable CLI (and,
+  with feature 3, repair it) to reach `task_solved`.
+
+The signal that flips "not runnable" from *ok, observe* to *fail, demote* is
+therefore: **`spec.applicable` (intent, persisted) AND `should_run_now` (position,
+computed in the run-loop) — at which point a failing run-smoke (state) demotes.**
+
+#### Q3 — cost / UX (no per-task LLM call at verify-time)
+
+**Recommendation: intent is derived ONCE pre-loop (cheap, text-only,
+write-back), and only the deterministic run-smoke is (re-)attempted at
+verify-time. Zero per-task LLM call at verify-time.** This is already the
+structure resolution 3 built (`_derive_acceptance` pre-loop + marker write-back);
+the fix changes *what the one pre-loop pass judges* (intent, not state), not
+*how often* it runs. `should_run_now` is a plan-index comparison — no model, no
+I/O. run-smoke at verify-time is the existing deterministic `execute()` path
+(`plan_verify.py:258-266`). So the per-run LLM budget is **unchanged**: one
+derivation pass per un-marked task, pre-loop, exactly as today.
+
+One UX note: the pre-loop card must stop reading `observed (no runnable CLI)`
+for an intent-applicable task. With the intent re-scope it reads e.g.
+`T00N: runnable CLI (enforced at final task)` for applicable tasks and
+`observed (library / no CLI)` only for genuinely non-CLI ones — so the operator
+can see at plan-start that enforcement *will* engage, and where.
+
+#### Q4 — invariants preserved
+
+All four hold unchanged — the fix touches timing, not the seams the invariants
+live on:
+
+- **Args-only.** The model still emits `{applicable, args, expected}` (now with
+  `applicable` meaning *intent*); the adapter still builds argv via
+  `run_smoke(args)`. No model-emitted shell. Untouched.
+- **Generality (no language string in the run-loop).** `should_run_now` is a
+  plan-index predicate — pure structure, zero language knowledge. The run-loop
+  still reads `spec.applicable` from the adapter and now ANDs it with a
+  structural bool it computes itself. `NodeCliAdapter` plugs in with no run-loop
+  edit (resolution 5 still holds — the position gate is language-neutral).
+- **Library no-regression.** Intent=false for a real library is **more** robust
+  under the re-scope, not less: an importable library is "not meant to be a
+  runnable CLI" regardless of build state, so the text-only judgment is stable
+  and the floor-never-applicable lock is intact. The Must-not-break test (a)
+  stands.
+- **PM "plumbing / observational where not applicable" stance.** Preserved and
+  *extended*: not-applicable observes (as before), AND applicable-but-not-yet-at-
+  runnability observes (new) — enforcement is now strictly the should-run-but-
+  broken case, the narrowest possible demoting surface.
+
+### Confirmation against the probe
+
+With this design the greenfield `notes_cli` run:
+1. Pre-loop: derivation judges **intent** from task text → `applicable: true` for
+   the CLI tasks (the build of add/list/search/delete is plainly a runnable CLI),
+   persisted as a derived marker — deterministic on resume.
+2. Tasks 1..N-1: Intent=true but Position=false (not the last task) → run-smoke
+   observed, **never demotes** — the early-not-built-yet case is safe.
+3. Final task: Intent=true AND Position=true → run-smoke `python -m notes_cli
+   add … list` runs at verify-time. If the model produced a runnable CLI
+   (the `__main__.py` is wired and add→list round-trips, matching `expected`) →
+   **passed**, task stays done → contributes to **3/3**. If the model produced
+   the GAVE_UP variant (no `__main__.py`) → run-smoke fails → **demote
+   done→failed** → the gate now has teeth exactly where the probe showed it had
+   none. A library or a non-CLI plan never reaches step 3's demote (Intent=false).
+
+So the gate **will enforce** on greenfield notes_cli and can reach 3/3 once the
+model emits a runnable CLI, while never false-demoting a library (b) or an early
+task (a). The 7,7,4 outcome was the gate failing to engage; this engages it at
+the one correct point.
+
+### Concrete seam changes (what differs from current implementation)
+
+1. **`prompts/derive_acceptance.md` — re-scope Q1 from STATE to INTENT.**
+   Change Q1 from "**Is there** a runnable command-line deliverable here?" to
+   "**Is this task's deliverable meant to be** a runnable command-line program?"
+   (intent, present-or-future, text-derivable on an empty repo). Add an explicit
+   line: *"Judge the task's intent from its description — do NOT assume the code
+   exists yet; a from-scratch build of a CLI is still `applicable: true`."* This
+   is the single change that fixes the dominant failure mode (the permanent
+   `applicable: false` write-back on greenfield). `args`/`expected` Q2/Q3 are
+   unchanged. The marker semantics (`encode_derived_acceptance`,
+   `base.py:87`) are unchanged — `applicable` now carries *intent*, same field,
+   same persistence.
+
+2. **`plan_runner.py` (`run_plan_inner`, the `enumerate(live_tasks)` loop,
+   ~`:142`) — compute and pass a `should_run_now` position signal into
+   `verify_task`.** Baseline: `should_run_now = (idx == last_not_done_index)`
+   (or equivalently "this is the final remaining task"). Pass it through
+   `verify_task(... , should_run_now=...)` at `:263`. Pure structure, no LLM, no
+   I/O. (Threaded as a new keyword arg — the verify call site is the only
+   caller.)
+
+3. **`plan_verify.py` (`verify_task` / `_verify_acceptance`, `:60-169`) — gate
+   demotion on `applicable AND should_run_now`, not `applicable` alone.** The
+   demotion branch at `:167` becomes
+   `if spec.applicable and should_run_now and not ok: return _demote(outcome)`.
+   When `applicable and not should_run_now`, the run-smoke result is still
+   **recorded + carded observationally** (so the operator sees progress and
+   feature 3 has a per-task trail) but never demotes — the not-built-yet case.
+   `_verify_acceptance` takes the new `should_run_now: bool` param threaded from
+   `verify_task`. The `assert not applicable` noop invariant (`:161`) is
+   unaffected (a noop still never demotes regardless of position).
+
+4. **`plan_loading.py` (`_derive_specs_for_tasks`, `:330`) — fix the card
+   wording** so an applicable task no longer prints `observed (no runnable
+   CLI)`. With the intent re-scope the verdict line becomes
+   `"runnable CLI (enforced at final task)"` for `applicable=true` and
+   `"observed (library / not a CLI)"` for `applicable=false`. No logic change
+   beyond the string — but it is load-bearing for operator trust (the probe's
+   misleading card is what masked the bug).
+
+5. **`python_cli_adapter.acceptance_spec` / `acceptance_applicable`
+   (`:125-165`) — NO change.** The adapter still reads the persisted
+   `applicable` from the marker and builds the spec; it has no knowledge of
+   position (correctly — position is plan structure, not adapter concern). The
+   `applicable` bool it returns now means *intent*; the run-loop ANDs it with
+   `should_run_now`. This keeps the adapter language-agnostic and the generality
+   proof (resolution 5) intact.
+
+**Net:** one prompt re-scope (the actual root-cause fix), one new structural
+bool computed in the run-loop and threaded through `verify_task`, one
+demotion-condition AND, and one card-string fix. No new LLM pass, no per-task
+verify-time derivation, no adapter change, no new language string in the loop.
+The original note's resolutions 1-5 stand; this section corrects only the
+intent-vs-state timing they conflated.
+
+### What this section does NOT change
+
+- The `AcceptanceSpec` dataclass, args-only schema, write-back-once discipline,
+  and the SC1/SC2/SC3 execution boundary (resolutions 2-4) — all unchanged.
+- The feature's own acceptance criterion and Must-not-break contract
+  (§"Acceptance criterion of the feature itself") — unchanged, and now actually
+  reachable on greenfield. Add one Must-not-break case from this section: *(c)*
+  an **early** task of an applicable-intent greenfield plan must NOT be demoted
+  before the plan reaches runnability (the not-built-yet false-demote), tested
+  alongside the existing library (a) and broken-CLI (b/demote) cases.
