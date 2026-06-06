@@ -1,0 +1,2 @@
+{"ts": "2026-05-30T20:31:59Z", "event": "step.start", "turn": 1, "mode": "plan"}
+{"ts": "2026-05-30T20:32:01Z", "event": "step.error", "error": "BadRequestError('Error code: 400 - {\\'error\\': {\\'message\\': \"Invalid schema for response_format \\'plan\\': In context=(\\'properties\\', \\'tasks\\', \\'items\\'), \\'required\\' is required to be supplied and to be an array including every key in properties. Missing \\'files\\'.\", \\'type\\': \\'invalid_request_error\\', \\'param\\': \\'response_format\\', \\'code\\': None}}')"}

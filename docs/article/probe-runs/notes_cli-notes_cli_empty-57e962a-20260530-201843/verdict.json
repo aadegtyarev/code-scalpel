@@ -1,0 +1,41 @@
+{
+  "scenario": "notes_cli",
+  "pass_score": 5,
+  "pass_max": 8,
+  "criteria": {
+    "package": {
+      "passed": true,
+      "detail": "1 непустых .py-файла(ов) с исходным кодом"
+    },
+    "four_commands": {
+      "passed": true,
+      "detail": "все 4 команды упомянуты"
+    },
+    "json_storage": {
+      "passed": true,
+      "detail": "json-сериализация + .json-хранилище найдены"
+    },
+    "tests_present": {
+      "passed": true,
+      "detail": "1 тест-файл(ов)"
+    },
+    "docs": {
+      "passed": true,
+      "detail": "README найден (README.md)"
+    },
+    "installable": {
+      "passed": false,
+      "detail": "editable/requirements install не прошёл: o/latest/config/build/\n      \n      As an example, if you intend to ship a directory named `foo` that resides within a `src` directory located at the root of your project, you can define the following:\n      \n      [tool.hatch.build.targets.wheel]\n      packages = [\"src/foo\"]\n      [end of output]\n  \n  note: This error originates from a subprocess, and is likely not a problem with pip.\nerror: metadata-generation-failed\n\n× Encountered error while generating package metadata.\n╰─> See above for output.\n\nnote: This is an issue with the package mentioned above, not pip.\nhint: See above for details."
+    },
+    "tests_pass": {
+      "passed": false,
+      "detail": "pytest упал (rc=1): _______ test_delete_note _______________________________\n\n    def test_delete_note():\n        subprocess.run(['python', 'notes/cli.py', 'add', 'Заметка для удаления'], capture_output=True, text=True)\n        with open('notes.json', 'r') as f:\n            notes = json.load(f)\n>           assert len(notes) == 1\nE           assert 5 == 1\nE            +  where 5 = len([None, None, None, None, None])\n\ntests/test_cli.py:29: AssertionError\n=========================== short test summary info ============================\nFAILED tests/test_cli.py::test_add_note - assert 2 == 1\nFAILED tests/test_cli.py::test_list_notes - AssertionError: assert 1 == 0\nFAILED tests/test_cli.py::test_search_notes - AssertionError: assert 1 == 0\nFAILED tests/test_cli.py::test_delete_note - assert 5 == 1\n4 failed in 0.31s"
+    },
+    "acceptance": {
+      "passed": false,
+      "detail": "точка входа есть, но add/list не сработали (1 кандидат(ов))"
+    }
+  },
+  "ended_reason": "task_solved",
+  "mechanical_solved": false
+}

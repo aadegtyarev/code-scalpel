@@ -1,0 +1,23 @@
+{
+  "user_turns": 1,
+  "agent_llm_requests": 21,
+  "prompt_tokens_total": 242589,
+  "completion_tokens_total": 5204,
+  "prompt_tokens_peak": 16153,
+  "tool_calls_total": 20,
+  "tool_calls_by_name": {
+    "annotate_plan": 2,
+    "web_learn": 2,
+    "write_file": 6,
+    "run_python": 1,
+    "shell_exec": 3,
+    "auto_load_skill": 1,
+    "load_skill": 1,
+    "project_map": 1,
+    "read_file": 2,
+    "run_tests": 1
+  },
+  "retries": 0,
+  "commits_landed": 3,
+  "wall_time_sec": 502.01
+}
