@@ -101,7 +101,7 @@ work through it.
 |---|---|---|---|
 | 1. | Runs `/go` and picks a scope (next task / full plan / manual retry) | The agent ensures a git repo exists, then executes tasks one by one | No git repo — the agent auto-inits one with a starter `.gitignore` |
 | 2. | Watches per-task progress cards | Each task: read → write → test → commit, with optional per-step review and test-sanity checks | A task fails repeatedly — the loop stops after N consecutive failures, keeping partial progress on disk |
-| 3. | Sees, per task, whether the deliverable actually ran | A card showing the agent ran the finished deliverable the way a user would (e.g. asking it for its help text) and whether it ran cleanly. Where the project has a runnable command-line deliverable, a `done` task now means the deliverable actually worked — a run that fails demotes the task to failed | The deliverable doesn't run at all (the classic "looked done but never executed" case) — the task is now demoted to failed instead of passing silently. For project types with no runnable deliverable (e.g. a library), the card just notes the run was informational and nothing is wrongly failed |
+| 3. | Sees, per task, whether the deliverable actually ran | A card showing the agent ran the finished deliverable the way a user would (e.g. asking it for its help text) and whether it ran cleanly. A task is **failed by this check only at the very end** — when the project is meant to be a runnable command-line tool, this is its final step, and the finished deliverable still doesn't actually run. Earlier steps (the tool isn't supposed to run yet) and projects with no runnable tool (e.g. a library) are only *observed*, never failed by it | At the final step the deliverable doesn't run at all (the classic "looked done but never executed" case) — that final task is demoted to failed instead of passing silently. An early step that is still building toward a runnable tool is shown informationally and is never failed by this check; a library or other non-CLI project is likewise only noted, never wrongly failed |
 | 4. | (at a fork) Sees a choice card or auto-resolution | At skeptic a choice card waits; at optimist a timed card; at yolo it auto-resolves (critical forks still pause) | The auto-pick is wrong — recorded for later override review |
 | 5. | Sees the run summary | Tasks done/failed, commits made, any pending upstream forks | The model forgot to commit — an auto-commit hook commits the task for it |
 | 6. | (optional) Runs `/escalate` or lets `/go` end | Pending forks are flushed through a stronger upstream model in one batch; disagreements are surfaced as overrides | Upstream model swap fails — forks reported unresolved, no silent code rewrite |
@@ -111,14 +111,17 @@ fork the developer disagrees with.
 
 **Invariants:** per-task git HEAD must advance or the task is `failed`;
 overrides never auto-rewrite code. The deliverable run-check (run-smoke)
-**now enforces where the project has a runnable command-line deliverable**:
-a `done` task with such a deliverable means the run actually passed, and a
-failing run demotes it. Projects/tasks with no runnable deliverable (e.g. a
-library) are unaffected — the check stays informational there, so they are
-never wrongly failed. The acceptance check may be auto-derived (one LLM
-pass per acceptance-less task at `/go`) and written into the plan so it is
-the same on every later run. Trust-driven fork resolution, status taxonomy,
-the run-smoke verdict values, and stop reasons — see `docs/architecture.md`
+**fails a task only when three things hold together**: the project is meant
+to be a runnable command-line tool, the task is the plan's **final step**
+(where the tool should be runnable end-to-end), and the finished deliverable
+**still doesn't run**. So a `done` final step of a CLI project means the
+tool really worked. **Earlier steps are never failed by this check** (the
+tool isn't supposed to run yet), and **projects with no runnable tool (e.g. a
+library) are never failed by it either** — the run stays informational there.
+The acceptance check may be auto-derived (one LLM pass per acceptance-less
+task at `/go`) and written into the plan so it is the same on every later
+run. Trust-driven fork resolution, status taxonomy, the run-smoke verdict
+values, and stop reasons — see `docs/architecture.md`
 `## Behavioral contract` and `## State model`.
 
 ---

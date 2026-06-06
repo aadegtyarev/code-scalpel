@@ -128,7 +128,13 @@ flow). The automated outcome gate is v0.13 backlog `(inferred)`.
 (see *Acceptance gate enforcement (verification #4)* below), so the 3/3
 gate is the live, enforced release signal — a task that doesn't actually
 run its derived CLI deliverable is demoted, no longer just recorded. The
-3/3 probe is still run manually before ship.
+3/3 probe is still run manually before ship. **Honest current bound:** the
+gate enforces only at the plan's final step (see the limitation in the
+*Acceptance gate enforcement* decision), so a plan whose runnable CLI is
+built by an earlier task and whose final task is non-CLI (tests/docs) is
+*observed*, not enforced — full consistent `notes_cli` 3/3 also depends on
+later work (feature 3, self-fixing mid-plan failures). The gate's current
+guarantee is "never false-fail; enforce at the final step where applicable".
 
 ### ProjectAdapter — `Skill` as a superset run/scaffold/acceptance contract (v0.14)
 
@@ -158,7 +164,10 @@ package run as `python -m <pkg>` is resolved from the project, never
 guessed, in fixed precedence — (1) the hatchling wheel target declared in
 `pyproject.toml`, (2) a single `-m`-runnable package under `src/` (has
 `__main__.py`), (3) a single package dir under `src/`; ambiguity or absence
-raises rather than guess.
+raises rather than guess. **Reach gap (documented):** resolution is
+**src-layout/hatchling only** today — a setuptools flat-layout project does
+not resolve and its acceptance run-smoke is **skipped** (recorded
+`pkg-unresolvable`, never demoted); flat-layout reach is a follow-up.
 **Scaffold honors the stack invariants (`docs/stack-notes.md`):** the
 emitted `pyproject.toml` declares
 `[tool.hatch.build.targets.wheel] packages = ["src/<pkg>"]` (hatchling
@@ -255,16 +264,41 @@ shipped in `code_scalpel/plan_runner.py` + `plan_loading.py` +
 ### Acceptance gate enforcement + derived/declared acceptance specs (v0.14)
 
 **Chosen:** verification #4 (the acceptance run-smoke) flips from
-record-only to **enforcing** — it demotes `done → failed` — but **only
-where an *applicable* acceptance spec exists**. The whole shape:
+record-only to **enforcing** — it demotes `done → failed` — but **only when
+three independent signals agree** (intent × position × state). This is the
+post-probe timing model that replaced the original "applicable alone
+enforces" rule, which a live greenfield probe showed never engaged (intent
+was being judged against an empty filesystem, so everything came back
+not-applicable). The whole shape:
 - **`AcceptanceSpec(command, expected, applicable, source)`** (frozen
   dataclass) replaces the old `(command, expected)` tuple. `command` is the
   adapter-built argv-string; `expected` is the observable substring (`""` =
-  exit-0-only); **`applicable` is the CLI-vs-library discriminator that
-  gates enforcement**; `source ∈ {declared, derived, floor}`.
-- **The default-floor never sets `applicable=True`** — the structural lock
-  so libraries and no-spec projects are **never** demoted (the feature-2
-  no-regression invariant cannot return).
+  exit-0-only); **`applicable` is the INTENT signal** (is this *meant* to be
+  a runnable CLI deliverable?); `source ∈ {declared, derived, floor}`.
+- **The three signals, demote IFF all three:**
+  - **Intent** — `spec.applicable`: judged **pre-loop from the plan/task
+    TEXT** ("is this deliverable *meant* to be a runnable CLI?"), **not**
+    from the filesystem, so it is stable from task 0 and correct on a
+    greenfield/empty repo. The default-floor never sets it, so libraries
+    and no-spec projects are not applicable.
+  - **Position** — `should_run_now`: computed in the run-loop as **pure
+    plan structure** (the task is the structurally **last not-done task**).
+    Pure structure, no LLM, no language string — answers "has the plan
+    reached the point where the deliverable should be runnable end-to-end?"
+  - **State** — `run_smoke_ok`: the **deterministic run-smoke at verify
+    time** (run the deliverable as a user would; non-empty `expected` must
+    appear). Needs files, so it is judged last.
+  Demotion fires **iff `applicable AND should_run_now AND not run_smoke_ok`**
+  — intent says CLI, position says it should run by now, state says it
+  doesn't. Anything else is **observational** (record + surface, no demote).
+- **Early-task observe guarantee (case c).** An **applicable but
+  non-final** task — the CLI exists in intent but is not yet supposed to be
+  runnable — is **observed, never demoted** (`should_run_now` is False).
+  This is what fixed the greenfield false-demote: building the CLI across
+  several tasks no longer fails the early skeleton task. Together with the
+  two existing locks — not-applicable (library) → observed, and the
+  default-floor → observed — only the *should-run-now-but-broken* case
+  demotes (the narrowest possible demoting surface).
 - **Spec precedence: derived (C) → floor (A).** A **narrow-pass-derived**
   spec (C) is **args-only**: the model returns `{applicable, args,
   expected}` and the **adapter** builds the run argv from `args` (no
@@ -276,33 +310,49 @@ where an *applicable* acceptance spec exists**. The whole shape:
   with no runnable-args shape, so executing it as argv false-demoted tasks;
   direct enforcement of a *structured* declared spec is a follow-up.
 - **The run-loop is language-agnostic.** It asks the `detect()`-selected
-  adapter for an `AcceptanceSpec`, runs `spec.command`, and branches on
-  `spec.applicable` — **zero language strings in the loop**. A future Node
-  adapter (feature 5) plugs in with no run-loop edit. A single
+  adapter for an `AcceptanceSpec`, runs `spec.command`, and ANDs
+  `spec.applicable` (from the adapter) with `should_run_now` (a structural
+  bool it computes itself) — **zero language strings in the loop**. A future
+  Node adapter (feature 5) plugs in with no run-loop edit. A single
   `acceptance_applicable(task)` adapter method is the one source of the
-  enforce-or-observe decision (used by both the normal and the
-  pkg-unresolvable paths, so applicability never diverges).
+  intent decision (used by both the normal and the pkg-unresolvable paths,
+  so applicability never diverges).
 **Why:** feature 2 shipped the run-smoke as observational because a
 demoting gate over *any* Python project wrongly fails libraries with no CLI
-deliverable. The applicability discriminator is what lets the gate finally
-have teeth without re-creating that regression — a `done` task with an
-applicable spec now means the deliverable actually ran, while libraries and
-spec-less projects keep feature-2's observational behavior untouched.
+deliverable. The applicability discriminator gives the gate teeth without
+re-creating that regression; the position signal then prevents the
+*greenfield* false-demote a live probe exposed (an early not-built-yet task
+must not be failed just because the CLI isn't wired yet). A `done` task that
+is applicable, final, and ran means the deliverable actually worked.
+**Known limitation (documented, honest under-enforcement).** Enforcement
+fires only on the **last not-done task** (the position proxy). When the
+runnable CLI is built by an **earlier** task and the **final** task is
+non-CLI (tests/docs), the gate **observes rather than enforces** — safe
+**under-enforcement** (it never produces a *false failure*, it just misses a
+real one). A fuller "deliverable complete" signal, plus the model
+self-fixing mid-plan failures (consistency), is later work (feature 3 /
+follow-up). The `resolve_pkg` **flat-layout reach gap** (src-layout/hatchling
+only — see the ProjectAdapter decision) compounds this: a setuptools
+flat-layout project skips run-smoke entirely, also under-enforcing. The
+current contract is therefore **"never false-fail; enforce at the final
+step where applicable"** — not yet "every broken intermediate CLI fails".
 **Taxonomy unchanged.** No new status — enforcement reuses the existing
 `done → failed` demotion (the edge that was inert in feature 2 now fires
-where an applicable spec exists). See `### Task outcome status` and
+where all three signals agree). See `### Task outcome status` and
 `## State model`.
 **Config:** `auto_derive_acceptance` (default `True`) gates the pre-loop
 derivation LLM pass (mirrors `auto_annotate_plan`); a headless/hermetic
 caller can disable it.
-Source: `.ai-pm/arch/acceptance-spec-in-tasks_arch.md` (resolutions 1–5);
-`docs/features/acceptance-spec-in-tasks_plan.md`; PM args-only security
-decision + the post-review B-is-a-hint resolution
-(`.ai-pm/reviews/acceptance-spec-in-tasks_review.md`); shipped in
-`code_scalpel/plan_verify.py`, `plan_loading.py`, `skills/base.py`
-(`AcceptanceSpec` + `acceptance_applicable`), `skills/python_cli_adapter.py`,
-`agent.py` (`derive_acceptance_args`), `config.py` (`auto_derive_acceptance`),
-`state.py`.
+Source: `.ai-pm/arch/acceptance-spec-in-tasks_arch.md` (resolutions 1–5
++ `## Timing fix (post-probe)`); `docs/features/acceptance-spec-in-tasks_plan.md`;
+PM args-only security decision + the post-review B-is-a-hint resolution
+(`.ai-pm/reviews/acceptance-spec-in-tasks_review.md`); the intent/position/
+state timing fix shipped in `code_scalpel/plan_verify.py` (the three-signal
+demotion gate), `plan_runner.py` (`should_run_now` position signal),
+`plan_loading.py`, `prompts/derive_acceptance.md` (intent-not-state re-scope),
+`skills/base.py` (`AcceptanceSpec` + `acceptance_applicable`),
+`skills/python_cli_adapter.py`, `agent.py` (`derive_acceptance_args`),
+`config.py` (`auto_derive_acceptance`), `state.py`.
 
 ## Architectural constraints
 
@@ -353,10 +403,10 @@ decision + the post-review B-is-a-hint resolution
 | `code_scalpel/__main__.py` | `python -m code_scalpel` entry → `cli.app` |
 | `code_scalpel/runtime.py` | **Composition channel**: owns session+llm+memory+agent; `stream/ask/code_with_retry/fork/flush_upstream`; the one path every entry point shares |
 | `code_scalpel/agent.py` | **StepAgent** — the core engine (~2840 LOC): tool loop, `stream_ask`, `code_with_retry`, narrow passes, compaction, fork detection; `run_plan` is now a thin delegator to `PlanRunner` (strangled out — agent.py shrank ~450 lines) |
-| `code_scalpel/plan_runner.py` | **PlanRunner** — the per-task `run_plan` execution loop strangled out of `agent.py` (re-hash/plan_modified, streak/threshold, auto-commit hook, callback timing); `StepAgent.run_plan` delegates `PlanRunner(self).run(...)` |
-| `code_scalpel/plan_loading.py` | TASKS.json/TASKS.md load + per-iteration re-hash + skill annotation for the run loop (extracted alongside the strangle) |
+| `code_scalpel/plan_runner.py` | **PlanRunner** — the per-task `run_plan` execution loop strangled out of `agent.py` (re-hash/plan_modified, streak/threshold, auto-commit hook, callback timing); computes the `should_run_now` position signal (last not-done task) and threads it into `verify_task`; `StepAgent.run_plan` delegates `PlanRunner(self).run(...)` |
+| `code_scalpel/plan_loading.py` | TASKS.json/TASKS.md load + per-iteration re-hash + skill annotation + pre-loop acceptance-intent derivation for the run loop (extracted alongside the strangle) |
 | `code_scalpel/plan_post_checks.py` | post-task hooks for the run loop (auto-commit, plan annotation) extracted alongside the strangle |
-| `code_scalpel/plan_verify.py` | per-task Definition-of-Done machine checks: `Files:` exist, `Test command:` exit-0, git HEAD advanced (all demoting), and **verification #4 `_verify_acceptance`** — the registry-resolved acceptance run-smoke that **demotes `done → failed` where an *applicable* `AcceptanceSpec` exists, else records/surfaces only** (v0.14; see the Acceptance gate enforcement decision) |
+| `code_scalpel/plan_verify.py` | per-task Definition-of-Done machine checks: `Files:` exist, `Test command:` exit-0, git HEAD advanced (all demoting), and **verification #4 `_verify_acceptance`** — the registry-resolved acceptance run-smoke that **demotes `done → failed` only when intent (`applicable`) × position (`should_run_now`) × state (failing run-smoke) all agree, else records/surfaces only** (v0.14; see the Acceptance gate enforcement decision) |
 | `code_scalpel/config.py` | pydantic config (`AppConfig`/`AgentConfig`/`ModelProfile`/`ModeTemperatures`), layered YAML loader, context autodetect |
 | `code_scalpel/classifier.py` | pure keyword heuristic → `TaskType` (question/design/implement/debug/refactor/new_project) |
 | `code_scalpel/policy.py` | trust-level decisions + hard-block command patterns (`decide`, `auto_confirm`) |
@@ -383,10 +433,10 @@ decision + the post-review B-is-a-hint resolution
 | `code_scalpel/index/` | tree-sitter symbol index: `parser.py`, `walkers.py`, `signatures.py`, `shape.py`, `builder.py`, `model.py`, `retrieve.py` (BM25), `__init__.py` |
 | `code_scalpel/tools/` | agent tool surface: `agent_tools.py` (dispatch + JSON schemas), `files.py`, `git.py`, `search.py`, `shell.py`, `sandbox.py` (bwrap), `web_search.py` |
 | `code_scalpel/checks/` | machine checks: `lint_pass.py`, `import_graph.py`, `empty_tests.py`, `syntax_check.py` |
-| `code_scalpel/skills/` | per-stack test/lint/format contracts + the ProjectAdapter superset: `base.py` (`Skill` ABC + `ScaffoldSpec` + `provides_acceptance`/`bind`), `registry.py` (+ `acceptance_adapter(root)` selector), `python_skill.py`, `js_skill.py`, `go_skill.py`, `docker_skill.py`, `postgres_skill.py`, `sqlite_skill.py`, `python_cli_adapter.py` (first `ProjectAdapter`, `hidden`, `provides_acceptance=True`, root-binding `bind`), `python_pkg.py` (`resolve_pkg` — deterministic `python -m <pkg>` resolution) |
+| `code_scalpel/skills/` | per-stack test/lint/format contracts + the ProjectAdapter superset: `base.py` (`Skill` ABC + `ScaffoldSpec` + `provides_acceptance`/`bind`), `registry.py` (+ `acceptance_adapter(root)` selector), `python_skill.py`, `js_skill.py`, `go_skill.py`, `docker_skill.py`, `postgres_skill.py`, `sqlite_skill.py`, `python_cli_adapter.py` (first `ProjectAdapter`, `hidden`, `provides_acceptance=True`, root-binding `bind`), `python_pkg.py` (`resolve_pkg` — deterministic `python -m <pkg>` resolution, src-layout/hatchling only) |
 | `code_scalpel/patch/` | `edit_block.py` — SEARCH/REPLACE parse + apply (fallback patch engine) |
 | `code_scalpel/mermaid/` | mermaid parse + ASCII layout/render (`parser.py`, `layout.py`, `render.py`, `classes.py`, `sequence.py`) |
-| `code_scalpel/prompts/` | all model-facing prompts as `.md` (system, mode_*, narrow passes, `retry/*`, `skills/*`); `__init__.py` is the single loader |
+| `code_scalpel/prompts/` | all model-facing prompts as `.md` (system, mode_*, narrow passes, `retry/*`, `skills/*`, `derive_acceptance.md` — intent-judging acceptance-spec derivation); `__init__.py` is the single loader |
 | `code_scalpel/recipes/` | bundled built-in recipes (ships with package) |
 | `code_scalpel/tui/` | Textual app: `app.py` (~2129 LOC composition root + slash/keybindings), `widgets/` (input, footer, output, cards/*, plan_card, mermaid_card, jobs_*, tool_*) |
 | `tests/` | test suite; mocks in `tests/mocks.py`; LLM tests gated by `@pytest.mark.llm` |
@@ -473,12 +523,15 @@ Per-task git HEAD must advance (sha ≠ prev) or the task is `failed`;
 auto-commit hook commits `<task.id>: <task.title>` if the model forgot.
 **A 4th machine check (acceptance run-smoke, verification #4) also runs and,
 since v0.14 (`feat/acceptance-spec-in-tasks`), ENFORCES — it demotes
-`done → failed` — but ONLY where an *applicable* acceptance spec exists**
-(a narrow-pass-derived spec marked `applicable=True`; the default-floor
-never is, so libraries/no-spec projects keep feature-2's observational
-behavior and are never demoted). **The taxonomy is unchanged** — no new
-status; enforcement reuses the existing `done → failed` edge. Where no
-applicable spec exists the run-smoke is still recorded/surfaced and never
+`done → failed` — but ONLY when three signals agree** (intent × position ×
+state): the spec is *applicable* (a derived spec judged from task text to be
+a runnable CLI deliverable; the default-floor never is), the task is the
+*last not-done task* (`should_run_now`, the position the deliverable should
+be runnable end-to-end), and the deterministic run-smoke *fails*. **An early
+not-built-yet task of a CLI plan, a library, and a no-spec project are all
+observed, never demoted.** **The taxonomy is unchanged** — no new status;
+enforcement reuses the existing `done → failed` edge. Everywhere the three
+signals do not all agree the run-smoke is still recorded/surfaced and never
 demotes. The run-smoke verdict (`passed`/`failed`/`noop`) is also a distinct
 `AgentState` field. See the *Acceptance gate enforcement* decision in
 `## Architectural decisions` and `## State model`.
@@ -534,13 +587,14 @@ for json_schema fork resolution, not for tool loops.
   `## State model`.
 - **Dispatch never raises:** the tool boundary returns a `ToolResult`,
   never an exception — stated inline above (tool surface).
-- **Acceptance enforcement is applicability-gated (v0.14):** verification
-  #4 demotes `done → failed` only where an *applicable* acceptance spec
-  exists (the default-floor never is, so libraries/no-spec projects are
-  never demoted — the feature-2 no-regression lock); elsewhere it records
-  and surfaces only — stated inline above (task outcome status) and in
-  `## State model`. Model-derived acceptance is args-only — enforced by
-  `SC7` (`## Security constraints`).
+- **Acceptance enforcement is three-signal-gated (v0.14):** verification
+  #4 demotes `done → failed` only when intent (`applicable`) × position
+  (`should_run_now`, the last not-done task) × state (failing run-smoke)
+  all agree; an early not-built-yet CLI task, a library/no-spec project, and
+  the default-floor are all observed, never demoted (the feature-2
+  no-regression lock plus the greenfield early-task lock) — stated inline
+  above (task outcome status) and in `## State model`. Model-derived
+  acceptance is args-only — enforced by `SC7` (`## Security constraints`).
 - **Endpoint reachability:** the *First-time setup* journey requires a
   reachable LLM endpoint before any turn produces output (see
   `docs/user-journeys.md`).
@@ -571,12 +625,20 @@ the non-empty `expected` observable present) · `failed` (non-zero exit /
 `noop` (no acceptance adapter detected the project type) · `unknown`
 (default, never recorded). A `noop` never clobbers a prior
 `passed`/`failed`. **Since v0.14 this verdict drives the `done → failed`
-edge above WHERE an *applicable* acceptance spec exists** (derived +
-`applicable=True`): a `failed` acceptance run-smoke demotes the task. Where
-no applicable spec exists (the default-floor, a derived not-applicable
-library, no adapter) the verdict is **recorded and surfaced only** — it
-drives no edge, exactly as in feature 2. The spec is derived once pre-loop
-and written back, so the gate is deterministic across resume/re-run.
+edge above ONLY when three signals agree** — intent (`spec.applicable`,
+a derived-and-applicable CLI spec judged from task text), position
+(`should_run_now`, the structurally last not-done task), and a *failing*
+state (the run-smoke): `applicable AND should_run_now AND not run_smoke_ok`
+demotes. An **early not-built-yet** task of a CLI plan (`should_run_now`
+False), a **library / not-applicable** spec, and the **default-floor** are
+all recorded/surfaced only — they drive no edge, exactly as in feature 2.
+The intent (`applicable`) is derived once pre-loop from task text and
+written back (stable on resume/re-run, and correct on a greenfield/empty
+repo); the position is recomputed deterministically in the run-loop; the
+state is the deterministic verify-time run-smoke. **Known limitation:**
+position is proxied by "last not-done task", so a plan whose final task is
+non-CLI observes rather than enforces (safe under-enforcement) — see the
+*Acceptance gate enforcement* decision.
 
 Loop-level stops: `all_done`, `no_tasks`, `plan_modified` (TASKS.md hash
 changed mid-run), `CancelledError` (ESC — already-marked tasks stay).
@@ -613,7 +675,7 @@ cancel.
   release signal but is run **manually**; it is not wired as a required CI
   check (v0.13 backlog `(inferred)`). The `notes_cli` 3/3 teeth move to
   feature 4 (`feat/acceptance-spec-in-tasks`), where the acceptance gate
-  can demote on a CLI deliverable.
+  can demote on a CLI deliverable at the plan's final step.
 
 ## Security constraints
 
