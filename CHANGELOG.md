@@ -5,6 +5,26 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.12.5.dev4] — 2026-06-07
+### Added
+- Bounded, trust-gated acceptance self-fix loop. When a runnable CLI
+  deliverable's acceptance run-smoke fails on the last applicable task, the
+  agent no longer demotes `done → failed` straight away: at trust `optimist`
+  or `yolo` it feeds the failing run-smoke output back to the model, rebuilds,
+  and re-runs the smoke — up to a bounded budget — before finally failing. At
+  `skeptic` it fails immediately and waits for the human, as before.
+- The failing run-smoke output is now carried inline into the self-fix attempt,
+  so the model sees exactly what broke instead of a bare verdict.
+- New config: `acceptance_self_fix` (bool, default **on**) gates the loop, and
+  `acceptance_self_fix_max_attempts` (int, default **3**) caps the retries.
+### Changed
+- Self-fix is **bounded twice over**: by the attempt budget and by an
+  identical-run-smoke-output anti-loop early-stop — if a rebuild produces the
+  same failing output, the loop stops early rather than burning the budget.
+- Self-fix fires only at the single last-applicable-task position; early CLI
+  tasks and library / no-spec tasks are never self-fixed, so the blast radius
+  of the retry behaviour stays exactly where acceptance enforcement already is.
+
 ## [0.12.5.dev3] — 2026-06-06
 ### Added
 - Acceptance specs in tasks — the acceptance gate now has teeth. A task can
