@@ -3294,6 +3294,17 @@ self-contained), но НЕ на консистентность кода/тест
 на qwen; корректен для будущей сильной модели — ветка
 `feat/code-mode-test-with-feature`).
 
+✓ backend-redesign step 2 — acceptance-gate-run-plan (2026-06-06):
+  run_plan теперь гоняет 4-ю проверку — run-smoke готового продукта
+  (`python -m <pkg> --help`) через registry-resolved acceptance-адаптер,
+  **записывает и показывает** вердикт (passed/failed/noop). Plumbing +
+  observability смержены; **enforcement (демоут task'и при провале)
+  отложен на feature 4** (`feat/acceptance-spec-in-tasks`) — нужен
+  CLI-vs-library сигнал, иначе ложно фейлим `/go` над python-библиотеками
+  (PM-решение «plumbing only», `.ai-pm/reviews/
+  acceptance-gate-run-plan_review.md` `## Resolutions` #1). Гейт
+  `notes_cli` 3/3 task_solved тоже переезжает в feature 4.
+
 Возможные направления для consistency:
 - **a) Усилить prompt в mode_plan.md** — модель часто оставляет
   files/acceptance пустыми (schema их optional). Принудить
