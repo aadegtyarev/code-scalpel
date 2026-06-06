@@ -23,9 +23,11 @@ Decision authority: interactive (project default).
 
 ## Status
 
-PLANNING COMPLETE — handed off to pm-coder. Branch `feat/acceptance-self-fix-loop`
-cut from main. Product-readiness gate clean. PM approved the plan (on-by-default,
-trust-gated, budget=3 configurable).
+CODING COMPLETE — pm-coder implemented all 7 scenarios + 2 failure paths +
+KD1–KD10 + the full test plan. Pipeline green (pytest 1298 passed / 40 skipped;
+ruff check + format clean; mypy clean except the one known pre-existing
+`tools/files.py:8` unused-ignore, out of scope). Ready for the review loop
+(Pass 1 pm-plan-checker, Pass 2 code-review). NOT pushed; no PR.
 
 ## Done
 
@@ -40,14 +42,30 @@ trust-gated, budget=3 configurable).
     output 2× → stop); combined bound ~9 build passes accepted; threat-model flagged.
   - Plan: 7 scenarios + 2 failure paths + KD1–KD10 + test plan + Docs-to-update + DoD.
   - Product-readiness gate clean (all five per-feature foundational questions answered).
+- **Coding (this task — pm-coder):**
+  - Config knobs landed in `code_scalpel/config.py` `AgentConfig`: `acceptance_self_fix`
+    (=True) + `acceptance_self_fix_max_attempts` (=3) (KD4, no magic numbers).
+  - `TaskOutcome` gained `acceptance_output: str | None = None` (KD2) — set inline by
+    `verify_task`/`_verify_acceptance` on any failing applicable run-smoke, preserved by
+    `_demote`'s `dataclasses.replace`, NOT persisted to STATE.json. `_run_smoke` now
+    returns the raw `ToolResult.output` as a 6th tuple element.
+  - Self-fix orchestration on `PlanRunner`: `_run_task` extracted into `_build_task`
+    (per-attempt HEAD re-snapshot + skills + one code_with_retry pass), `_acceptance_demoted`
+    (the acceptance-vs-checks-1-3 discriminator), `_self_fix_acceptance` (the bounded loop:
+    trust gate via `policy.auto_confirm` KD3, budget KD4, identical-output break KD5,
+    failure-path-8 raise guard), `_self_fix_prompt` (KD9 — adapter command + run-smoke
+    output only; no python/-m/notes_cli literal). `_run_task` kept under 50 lines (KD10).
+  - Tests: new `tests/test_acceptance_self_fix.py` — all plan-named tests (recovery, budget,
+    skeptic, off-switch, identical-break, early-task, library, signal-reaches-builder, two
+    failure paths, HEAD re-snapshot, recovered-commit, config-defaults, language-agnostic) +
+    a production `run_plan` end-to-end recovery test (test-wiring-parity). 15 tests, all green.
+  - NO existing test needed modification: `test_acceptance_enforcement.py` (verify_task-direct)
+    unaffected; the run_plan-level `test_run_loop_demotes_only_the_final_applicable_task` still
+    passes as-is (its retry build produces a non-applying patch so self-fix stops at the first
+    re-verify — no behavior change to assert).
 
 ## Remaining
 
-- **Coding (pm-coder):** config knobs (`acceptance_self_fix`=True,
-  `acceptance_self_fix_max_attempts`=3); inline run-smoke output on `TaskOutcome`
-  (default None, preserved by `_demote`); self-fix orchestration helper on the runner
-  wired into `_run_task` (trust gate + budget + identical-output break); zero language
-  strings in the loop. Tests written with the code (new `tests/test_acceptance_self_fix.py`).
 - Review loop: Pass 1 `pm-plan-checker`, Pass 2 `code-review`.
 - Post-coding doc handoff (`pm-architect`): user-journeys.md (Journey 5 step 3),
   architecture.md (new decision + §Task outcome status + new SCn + File layout),
@@ -61,15 +79,21 @@ trust-gated, budget=3 configurable).
 
 ## Touched files
 
-(to be filled by coder; planned surface — code_scalpel/config.py, plan_runner.py,
-plan_verify.py [TaskOutcome field + return the run-smoke output], agent.py [if
-code_with_retry needs a signal-passing seam], state.py [no new field per KD2],
-tests/test_acceptance_self_fix.py [new])
+- `code_scalpel/config.py` — two new `AgentConfig` fields (KD4).
+- `code_scalpel/agent.py` — `TaskOutcome.acceptance_output` field (KD2).
+- `code_scalpel/plan_verify.py` — `_run_smoke` returns raw output (6th tuple element);
+  `_verify_acceptance` attaches it to the outcome on a failing applicable verdict.
+- `code_scalpel/plan_runner.py` — `_run_task` refactor + `_build_task`,
+  `_acceptance_demoted`, `_self_fix_acceptance`, `_self_fix_prompt`; `_last_step_result`
+  on `__init__`.
+- `tests/test_acceptance_self_fix.py` — NEW, 15 tests.
+- (NOT touched, per KD2: `state.py` — no new state field.)
 
 ## Next step
 
-pm-coder implements per `docs/features/acceptance-self-fix-loop_plan.md` honoring
-the arch note's "what the plan / coder must honor" list (KD1–KD10).
+review — Pass 1 `pm-plan-checker` (plan compliance), Pass 2 `code-review`
+(technical quality). Then post-coding doc handoff (pm-architect) + contract update
+(orchestrator), then Step 5.5 live `notes_cli` probe, then ship.
 
 ## Validation
 
