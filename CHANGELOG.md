@@ -5,6 +5,30 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.12.5.dev5] — 2026-06-07
+### Added
+- Flat-layout run-smoke. The acceptance gate can now find and run the CLI of a
+  flat-layout Python project — one where the package sits at the repo root
+  rather than under `src/`. It recognises three shapes, in a fixed order of
+  preference: a root package with a `__main__.py` (run as `python -m pkg`), a
+  single root entry script such as `cli.py` / `main.py` / `__main__.py` (run
+  directly), and a single declared console command from `[project.scripts]`. A
+  declared console command always wins over a discovered script; if the project
+  is ambiguous or has no runnable entry, the gate raises rather than guessing.
+  This closes the first of the two reach gaps that left the acceptance gate and
+  the self-fix loop inert on the canonical flat-layout scenario.
+- New config `run_smoke_script_candidates` lets you set which root script names
+  count as entry points; the values are validated against path traversal.
+### Changed
+- The acceptance gate now verifies the runnable CLI at the **last task that
+  actually builds it**, not merely the last task in the plan. So a CLI finished
+  before the final task — for example when the plan ends with a tests-only or
+  docs-only task — is still run-smoked, and a failing run-smoke still engages
+  the self-fix loop at trust `optimist` / `yolo`. This closes the second reach
+  gap. No new task status is introduced, and both existing safety invariants
+  hold: an early task is never demoted, and a library (no-CLI) project is never
+  failed by this gate.
+
 ## [0.12.5.dev4] — 2026-06-07
 ### Added
 - Bounded, trust-gated acceptance self-fix loop. When a runnable CLI
