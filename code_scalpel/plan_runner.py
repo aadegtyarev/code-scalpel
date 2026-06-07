@@ -70,13 +70,48 @@ class _Streaks:
 def _last_not_done_index(tasks: list[Task]) -> int:
     """Index of the last not-done task, or -1 if every task is done.
 
-    The acceptance-gate position signal: `should_run_now` is `idx == this`.
-    Pure plan structure — no LLM, no filesystem (arch §"Timing fix" Q2).
+    Pure plan structure — no LLM, no filesystem. Retained as a sensible
+    fallback / informational signal; the enforcement position is now
+    `_last_applicable_index` (see below).
     """
     last = -1
     for idx, task in enumerate(tasks):
         if not task.done:
             last = idx
+    return last
+
+
+def _last_applicable_index(tasks: list[Task], adapter: object | None) -> int:
+    """Index of the last not-done task whose derived spec is APPLICABLE, or -1.
+
+    The acceptance-gate position signal: `should_run_now` is `idx == this`.
+    Enforcement fires at the last *applicable* task (the deliverable-complete
+    point) rather than the literal last task — so a runnable-CLI deliverable
+    built before a trailing test/doc task is still enforced (Gap B). Computed
+    from the EXISTING pure per-task predicate `adapter.acceptance_applicable`
+    (decodes the pre-loop written-back derived marker — no LLM, no I/O), so it
+    is as cheap and deterministic as `_last_not_done_index`.
+
+    Two no-regression invariants hold by construction: an early CLI-building
+    task that is not the last applicable task is never the enforcing position
+    (observed, never demoted); a plan with no applicable spec — a library, a
+    non-CLI project, or no acceptance adapter — has no applicable index and
+    returns the -1 sentinel → `should_run_now` is never True → never enforced.
+    """
+    applicable = getattr(adapter, "acceptance_applicable", None) if adapter is not None else None
+    if applicable is None:
+        return -1
+    last = -1
+    for idx, task in enumerate(tasks):
+        if task.done:
+            continue
+        try:
+            if applicable(task):
+                last = idx
+        except Exception:
+            # A predicate raise must never break the loop — treat as not
+            # applicable (observe), matching the adapter's own tolerance.
+            continue
     return last
 
 
@@ -149,6 +184,7 @@ class PlanRunner:
         context_limit: int | None,
     ) -> RunPlanResult:
         from code_scalpel.agent import RunPlanResult
+        from code_scalpel.skills import acceptance_adapter
 
         outcomes: list[TaskOutcome] = []
         streaks = _Streaks(skip_giveup_threshold=stop_after_failures + 2)
@@ -157,13 +193,17 @@ class PlanRunner:
         stopped_reason = "all_done"
 
         # Position signal for acceptance enforcement: the index of the last
-        # not-done task at loop start. Pure plan structure — no LLM, no I/O.
-        # By the last task an applicable-intent CLI should be runnable
-        # end-to-end; earlier tasks may not be, so the acceptance gate only
-        # *enforces* (demotes) here. See `acceptance-spec-in-tasks_arch.md`
-        # §"Timing fix" Q2 — the position discriminator that flips an
-        # applicable-intent task from observe to enforce.
-        last_not_done_index = _last_not_done_index(live_tasks)
+        # not-done task whose derived spec is APPLICABLE, at loop start. Pure
+        # plan structure + the pre-loop written-back derived marker — no LLM,
+        # no I/O (the marker is intent from task text, stable on a greenfield
+        # repo). Enforcement fires only at this one position (Gap B): the
+        # last-applicable task is the deliverable-complete point, so a runnable
+        # CLI built before a trailing test/doc task is still enforced, while an
+        # early CLI task and a no-applicable-spec plan stay observational by
+        # construction. The adapter (or None for non-python projects) supplies
+        # the pure `acceptance_applicable` predicate, resolved once here.
+        adapter = acceptance_adapter(self._agent._cwd)
+        last_applicable_index = _last_applicable_index(live_tasks, adapter)
 
         for idx, task in enumerate(live_tasks):
             if task.done:
@@ -176,7 +216,7 @@ class PlanRunner:
                 stopped_reason = "plan_modified"
                 break
 
-            should_run_now = idx == last_not_done_index
+            should_run_now = idx == last_applicable_index
             outcome = await self._run_task(task, should_run_now, on_tool_executed)
 
             outcomes.append(outcome)
