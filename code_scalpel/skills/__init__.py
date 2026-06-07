@@ -146,13 +146,18 @@ def default_runnable_skill(root: Path) -> Skill | None:
     return _registry.default_runnable(root)
 
 
-def acceptance_adapter(root: Path) -> Skill | None:
+def acceptance_adapter(
+    root: Path, script_candidates: tuple[str, ...] | None = None
+) -> Skill | None:
     """First detecting `provides_acceptance` adapter, root-bound, or None.
 
     The run-loop's acceptance gate (verification #4) resolves the adapter to
     run-smoke through this, so adding a language adapter needs no run-loop
-    edit. Returns None for project types with no acceptance adapter."""
-    return _registry.acceptance_adapter(root)
+    edit. `script_candidates` is the live `AgentConfig.run_smoke_script_candidates`
+    the run-loop passes so a user-set candidate list reaches the resolver
+    (None → the adapter's import-time default). Returns None for project types
+    with no acceptance adapter."""
+    return _registry.acceptance_adapter(root, script_candidates)
 
 
 __all__ = [

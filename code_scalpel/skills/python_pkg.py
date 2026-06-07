@@ -39,6 +39,13 @@ from typing import Literal
 
 _DEFAULT_SCRIPT_CANDIDATES = ("__main__.py", "main.py", "cli.py")
 
+# Root-level directories that are never the deliverable package, even when a
+# confused scaffold gives them `__init__.py` + `__main__.py`. `src` is the
+# src-layout container (rung 4 inspects its children), `tests`/`docs` are
+# scaffolding. Excluded from the root-package scan so `python -m src` can
+# never be the resolved run target.
+_RESERVED_ROOT_DIRS = frozenset({"src", "tests", "docs"})
+
 
 @dataclass(frozen=True)
 class RunTarget:
@@ -93,11 +100,12 @@ def _from_pyproject(root: Path) -> str | None:
     """The single declared `-m` target from pyproject, or None.
 
     Reads the hatchling wheel target first, then a single `[project.scripts]`
-    console entry. An unreadable / malformed pyproject is treated as "no
-    declared target" (fall through to filesystem discovery), never a crash.
-    Ambiguity within a declaration (>1 wheel target, >1 console entry) → None
-    here only when the rung itself is ambiguous-but-not-disqualifying; a
-    declared-but-ambiguous rung raises so the caller never guesses.
+    console entry. A declared-but-ambiguous rung (>1 wheel target, >1 console
+    entry) RAISES `ValueError` so the caller never guesses the intent. The
+    try/except only swallows TOML-parse and I/O errors — an unreadable /
+    malformed pyproject returns None (treated as "no declared target", fall
+    through to filesystem discovery), never a crash. None therefore means
+    "nothing declared", never "declared but ambiguous".
     """
     pyproject = root / "pyproject.toml"
     if not pyproject.is_file():
@@ -161,12 +169,15 @@ def _single_root_package(root: Path) -> str | None:
     """Name of the single root-level package with `__main__.py`, or None.
 
     A root package is a directory with `__init__.py`. Only a `__main__.py`-
-    bearing one is `-m`-runnable; >1 such → ambiguous → raise.
+    bearing one is `-m`-runnable; >1 such → ambiguous → raise. Reserved
+    container/scaffold dirs (`src`, `tests`, `docs`) are excluded so a
+    confused scaffold can never resolve to `python -m src`.
     """
     runnable = [
         child.name
         for child in sorted(root.iterdir())
         if child.is_dir()
+        and child.name not in _RESERVED_ROOT_DIRS
         and (child / "__init__.py").is_file()
         and (child / "__main__.py").is_file()
     ]
@@ -178,6 +189,15 @@ def _single_root_package(root: Path) -> str | None:
 
 
 def _single_src_package(src: Path) -> str | None:
+    """Name of the single runnable package under `src/`, or None.
+
+    Symmetric with every other rung: a sole candidate package is the target;
+    among multiple candidates, only a UNIQUE `__main__.py`-runnable one is
+    picked. Multiple candidates with zero or >1 runnable is genuine ambiguity
+    → raise (never silently pick one runnable among several candidate packages,
+    which would run the wrong package when a sibling carries a stray
+    `__main__.py`).
+    """
     candidates = [
         child
         for child in sorted(src.iterdir())
@@ -185,12 +205,15 @@ def _single_src_package(src: Path) -> str | None:
     ]
     if not candidates:
         return None
+    if len(candidates) == 1:
+        return candidates[0].name
     runnable = [c for c in candidates if (c / "__main__.py").is_file()]
     if len(runnable) == 1:
         return runnable[0].name
-    if len(candidates) == 1:
-        return candidates[0].name
-    return None
+    raise ValueError(
+        f"ambiguous src packages: {[c.name for c in candidates]} "
+        "(no unique __main__.py-runnable package)"
+    )
 
 
 def _single_root_script(root: Path, candidates: tuple[str, ...]) -> str | None:
@@ -200,8 +223,16 @@ def _single_root_script(root: Path, candidates: tuple[str, ...]) -> str | None:
     intent. More than one candidate present → ambiguous → raise (never pick
     one by candidate order; the order documents precedence only when exactly
     one exists, so two present is a genuine ambiguity the user must resolve).
+    Non-simple names (containing `/` or `..`, i.e. anything that could resolve
+    outside the project root) are skipped defensively — the config validator
+    rejects them at load time, this is the second line of defence so a
+    traversal candidate can never resolve to a runnable path.
     """
-    present = [name for name in candidates if (root / name).is_file()]
+    present = [
+        name
+        for name in candidates
+        if name not in {".", ".."} and Path(name).name == name and (root / name).is_file()
+    ]
     if not present:
         return None
     if len(present) > 1:

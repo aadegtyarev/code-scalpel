@@ -79,7 +79,10 @@ class PythonCliAdapter(Skill):
         # The lowest-rung root-entry-script candidate filenames. Config-owned
         # (the default lives in `AgentConfig.run_smoke_script_candidates`); the
         # adapter mirrors that default so the resolver never carries the magic
-        # list. The run-loop binds an adapter with the live config value.
+        # list. The import-time registry singleton uses this default; the
+        # run-loop passes the LIVE config value via `acceptance_adapter(root,
+        # script_candidates=...)` → `bind`, so a user-set candidate list
+        # actually reaches the resolver (the default is only the fallback).
         self._script_candidates = (
             script_candidates
             if script_candidates is not None
@@ -90,15 +93,23 @@ class PythonCliAdapter(Skill):
         # reuses PythonSkill verbatim instead of duplicating its commands.
         self._py = PythonSkill()
 
-    def bind(self, root: Path) -> Skill:
+    def bind(self, root: Path, script_candidates: tuple[str, ...] | None = None) -> Skill:
         """Return a root-bound adapter so `run_smoke`/`acceptance_spec` resolve.
 
         The registry holds a rootless discovery singleton (detect only); the
         run-loop binds it to the project root before asking for the run-smoke
         command, so the run target resolves deterministically instead of
-        raising. Carries the candidate list forward unchanged.
+        raising. `script_candidates`, when provided (the live config value the
+        run-loop threads through `acceptance_adapter`), overrides the
+        singleton's import-time default; otherwise the current candidate list
+        is carried forward unchanged.
         """
-        return PythonCliAdapter(root=root, script_candidates=self._script_candidates)
+        return PythonCliAdapter(
+            root=root,
+            script_candidates=(
+                script_candidates if script_candidates is not None else self._script_candidates
+            ),
+        )
 
     def detect(self, root: Path) -> bool:
         return self._py.detect(root)

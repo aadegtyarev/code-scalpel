@@ -123,6 +123,34 @@ def test_run_smoke_root_package_through_acceptance_adapter(tmp_path: Path) -> No
     assert floor.command == "python -m notes_cli --help"
 
 
+def test_live_candidate_list_reaches_resolver_via_acceptance_adapter(tmp_path: Path) -> None:
+    """CR1: a non-default `run_smoke_script_candidates` value threaded through the
+    production `acceptance_adapter(root, script_candidates=...)` actually changes
+    which root script the adapter resolves — proving the live config (not the
+    import-time singleton default) reaches `resolve_pkg`."""
+    from code_scalpel.skills import acceptance_adapter
+
+    # A flat-layout project whose only runnable is a script the DEFAULT list
+    # does not name (`run.py`), and NOT named by any default candidate.
+    (tmp_path / "pyproject.toml").write_text("[project]\nname='x'\nversion='0'\n")
+    (tmp_path / "run.py").write_text("print('hi')\n")
+
+    # Default-bound adapter (no live value) → cannot resolve `run.py`: the floor
+    # command build raises (the same ValueError that drives `pkg-unresolvable`).
+    default_adapter = acceptance_adapter(tmp_path)
+    assert isinstance(default_adapter, PythonCliAdapter)
+    with pytest.raises(ValueError):
+        default_adapter.acceptance_spec(task=None)
+
+    # Live config value threaded through → resolves the custom script.
+    live = tuple(AgentConfig(run_smoke_script_candidates=["run.py"]).run_smoke_script_candidates)
+    live_adapter = acceptance_adapter(tmp_path, live)
+    assert isinstance(live_adapter, PythonCliAdapter)
+    floor = live_adapter.acceptance_spec(task=None)
+    assert floor is not None
+    assert floor.command == "python run.py --help"
+
+
 # ── Gap B: _last_applicable_index pure predicate ─────────────────────────────
 
 
@@ -267,6 +295,35 @@ def _patch(fname: str) -> str:
     can demote — exactly the condition the enforcement / self-fix loop exists
     for. A real one-shot change would not re-apply on a rebuild."""
     return f"{fname}\n```python\n<<<<<<< SEARCH\nV = 0\n=======\nV = 0\n>>>>>>> REPLACE\n```\n"
+
+
+@pytest.mark.asyncio
+async def test_live_candidate_list_reaches_resolver_through_verify_path(tmp_path: Path) -> None:
+    """CR1 (test-wiring-parity): driving the real `StepAgent` run-loop, the live
+    `agent._config.agent.run_smoke_script_candidates` reaches the resolver via
+    `plan_verify` → `acceptance_adapter`, so a custom root script (`run.py`, NOT
+    in the default candidate list) is actually run-smoked. The recorded run-smoke
+    command names `run.py` — proving the live config, not the import-time
+    singleton default, reaches `resolve_pkg`."""
+    # Flat-layout project whose only runnable is a script the DEFAULT list misses.
+    project = tmp_path / "proj"
+    project.mkdir()
+    (project / "pyproject.toml").write_text("[project]\nname='x'\nversion='0'\n")
+    (project / "run.py").write_text("V = 0\n")
+    _write_plan_json(project, [_plan_task("T001", files=["run.py"], applicable=True)])
+
+    cfg = _config()
+    cfg.agent.run_smoke_script_candidates = ["run.py"]
+    cfg.agent.acceptance_self_fix = False  # demotion terminal, directly observable
+
+    llm = _PerTaskPatchLLM({"run.py": _patch("run.py")})
+    shell = _SplitShellRunner(run_smoke=ShellResult("Traceback: boom", 1))
+    agent = StepAgent(llm=llm, cwd=project, config=cfg, shell_runner=shell)
+
+    await agent.run_plan()
+    # The custom script resolved and ran — the run-smoke command names run.py,
+    # which is only possible if the live candidate list reached the resolver.
+    assert shell.shell_calls == ["python run.py add x"], shell.shell_calls
 
 
 @pytest.mark.asyncio

@@ -22,6 +22,10 @@ Decision authority: interactive (project default).
 
 ## Status
 
+PASS-2 CODE-REVIEW FIXES DONE — pipeline green. All five findings (CR1–CR5)
+addressed with tests for the four behavioral fixes (CR1/CR2/CR3/CR5).
+Awaiting re-verify + stamp by code-review.
+
 CODING DONE — pipeline green. Plan approved by PM ("норм поехал"). Arch note done.
 Product-readiness gate: EXEMPT (scenario subjects are non-human — system/deliverable/
 gate; backend correctness fix to make existing promised behavior work). Reuses the
@@ -52,6 +56,7 @@ Two atomic commits on `feat/flat-layout-run-smoke` (not pushed):
 
 ## Remaining
 
+- Pass-2 re-verify + stamp by code-review (the `## Code review` trail in the review file).
 - Post-coding doc handoff (pm-architect): architecture.md (Task outcome status / State
   model / decision record / resolve_pkg descriptor), threat-model.md (T05/T06/T10 reach
   + Last reviewed), plan.md (§31). Orchestrator: run-plan contract (position wording,
@@ -62,13 +67,17 @@ Two atomic commits on `feat/flat-layout-run-smoke` (not pushed):
 
 ## Touched files
 
-- code_scalpel/config.py — new `run_smoke_script_candidates` AgentConfig field.
-- code_scalpel/skills/python_pkg.py — `RunTarget` descriptor + precedence ladder.
-- code_scalpel/skills/python_cli_adapter.py — argv-from-kind, candidate list threaded.
+- code_scalpel/config.py — `run_smoke_script_candidates` field + CR3 simple-filename validator.
+- code_scalpel/skills/python_pkg.py — `RunTarget` descriptor + precedence ladder;
+  CR2 reserved-dir exclusion; CR3 traversal-skip; CR4 docstring; CR5 symmetric src ambiguity.
+- code_scalpel/skills/python_cli_adapter.py — argv-from-kind; CR1 `bind(root, script_candidates)`
+  + corrected comment.
+- code_scalpel/skills/base.py — CR1 `bind` gains optional `script_candidates`.
+- code_scalpel/skills/registry.py + skills/__init__.py — CR1 `acceptance_adapter(root, candidates)`.
+- code_scalpel/plan_verify.py — CR1 re-bind resolved adapter with live config candidates.
 - code_scalpel/plan_runner.py — `_last_applicable_index` + `should_run_now` source.
-- tests/test_python_pkg.py (new), tests/test_flat_layout_run_smoke.py (new).
-- NOTE: plan_verify.py was NOT touched — the position source is in plan_runner only
-  (verify_task already takes `should_run_now` as an opaque signal).
+- tests/test_python_pkg.py, tests/test_flat_layout_run_smoke.py, tests/test_config.py
+  — CR1/CR2/CR3/CR5 tests added (no existing test modified).
 
 ## Next step
 

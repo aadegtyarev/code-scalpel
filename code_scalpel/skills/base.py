@@ -265,7 +265,7 @@ class Skill(ABC):
     # consumes them yet (that is a later feature) — this just makes the
     # contract exist.
 
-    def bind(self, root: Path) -> Skill:
+    def bind(self, root: Path, script_candidates: tuple[str, ...] | None = None) -> Skill:
         """Return an instance of this skill bound to `root`, for run-smoke.
 
         Default is the *identity bind* — a stateless skill (or a component
@@ -274,6 +274,10 @@ class Skill(ABC):
         deliverable (python-cli resolves `<pkg>` from the tree) override
         this to return a root-bound instance. Polymorphic so the registry
         can root-bind any adapter without knowing its constructor shape.
+
+        `script_candidates`, when provided, is the live config value an
+        adapter uses for the lowest run-smoke resolution rung; the default
+        bind ignores it (a stateless skill has no run-smoke resolution).
         """
         return self
 

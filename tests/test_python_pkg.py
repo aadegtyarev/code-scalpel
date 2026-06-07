@@ -201,3 +201,78 @@ def test_resolve_custom_candidate_list(tmp_path: Path) -> None:
         resolve_pkg(tmp_path)
     # Passed in → resolves.
     assert resolve_pkg(tmp_path, ["run.py"]) == RunTarget(kind="script", target="run.py")
+
+
+# ── CR2: reserved root dirs never resolve as `python -m <dir>` ────────────────
+
+
+def test_resolve_skips_reserved_src_root_package(tmp_path: Path) -> None:
+    """CR2: a confused scaffold where `src/` itself carries `__init__.py` +
+    `__main__.py` AND a real `src/<pkg>/...` must resolve to the real package,
+    never to `'src'` (which would run `python -m src`). The reserved-dir
+    exclusion at rung 3 lets rung 4 inspect `src/<pkg>`."""
+    src = tmp_path / "src"
+    src.mkdir()
+    (src / "__init__.py").write_text("")
+    (src / "__main__.py").write_text("")
+    _make_src_package(tmp_path, "realapp")
+    assert resolve_pkg(tmp_path) == RunTarget(kind="module", target="realapp")
+
+
+def test_resolve_skips_reserved_tests_docs_root_packages(tmp_path: Path) -> None:
+    """CR2: `tests/` and `docs/` carrying `__init__.py` + `__main__.py` are
+    excluded from the root-package scan, so they never shadow the real package."""
+    for reserved in ("tests", "docs"):
+        d = tmp_path / reserved
+        d.mkdir()
+        (d / "__init__.py").write_text("")
+        (d / "__main__.py").write_text("")
+    _make_root_package(tmp_path, "notes_cli")
+    assert resolve_pkg(tmp_path) == RunTarget(kind="module", target="notes_cli")
+
+
+# ── CR3: path-traversal candidates never resolve ─────────────────────────────
+
+
+@pytest.mark.parametrize("evil", ["../evil.py", "sub/evil.py", "..", "a/../b.py"])
+def test_resolve_rejects_traversal_candidate(tmp_path: Path, evil: str) -> None:
+    """CR3: `_single_root_script` skips any non-simple candidate name (`/` or
+    `..`), so a traversal entry can never resolve to a runnable path outside the
+    project root — resolution falls through to absence and raises."""
+    with pytest.raises(ValueError, match="cannot resolve a python-cli run target"):
+        resolve_pkg(tmp_path, [evil])
+
+
+# ── CR5: src-package ambiguity is symmetric (raises, never silently picks) ────
+
+
+def test_resolve_ambiguous_src_packages_raises(tmp_path: Path) -> None:
+    """CR5: two `src/` packages each with `__main__.py` → raise, never silently
+    pick one runnable among several candidate packages (symmetric with every
+    other rung)."""
+    _make_src_package(tmp_path, "app_a")
+    _make_src_package(tmp_path, "app_b")
+    with pytest.raises(ValueError, match="ambiguous src packages"):
+        resolve_pkg(tmp_path)
+
+
+def test_resolve_src_zero_runnable_among_many_raises(tmp_path: Path) -> None:
+    """CR5: multiple `src/` candidate packages with NO `__main__.py`-runnable
+    one → ambiguous → raise (not a silent fall-through to None)."""
+    for pkg in ("app_a", "app_b"):
+        d = tmp_path / "src" / pkg
+        d.mkdir(parents=True)
+        (d / "__init__.py").write_text("")  # no __main__.py
+    with pytest.raises(ValueError, match="ambiguous src packages"):
+        resolve_pkg(tmp_path)
+
+
+def test_resolve_src_unique_runnable_among_many_picks_it(tmp_path: Path) -> None:
+    """CR5: when exactly ONE of several `src/` candidate packages is
+    `__main__.py`-runnable, that unique runnable is picked (preserved
+    auto-pick behavior — only genuine ambiguity raises)."""
+    _make_src_package(tmp_path, "runnable")  # has __main__.py
+    plain = tmp_path / "src" / "plain"
+    plain.mkdir(parents=True)
+    (plain / "__init__.py").write_text("")  # no __main__.py
+    assert resolve_pkg(tmp_path) == RunTarget(kind="module", target="runnable")

@@ -156,6 +156,22 @@ class AgentConfig(BaseModel):
     run_smoke_script_candidates: list[str] = Field(
         default_factory=lambda: ["__main__.py", "main.py", "cli.py"]
     )
+
+    @field_validator("run_smoke_script_candidates")
+    @classmethod
+    def _candidates_are_simple_filenames(cls, v: list[str]) -> list[str]:
+        # Each candidate is resolved relative to the project root as a script
+        # to execute. A non-simple name (containing `/` or `..`) could resolve
+        # outside the root and run arbitrary code — reject it at load time so a
+        # traversal candidate never reaches the resolver.
+        for name in v:
+            if not name or name in {".", ".."} or Path(name).name != name:
+                raise ValueError(
+                    f"run_smoke_script_candidates entry {name!r} must be a simple "
+                    "filename (no '/', no '..', no path separators)"
+                )
+        return v
+
     # Inference thinking effort — passed to providers that support it
     # (o1/o3, deepseek-r1, qwq). Ignored when ModelProfile.supports_thinking
     # is False or None (auto-detected as unsupported). Toggled via Ctrl+K.
