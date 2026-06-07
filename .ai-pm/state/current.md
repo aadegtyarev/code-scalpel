@@ -22,10 +22,14 @@ Decision authority: interactive (project default).
 
 ## Status
 
-CODING (handoff pending batch completion). Plan approved by PM ("норм поехал").
-Arch note done. Product-readiness gate: EXEMPT (scenario subjects are non-human —
-system/deliverable/gate; backend correctness fix to make existing promised behavior
-work). Reuses the existing `run-plan` contract — no new contract.
+CODING DONE — pipeline green. Plan approved by PM ("норм поехал"). Arch note done.
+Product-readiness gate: EXEMPT (scenario subjects are non-human — system/deliverable/
+gate; backend correctness fix to make existing promised behavior work). Reuses the
+existing `run-plan` contract — no new contract.
+
+Two atomic commits on `feat/flat-layout-run-smoke` (not pushed):
+- Gap A: flat-layout run-smoke resolution via typed RunTarget.
+- Gap B: enforce at last-applicable task, not last task.
 
 ## Done
 
@@ -38,12 +42,16 @@ work). Reuses the existing `run-plan` contract — no new contract.
   `_last_applicable_index` via the existing pure `acceptance_applicable` predicate —
   verify_task + self-fix helpers UNCHANGED.
 - Plan written + PM-approved.
+- CODER: Gap A — `resolve_pkg → RunTarget(kind,target)` + precedence ladder + adapter
+  argv-from-kind + config candidate list (`run_smoke_script_candidates`). Gap B —
+  `_last_applicable_index(tasks, adapter)` drives `should_run_now`; `_last_not_done_index`
+  kept as fallback. verify_task + all feature-3 self-fix helpers byte-for-byte unchanged.
+  +34 tests (tests/test_python_pkg.py, tests/test_flat_layout_run_smoke.py); no existing
+  test modified. Pipeline green (pytest 1332 passed / 40 skipped; ruff check + format
+  clean; mypy clean except the pre-existing files.py:8 unused-ignore on main).
 
 ## Remaining
 
-- Coder: implement Gap A (resolver descriptor + adapter argv shape + config candidate
-  list) + Gap B (`_last_applicable_index` position) + the full test plan. Never touch
-  existing tests.
 - Post-coding doc handoff (pm-architect): architecture.md (Task outcome status / State
   model / decision record / resolve_pkg descriptor), threat-model.md (T05/T06/T10 reach
   + Last reviewed), plan.md (§31). Orchestrator: run-plan contract (position wording,
@@ -54,15 +62,19 @@ work). Reuses the existing `run-plan` contract — no new contract.
 
 ## Touched files
 
-(to be filled by coder) — expected: code_scalpel/skills/python_pkg.py,
-code_scalpel/skills/python_cli_adapter.py, code_scalpel/config.py,
-code_scalpel/plan_runner.py, code_scalpel/plan_verify.py (position source),
-tests/ (new resolution + adapter + enforcement-position tests).
+- code_scalpel/config.py — new `run_smoke_script_candidates` AgentConfig field.
+- code_scalpel/skills/python_pkg.py — `RunTarget` descriptor + precedence ladder.
+- code_scalpel/skills/python_cli_adapter.py — argv-from-kind, candidate list threaded.
+- code_scalpel/plan_runner.py — `_last_applicable_index` + `should_run_now` source.
+- tests/test_python_pkg.py (new), tests/test_flat_layout_run_smoke.py (new).
+- NOTE: plan_verify.py was NOT touched — the position source is in plan_runner only
+  (verify_task already takes `should_run_now` as an opaque signal).
 
 ## Next step
 
-Wait for baseline batch to finish (do not let coder edit code mid-batch — would
-contaminate the baseline), clean up baseline run dirs, then spawn pm-coder.
+Review loop: Pass 1 pm-plan-checker, Pass 2 code-review. Then post-coding doc handoff
+(pm-architect for docs/, orchestrator for the run-plan contract). Then Step 5.5
+notes_cli probe batch (N=5) vs baseline, then ship.
 
 ## Validation
 
