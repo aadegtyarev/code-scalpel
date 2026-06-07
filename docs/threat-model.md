@@ -64,7 +64,7 @@ self-inflicted blast radius).
 | External content → context | URL / web → model prompt | `(inferred)` no injection sanitisation today — fetched text is inserted verbatim |
 | Config / env → secrets | `.env`/env → adapter | keys env-only, never in YAML/logs/context (SC5) |
 | Autonomous loop → git | `run_plan` → repository | per-task HEAD validation; net-new files kept, no destructive git in the loop |
-| Autonomous loop → deliverable run (run-smoke) | `run_plan` verification #4 runs the project's own code (`python -m <pkg> <args>`); since v0.14 `<args>` may be model-derived | **no new boundary** — reuses the model-output→shell path: `policy.decide` + trust gate (SC1), `bwrap` sandbox (SC3), cwd pinned (SC2). The verb is code-owned (`run_smoke` builds the argv); model input is **args-only**, tokenized via `shlex`, never a free-form shell string (SC7). The floor command stays code-owned/deterministic (`resolve_pkg`) |
+| Autonomous loop → deliverable run (run-smoke) | `run_plan` verification #4 runs the project's own code (`python -m <pkg> <args>`); since v0.14 `<args>` may be model-derived | **no new boundary** — reuses the model-output→shell path: `policy.decide` + trust gate (SC1), `bwrap` sandbox (SC3), cwd pinned (SC2). The verb is code-owned (`run_smoke` builds the argv); model input is **args-only**, tokenized via `shlex`, never a free-form shell string (SC7). The floor command stays code-owned/deterministic (`resolve_pkg`, now returning a `RunTarget(kind, target)` that resolves flat-layout too — **wider reach, same boundary**, v0.14) |
 
 ## Threats
 
@@ -74,12 +74,12 @@ self-inflicted blast radius).
 | T02 | Model writes / escapes outside the project dir via `cd`/redirect/`cp -> /…` | A2 | M | H | SC2 (cwd pin + escape hard-blocks) |
 | T03 | Sandbox bypass — destructive command runs un-isolated (incl. userns/AppArmor blocking bwrap) | A2 | L | H | SC3 (bwrap RO `/usr` `/etc`, tmpfs `/home` `/tmp`; detect-and-degrade when userns is restricted) |
 | T04 | Symlink in repo points outside root; file tool follows it | A2 | L | M | SC4 (resolve symlinks before access) |
-| T05 | Bad/incomplete patch corrupts source or breaks build | A1, A4 | H | M | skeptic apply gate + auto-tests + per-task HEAD check; partial progress kept for inspection. The v0.14 acceptance **self-fix loop** (feature 3) reuses the patch path autonomously at optimist/yolo, bounded by SC8 (budget + identical-output break + trust gate; skeptic never auto-rebuilds) |
-| T06 | Autonomous loop commits broken or empty work | A1, A4 | M | M | test gate before done; auto-commit only on `done`; plan-modified stop. The acceptance self-fix loop (v0.14) is a new bounded autonomous iteration surface — capped attempts + byte-identical-output early stop + trust gate (SC8); each rebuilt commit still passes the test gate and the per-task HEAD check |
+| T05 | Bad/incomplete patch corrupts source or breaks build | A1, A4 | H | M | skeptic apply gate + auto-tests + per-task HEAD check; partial progress kept for inspection. The v0.14 acceptance **self-fix loop** (feature 3) reuses the patch path autonomously at optimist/yolo, bounded by SC8 (budget + identical-output break + trust gate; skeptic never auto-rebuilds). *Reach update (v0.14, flat-layout run-smoke):* the self-fix path now engages on a **wider** set of projects (flat-layout) and at a **new position** (last *applicable* task) — wider reach/frequency, **not a new boundary**; SC8 bounds unchanged |
+| T06 | Autonomous loop commits broken or empty work | A1, A4 | M | M | test gate before done; auto-commit only on `done`; plan-modified stop. The acceptance self-fix loop (v0.14) is a new bounded autonomous iteration surface — capped attempts + byte-identical-output early stop + trust gate (SC8); each rebuilt commit still passes the test gate and the per-task HEAD check. *Reach update (v0.14, flat-layout run-smoke):* the autonomous loop now enforces/commits on more project layouts and at the last *applicable* task (was last not-done) — wider reach, same boundary and same SC8 bound |
 | T07 | API key leaked into logs / model context / YAML | A3 | L | H | SC5 (env-only secrets) |
 | T08 | Prompt injection via `/learn --url` / web fetch overrides agent intent | A1, A5 | M | M | `(inferred)` partial — note size cap (SC6-adjacent) limits one vector; no content sanitisation `[?]` (PM to scope) |
 | T09 | Poisoned project memory note steers future turns | A5 | L | M | notes are user-authored + size-capped; no auto-ingest of model claims |
-| T10 | Wrong auto-resolved fork (yolo/optimist timeout) makes a bad architectural choice | A1 | M | M | critical forks force a human window; overrides recorded for review; overrides never auto-rewrite code. The v0.14 acceptance **self-fix loop** is a new place the model acts without per-step confirm (auto-rebuilding a failing final task at optimist/yolo) — mitigated by **skeptic-no-autofix** (the trust gate, a machine check) plus the bounded budget + identical-output break (SC8); a wrong self-fix is bounded and its commits stay subject to the test + HEAD-advance gates |
+| T10 | Wrong auto-resolved fork (yolo/optimist timeout) makes a bad architectural choice | A1 | M | M | critical forks force a human window; overrides recorded for review; overrides never auto-rewrite code. The v0.14 acceptance **self-fix loop** is a new place the model acts without per-step confirm (auto-rebuilding a failing final task at optimist/yolo) — mitigated by **skeptic-no-autofix** (the trust gate, a machine check) plus the bounded budget + identical-output break (SC8); a wrong self-fix is bounded and its commits stay subject to the test + HEAD-advance gates. *Reach update (v0.14, flat-layout run-smoke):* this auto-rebuild surface now reaches more project layouts and the last *applicable* task — wider auto-resolution reach, unchanged in kind; skeptic-no-autofix + SC8 bounds unchanged |
 | T11 | Autonomous acceptance run-smoke executes the project's own code at `trust="yolo"` | A1, A2 | M | M | **no new boundary** — runs through the existing trust-gated + `bwrap`-sandboxed + `policy.py`-blocked `execute()` shell path (SC1/SC2/SC3); the floor run-smoke command is **code-owned and deterministic** (`python -m <pkg> --help`, `resolve_pkg`-resolved). *Resolved (v0.14):* the model-derived acceptance commands feature 4 added are **args-only**, not free-form shell — see T12 |
 | T12 | Model-derived acceptance **args** executed at `trust="yolo"` (v0.14 `feat/acceptance-spec-in-tasks`): the narrow pass derives subcommand args that reach the deliverable run | A1, A2 | M | M | **args-only (SC7)** — the model supplies only subcommand args + an expected substring, never a shell command; the **adapter** builds the argv (`python -m <pkg> <args>`), tokenized via `shlex`, so metacharacters become literal tokens (verified: `add; rm -rf ~`, `$(whoami)`, backticks, `&&`, `\|`, `>` all neutralized). Execution stays on the SC1/SC2/SC3 boundary. **Residual:** the model-derived *args* still reach a yolo shell as a tokenized argv, and `bwrap` degrades to policy-only on restricted-userns hosts (SC3) — blast radius is "the deliverable run with odd args", not "arbitrary command". Mitigated by args-only (SC7), the sandbox where available, cwd-pinning (SC2), and the derived spec being surfaced pre-run for inspection (written back into the plan before first execution) |
 
@@ -141,3 +141,19 @@ stop + `policy.auto_confirm` trust gate; `skeptic` never auto-rebuilds). T05
 and T06 (autonomous-loop rows) and T10 (wrong auto-resolution) updated to
 reference SC8; the skeptic-no-autofix gate is T10's primary mitigation. No
 new asset, adversary, or do-NOT-protect entry.
+
+Reviewed 2026-06-07 for `feat/flat-layout-run-smoke` (flat-layout run-smoke
++ deliverable-complete enforcement): triggered by this document's own Review
+note (a feature touches model→shell execution / a new auto-resolution reach).
+Run-smoke now **executes LLM-produced code on a wider set of projects** —
+`resolve_pkg` returns a `RunTarget(kind, target)` that resolves flat-layout
+shapes (root package with `__main__.py`, `[project.scripts]` entry, root entry
+script) in addition to src-layout/hatchling — and at a **new position** (the
+last *applicable* task, was the last not-done task). This is a **reach /
+frequency increase, not a new trust boundary or surface**: the deliverable run
+still goes through the existing model-output→shell path (SC1/SC2/SC3), the verb
+stays code-owned (`run_smoke` builds the argv from `RunTarget`), model input
+stays args-only (SC7), and the self-fix loop stays bounded by SC8. T05/T06
+(autonomous-loop rows) and T10 (wrong auto-resolution) updated to note the
+wider reach; **SC7 and SC8 reaffirmed, no new constraint added**. No new asset,
+adversary, or do-NOT-protect entry.

@@ -35,6 +35,7 @@ import re
 import shlex
 from pathlib import Path
 
+from code_scalpel.config import AgentConfig
 from code_scalpel.skills.base import (
     AcceptanceArgError,
     AcceptanceSpec,
@@ -42,7 +43,7 @@ from code_scalpel.skills.base import (
     Skill,
     decode_derived_acceptance,
 )
-from code_scalpel.skills.python_pkg import resolve_pkg
+from code_scalpel.skills.python_pkg import RunTarget, resolve_pkg
 from code_scalpel.skills.python_skill import PythonSkill
 
 # PEP 8 / importlib package-name shape: identifier-ish, no leading digit.
@@ -67,25 +68,48 @@ class PythonCliAdapter(Skill):
     # /skills) while staying get_skill-discoverable. See module docstring.
     hidden = True
 
-    def __init__(self, root: Path | None = None) -> None:
-        # `root` lets an adapter instance resolve <pkg> deterministically
+    def __init__(
+        self, root: Path | None = None, script_candidates: tuple[str, ...] | None = None
+    ) -> None:
+        # `root` lets an adapter instance resolve the run target deterministically
         # for run_smoke. The registry constructs it with no root (a
         # detection/discovery singleton); a caller that wants run_smoke
         # constructs PythonCliAdapter(root=project_root).
         self._root = root
+        # The lowest-rung root-entry-script candidate filenames. Config-owned
+        # (the default lives in `AgentConfig.run_smoke_script_candidates`); the
+        # adapter mirrors that default so the resolver never carries the magic
+        # list. The import-time registry singleton uses this default; the
+        # run-loop passes the LIVE config value via `acceptance_adapter(root,
+        # script_candidates=...)` → `bind`, so a user-set candidate list
+        # actually reaches the resolver (the default is only the fallback).
+        self._script_candidates = (
+            script_candidates
+            if script_candidates is not None
+            else tuple(AgentConfig().run_smoke_script_candidates)
+        )
         # One PythonSkill instance the adapter delegates detect/test/lint
         # to — a python-cli project IS a Python project, so the adapter
         # reuses PythonSkill verbatim instead of duplicating its commands.
         self._py = PythonSkill()
 
-    def bind(self, root: Path) -> Skill:
+    def bind(self, root: Path, script_candidates: tuple[str, ...] | None = None) -> Skill:
         """Return a root-bound adapter so `run_smoke`/`acceptance_spec` resolve.
 
         The registry holds a rootless discovery singleton (detect only); the
         run-loop binds it to the project root before asking for the run-smoke
-        command, so `<pkg>` resolves deterministically instead of raising.
+        command, so the run target resolves deterministically instead of
+        raising. `script_candidates`, when provided (the live config value the
+        run-loop threads through `acceptance_adapter`), overrides the
+        singleton's import-time default; otherwise the current candidate list
+        is carried forward unchanged.
         """
-        return PythonCliAdapter(root=root)
+        return PythonCliAdapter(
+            root=root,
+            script_candidates=(
+                script_candidates if script_candidates is not None else self._script_candidates
+            ),
+        )
 
     def detect(self, root: Path) -> bool:
         return self._py.detect(root)
@@ -100,16 +124,19 @@ class PythonCliAdapter(Skill):
         return ["pip", "install", "-e", "."]
 
     def run_smoke(self, args: str = "") -> list[str]:
-        """`python -m <pkg> <args>` with <pkg> resolved from the project.
+        """Run-smoke argv with the target resolved deterministically from the project.
 
-        `<pkg>` is discovered deterministically from `self._root`
-        (src-layout package or the declared wheel target), never guessed.
-        Requires a root-bound adapter — the registry singleton (no root)
-        is for detection/discovery, not run-smoke.
+        The argv shape follows the resolved `RunTarget.kind`:
+          `module` → `["python", "-m", target, *args]`
+          `script` → `["python", target, *args]`
+        The target (package/module name or script path) is discovered from
+        `self._root` (declared entry, root/src package, or root entry script),
+        never guessed. Requires a root-bound adapter — the registry singleton
+        (no root) is for detection/discovery, not run-smoke.
         """
         if self._root is None:
             raise ValueError("run_smoke needs a project root: construct PythonCliAdapter(root=...)")
-        pkg = resolve_pkg(self._root)
+        target = resolve_pkg(self._root, self._script_candidates)
         # shlex.split (not str.split) for parity with test_cmd — keeps
         # quoted argument groups like `--note 'a b'` intact. A malformed args
         # string (unbalanced quotes) is a SPEC error, not a package error:
@@ -120,7 +147,7 @@ class PythonCliAdapter(Skill):
             split_args = shlex.split(args) if args else []
         except ValueError as exc:
             raise AcceptanceArgError(f"cannot tokenize acceptance args {args!r}: {exc}") from exc
-        return ["python", "-m", pkg, *split_args]
+        return [*_argv_prefix(target), *split_args]
 
     def acceptance_spec(self, task: object) -> AcceptanceSpec | None:
         """Precedence C (narrow-pass-derived) → A (default-floor).
@@ -232,6 +259,18 @@ class PythonCliAdapter(Skill):
         main_py.write_text(_MAIN_TEMPLATE, encoding="utf-8")
         pyproject.write_text(_pyproject_template(spec.pkg), encoding="utf-8")
         return [init_py, main_py, pyproject]
+
+
+def _argv_prefix(target: RunTarget) -> list[str]:
+    """The code-owned argv verb for a resolved RunTarget (no model input).
+
+    `module` → `python -m <target>`; `script` → `python <target>`. The single
+    home of the python-specific argv shape choice; the descriptor's `kind`
+    decides it, so the adapter never re-probes the filesystem.
+    """
+    if target.kind == "module":
+        return ["python", "-m", target.target]
+    return ["python", target.target]
 
 
 def _ensure_absent(path: Path) -> None:

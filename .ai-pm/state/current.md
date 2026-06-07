@@ -10,12 +10,15 @@ PM reads this when curious about progress; PM never edits it. Agents read it as 
 
 idle
 
-Last shipped: `feat/acceptance-self-fix-loop` (feature 3 of the backend redesign) —
-bounded, trust-gated acceptance self-fix loop. Archived to
-`.ai-pm/state/archive/acceptance-self-fix-loop-2026-06-07.md`. PR open / awaiting
-PM merge.
+Last shipped: `feat/flat-layout-run-smoke` — flat-layout run-smoke resolution +
+last-applicable enforcement. Archived to
+`.ai-pm/state/archive/flat-layout-run-smoke-2026-06-07.md`. PR opened + merged (PM).
 
-Next candidate (per the backend-redesign roadmap): feature 5 — node-cli-adapter.
+In flight (not a coding task): deep-research on weak-14B agent configuration
+(temperature/edit-format/context/syntax-recovery) — launched, results pending. The
+Step-5.5 measurement showed the feature works but score is flat due to downstream
+settings/harness bugs (f-string thrashing at retry temp 0.1; spec↔deliverable name
+mismatch). Next concrete step depends on the research outcome.
 
 ---
 

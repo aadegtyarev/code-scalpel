@@ -5,8 +5,10 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 import yaml
+from pydantic import ValidationError
 
 from code_scalpel.config import (
+    AgentConfig,
     AppConfig,
     ModelProfile,
     ModeTemperatures,
@@ -39,6 +41,27 @@ def test_default_config() -> None:
     assert config.agent.max_files == 3
     assert config.agent.context_budget_warn == 0.70
     assert config.agent.answer_reserve_tokens == 4000
+
+
+def test_run_smoke_script_candidates_default_is_simple() -> None:
+    """The default candidate list loads cleanly (all simple filenames)."""
+    config = AgentConfig()
+    assert config.run_smoke_script_candidates == ["__main__.py", "main.py", "cli.py"]
+
+
+@pytest.mark.parametrize("evil", ["../evil.py", "sub/evil.py", "..", "a/../b.py", ""])
+def test_run_smoke_script_candidates_rejects_traversal(evil: str) -> None:
+    """CR3: a candidate that is not a simple filename (contains `/`, `..`, or is
+    empty) is rejected at config-load time so a traversal entry never reaches
+    the resolver and never executes as `python <path-outside-root>`."""
+    with pytest.raises(ValidationError, match="simple filename"):
+        AgentConfig(run_smoke_script_candidates=[evil])
+
+
+def test_run_smoke_script_candidates_accepts_custom_simple_name() -> None:
+    """A custom but simple candidate filename is accepted."""
+    config = AgentConfig(run_smoke_script_candidates=["run.py"])
+    assert config.run_smoke_script_candidates == ["run.py"]
 
 
 def test_deep_merge_nested() -> None:

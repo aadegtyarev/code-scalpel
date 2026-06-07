@@ -43,6 +43,7 @@ from contextlib import suppress
 from typing import TYPE_CHECKING
 
 from code_scalpel.skills import acceptance_adapter
+from code_scalpel.skills.base import Skill
 from code_scalpel.tools.agent_tools import ToolCall, ToolResult, execute
 
 if TYPE_CHECKING:
@@ -168,6 +169,13 @@ async def _verify_acceptance(
         _record_acceptance(agent, command=None, verdict="noop", reason=None, source=None)
         _emit_acceptance_card(on_tool_executed, command=None, ok=True, reason="no adapter")
         return outcome
+    # CR1: thread the LIVE config candidate list to the resolver. `acceptance_adapter`
+    # root-binds with the import-time default; re-bind here with the user-set value so
+    # a configured `run_smoke_script_candidates` actually reaches `resolve_pkg`. Only a
+    # Skill exposes `bind` — guarded so the gate stays open to any duck-typed
+    # `provides_acceptance` adapter; for a non-resolving Skill `bind` is the identity.
+    if isinstance(adapter, Skill):
+        adapter = adapter.bind(agent._cwd, tuple(agent._config.agent.run_smoke_script_candidates))
 
     verdict, command, reason, applicable, source, smoke_output = await _run_smoke(
         agent, adapter, task

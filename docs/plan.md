@@ -3339,6 +3339,31 @@ self-contained), но НЕ на консистентность кода/тест
   Journey 5 в user-journeys.md, T05/T06/T10 + SC8 + Last reviewed в
   threat-model.md.
 
+✓ flat-layout run-smoke + last-applicable enforcement (2026-06-07, coding
+  done, review pending): закрыты две дыры, из-за которых acceptance-гейт +
+  self-fix loop были **inert на канонском сценарии** (слабая модель строит
+  notes-style CLI). (A) `resolve_pkg` теперь возвращает типизированный
+  `RunTarget(kind, target)` и резолвит **flat-layout** python-CLI (root-пакет
+  с `__main__.py` → `python -m <pkg>`; одиночный root entry-script
+  `cli.py`/`main.py`/`__main__.py` → `python <script>`; одиночный
+  `[project.scripts]` console-entry) — детерминированный precedence ladder
+  (declared > discovered; ambiguity/absence → raise, никогда не угадывает)
+  поверх существующих src-layout/hatchling rungs. Новое pydantic-поле
+  `run_smoke_script_candidates` (default `["__main__.py","main.py","cli.py"]`).
+  (B) позиция enforcement переехала с «последней not-done задачи» на
+  **последнюю *applicable* задачу** (`_last_applicable_index` из чистого
+  предиката `acceptance_applicable`) — runnable CLI, построенный ранней
+  задачей, теперь enforced даже когда финальная задача плана non-CLI
+  (tests/docs); провал run-smoke демоутит `done → failed` и запускает
+  self-fix на optimist/yolo. CRITICAL: `verify_task` + все self-fix-хелперы
+  feature-3 байт-в-байт **не тронуты** — переехало только КАКАЯ задача
+  триггерит enforcement. Новый статус НЕ заведён (reuse done→failed). Оба
+  load-bearing no-regression инварианта сохранены by construction (early CLI
+  task никогда не демоутится; library/no-spec никогда не фейлится). Docs:
+  +decision record + Task-outcome/State-model/Operational-limits правки в
+  architecture.md, T05/T06/T10 reach-update + Review-log в threat-model.md
+  (SC7/SC8 reaffirmed, нового SC нет).
+
 Возможные направления для consistency:
 - **a) Усилить prompt в mode_plan.md** — модель часто оставляет
   files/acceptance пустыми (schema их optional). Принудить
