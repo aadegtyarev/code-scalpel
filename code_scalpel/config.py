@@ -147,6 +147,15 @@ class AgentConfig(BaseModel):
     # user-configurable. Accepted because self-fix fires at a single position
     # (`should_run_now`, KD8) — the one last applicable task per plan.
     acceptance_self_fix_max_attempts: int = 3
+    # Ordered candidate filenames for the lowest run-smoke resolution rung — a
+    # single root entry script (`python <script>`). Used ONLY when no declared
+    # entry (hatchling target / [project.scripts]) and no package dir resolve.
+    # Config-owned so the resolver carries no magic list; ordering documents
+    # precedence within the rung. `__main__.py` first (the canonical runnable
+    # entry), then the common `main.py` / `cli.py` weak-model conventions.
+    run_smoke_script_candidates: list[str] = Field(
+        default_factory=lambda: ["__main__.py", "main.py", "cli.py"]
+    )
     # Inference thinking effort — passed to providers that support it
     # (o1/o3, deepseek-r1, qwq). Ignored when ModelProfile.supports_thinking
     # is False or None (auto-detected as unsupported). Toggled via Ctrl+K.
