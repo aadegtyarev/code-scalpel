@@ -160,14 +160,17 @@ mental model (Fork 1-A in the design note).
 so **no existing skill becomes abstract** — Go/JS/Docker/Postgres/SQLite/
 Markdown all still instantiate unchanged.
 **`<pkg>` deterministic resolution (`python_pkg.resolve_pkg`):** the
-package run as `python -m <pkg>` is resolved from the project, never
-guessed, in fixed precedence — (1) the hatchling wheel target declared in
-`pyproject.toml`, (2) a single `-m`-runnable package under `src/` (has
-`__main__.py`), (3) a single package dir under `src/`; ambiguity or absence
-raises rather than guess. **Reach gap (documented):** resolution is
-**src-layout/hatchling only** today — a setuptools flat-layout project does
-not resolve and its acceptance run-smoke is **skipped** (recorded
-`pkg-unresolvable`, never demoted); flat-layout reach is a follow-up.
+run target is resolved from the project, never guessed, in fixed
+precedence. **Reach update (v0.14, see the *Flat-layout run-smoke* decision
+below):** `resolve_pkg` now returns a typed `RunTarget(kind, target)`
+descriptor and resolves **flat-layout** projects too — the precedence ladder
+is (1) hatchling wheel target, (2) single `[project.scripts]` console entry,
+(3) root package with `__main__.py`, (4) single `src/` package, (5) single
+root entry script (config candidate list); declared (pyproject) outranks
+discovered (filesystem), ambiguity or absence raises rather than guess. The
+earlier **src-layout/hatchling-only reach gap is now closed** — a flat-layout
+project resolves and its acceptance run-smoke runs (it no longer auto-records
+`pkg-unresolvable`).
 **Scaffold honors the stack invariants (`docs/stack-notes.md`):** the
 emitted `pyproject.toml` declares
 `[tool.hatch.build.targets.wheel] packages = ["src/<pkg>"]` (hatchling
@@ -282,7 +285,9 @@ not-applicable). The whole shape:
     greenfield/empty repo. The default-floor never sets it, so libraries
     and no-spec projects are not applicable.
   - **Position** — `should_run_now`: computed in the run-loop as **pure
-    plan structure** (the task is the structurally **last not-done task**).
+    plan structure** (the task is the structurally **last not-done task**;
+    v0.14 narrowed this to the **last *applicable* task** — see the
+    *Flat-layout run-smoke* decision below).
     Pure structure, no LLM, no language string — answers "has the plan
     reached the point where the deliverable should be runnable end-to-end?"
   - **State** — `run_smoke_ok`: the **deterministic run-smoke at verify
@@ -324,18 +329,17 @@ re-creating that regression; the position signal then prevents the
 *greenfield* false-demote a live probe exposed (an early not-built-yet task
 must not be failed just because the CLI isn't wired yet). A `done` task that
 is applicable, final, and ran means the deliverable actually worked.
-**Known limitation (documented, honest under-enforcement).** Enforcement
-fires only on the **last not-done task** (the position proxy). When the
-runnable CLI is built by an **earlier** task and the **final** task is
-non-CLI (tests/docs), the gate **observes rather than enforces** — safe
-**under-enforcement** (it never produces a *false failure*, it just misses a
-real one). A fuller "deliverable complete" signal, plus the model
-self-fixing mid-plan failures (consistency), is later work (feature 3 /
-follow-up). The `resolve_pkg` **flat-layout reach gap** (src-layout/hatchling
-only — see the ProjectAdapter decision) compounds this: a setuptools
-flat-layout project skips run-smoke entirely, also under-enforcing. The
-current contract is therefore **"never false-fail; enforce at the final
-step where applicable"** — not yet "every broken intermediate CLI fails".
+**Known limitation — closed (v0.14, see the *Flat-layout run-smoke +
+deliverable-complete enforcement* decision below).** This decision originally
+fired only on the **last not-done task** (the position proxy), so a plan whose
+runnable CLI was built by an **earlier** task and whose **final** task was
+non-CLI (tests/docs) was *observed*, not enforced — safe under-enforcement.
+The follow-up moved the position signal to the **last *applicable* task**
+(`_last_applicable_index`), so the runnable CLI is now enforced at the point
+it should be complete even when later non-CLI tasks remain; the
+`resolve_pkg` **flat-layout reach gap** that compounded it is closed too.
+Both no-regression locks below still hold by construction (early task never
+demoted; library/no-spec never failed) — only *which* task enforces moved.
 **Taxonomy unchanged.** No new status — enforcement reuses the existing
 `done → failed` demotion (the edge that was inert in feature 2 now fires
 where all three signals agree). See `### Task outcome status` and
@@ -427,6 +431,80 @@ combined-bound notes); `docs/features/acceptance-self-fix-loop_plan.md`
 `plan_verify.py` (inline failure-output on `TaskOutcome`), `config.py`
 (`acceptance_self_fix` + `acceptance_self_fix_max_attempts`).
 
+### Flat-layout run-smoke + deliverable-complete enforcement (v0.14)
+
+**Chosen:** close the two gaps that kept the acceptance gate + self-fix
+loop (features 4 + 3) **inert on the canonical scenario** — a weak local
+model building a notes-style CLI. Two changes, both no-regression by
+construction:
+- **Gap A — `resolve_pkg` reach (flat-layout).** `resolve_pkg(root)` now
+  returns a typed descriptor `RunTarget(kind, target)` instead of a bare
+  `str`, where `kind ∈ {module, script}` carries the **argv shape**: the
+  adapter builds `module → ["python","-m",target,*args]` and
+  `script → ["python",target,*args]`. This lets resolution reach the
+  **flat-layout** shapes weak models actually produce (previously
+  `pkg-unresolvable` → run-smoke skipped → the gate could never read a real
+  run state). The deterministic precedence ladder, **declared (pyproject)
+  outranks discovered (filesystem)**, first match wins, ambiguity/absence →
+  `raise ValueError` (never guess) at every rung:
+  1. hatchling wheel target (existing);
+  2. single `[project.scripts]` console entry (declared);
+  3. root package dir with `__main__.py` → `python -m <pkg>`;
+  4. single `src/` package (existing);
+  5. single root entry script (`__main__.py`/`main.py`/`cli.py`,
+     config-owned candidate list) → `python <script>`.
+  S1–S4 are all `python -m` (`module`); only the root entry script (S5)
+  introduces the second `script` argv shape. The candidate filename list
+  is the only tunable — `run_smoke_script_candidates` in `config.py`
+  (pydantic, default `["__main__.py","main.py","cli.py"]`, no magic list
+  in the resolver; see `## Operational limits & budgets`).
+- **Gap B — enforcement position is the last *applicable* task.** The
+  position signal `should_run_now` moves from `idx == _last_not_done_index`
+  to `idx == _last_applicable_index`, where `_last_applicable_index(tasks)`
+  is computed from the existing **pure** `acceptance_applicable(task)`
+  predicate (decodes the pre-loop written-back intent marker — no LLM, no
+  filesystem, no `run_smoke`). So the runnable CLI is enforced even when it
+  is built by an **earlier** task and the final plan task is non-CLI
+  (tests/docs) — closing the documented "honest under-enforcement"
+  limitation in the *Acceptance gate enforcement* decision above. A failing
+  CLI run-smoke at the last applicable task demotes `done → failed` and
+  engages the self-fix loop at `optimist`/`yolo`.
+**Why:** features 3 + 4 were wired correctly but never engaged on the
+canonical plan — Gap A meant every run-smoke returned `pkg-unresolvable`,
+and Gap B meant the gate landed on a non-applicable final test task. A live
+baseline probe (current `main`, N=5) scored ~7/8 mechanically yet `/go`
+gave up early (`max_failures`) — exactly the zone a working self-fix should
+close. This feature makes run-smoke run on the layouts weak models build
+and enforce the runnable CLI at the point it should be complete.
+**No-regression invariants preserved by construction:**
+- **Early CLI task never demoted** — enforcement still fires at exactly
+  **one** position; an early CLI-building task that is not the last
+  applicable one is observed, never demoted (the greenfield
+  skeleton-not-wired-yet false-demote does not return).
+- **Library / no-applicable-spec never failed** — a plan with no applicable
+  task has `_last_applicable_index == -1`, so `should_run_now` is never True
+  → never enforced (the same load-bearing lock as feature 2, now reinforced
+  at the position layer).
+- **Deterministic, never guess** — each new rung matches an *unambiguous*
+  intent signal; declared outranks discovered; ambiguity/absence raises.
+- **`verify_task` + all feature-3 self-fix helpers byte-for-byte unchanged**
+  — only *which* task triggers enforcement moved (the position signal is the
+  single line that changed). **No new status** — reuses the existing
+  `done → failed` edge.
+**Security:** run-smoke now executes LLM-produced code on a **wider** set
+of projects (flat-layout) and at a **new position** (last applicable task)
+— a **reach/frequency increase, not a new trust boundary**. `bwrap` stays
+the execution boundary; the verb stays code-owned (`run_smoke` builds the
+argv from `RunTarget`, args-only model input via `SC7`); the self-fix loop
+stays bounded by `SC8`. No new `SCn` — `SC7` and `SC8` are reaffirmed; risk
+rows in `docs/threat-model.md` (T05/T06/T10) updated for the wider reach.
+Source: `.ai-pm/arch/flat-layout-run-smoke_arch.md` (Q1 Option 1,
+Q2 Option (a)); `docs/features/flat-layout-run-smoke_plan.md`; shipped in
+`code_scalpel/skills/python_pkg.py` (`RunTarget` + the precedence ladder),
+`skills/python_cli_adapter.py` (argv shape from `kind`), `plan_runner.py`
+(`_last_applicable_index` → `should_run_now`), `config.py`
+(`run_smoke_script_candidates`).
+
 ## Architectural constraints
 
 - **Stay inside the project root.** Subprocess cwd is pinned to the
@@ -462,6 +540,10 @@ combined-bound notes); `docs/features/acceptance-self-fix-loop_plan.md`
   acceptance-spec derivation (one narrow-pass LLM call per acceptance-less
   task at `/go`, mirroring `auto_annotate_plan`); disable for a
   headless/hermetic run.
+- `run_smoke_script_candidates` (default `["__main__.py","main.py","cli.py"]`)
+  — the ordered candidate filenames for the lowest resolver rung (a single
+  root entry script, flat-layout); config-owned so the resolver carries no
+  magic list (v0.14, *Flat-layout run-smoke* decision; `resolve_pkg` Gap A).
 - `acceptance_self_fix` (default `True`) + `acceptance_self_fix_max_attempts` (default 3) — the bounded acceptance
   self-fix loop (feature 3): at `optimist`/`yolo` the last applicable task
   gets up to 3 rebuild→re-run-smoke attempts before final `failed`. Nests
@@ -483,7 +565,7 @@ combined-bound notes); `docs/features/acceptance-self-fix-loop_plan.md`
 | `code_scalpel/__main__.py` | `python -m code_scalpel` entry → `cli.app` |
 | `code_scalpel/runtime.py` | **Composition channel**: owns session+llm+memory+agent; `stream/ask/code_with_retry/fork/flush_upstream`; the one path every entry point shares |
 | `code_scalpel/agent.py` | **StepAgent** — the core engine (~2840 LOC): tool loop, `stream_ask`, `code_with_retry`, narrow passes, compaction, fork detection; `run_plan` is now a thin delegator to `PlanRunner` (strangled out — agent.py shrank ~450 lines) |
-| `code_scalpel/plan_runner.py` | **PlanRunner** — the per-task `run_plan` execution loop strangled out of `agent.py` (re-hash/plan_modified, streak/threshold, auto-commit hook, callback timing); computes the `should_run_now` position signal (last not-done task) and threads it into `verify_task`; since v0.14 (feature 3) also orchestrates the bounded trust-gated acceptance **self-fix loop** (`_self_fix_acceptance` / `_build_task` / `_acceptance_demoted` / `_self_fix_prompt`); `StepAgent.run_plan` delegates `PlanRunner(self).run(...)` |
+| `code_scalpel/plan_runner.py` | **PlanRunner** — the per-task `run_plan` execution loop strangled out of `agent.py` (re-hash/plan_modified, streak/threshold, auto-commit hook, callback timing); computes the `should_run_now` position signal (last *applicable* task, `_last_applicable_index`, v0.14) and threads it into `verify_task`; since v0.14 (feature 3) also orchestrates the bounded trust-gated acceptance **self-fix loop** (`_self_fix_acceptance` / `_build_task` / `_acceptance_demoted` / `_self_fix_prompt`); `StepAgent.run_plan` delegates `PlanRunner(self).run(...)` |
 | `code_scalpel/plan_loading.py` | TASKS.json/TASKS.md load + per-iteration re-hash + skill annotation + pre-loop acceptance-intent derivation for the run loop (extracted alongside the strangle) |
 | `code_scalpel/plan_post_checks.py` | post-task hooks for the run loop (auto-commit, plan annotation) extracted alongside the strangle |
 | `code_scalpel/plan_verify.py` | per-task Definition-of-Done machine checks: `Files:` exist, `Test command:` exit-0, git HEAD advanced (all demoting), and **verification #4 `_verify_acceptance`** — the registry-resolved acceptance run-smoke that **demotes `done → failed` only when intent (`applicable`) × position (`should_run_now`) × state (failing run-smoke) all agree, else records/surfaces only** (v0.14; see the Acceptance gate enforcement decision) |
@@ -513,7 +595,7 @@ combined-bound notes); `docs/features/acceptance-self-fix-loop_plan.md`
 | `code_scalpel/index/` | tree-sitter symbol index: `parser.py`, `walkers.py`, `signatures.py`, `shape.py`, `builder.py`, `model.py`, `retrieve.py` (BM25), `__init__.py` |
 | `code_scalpel/tools/` | agent tool surface: `agent_tools.py` (dispatch + JSON schemas), `files.py`, `git.py`, `search.py`, `shell.py`, `sandbox.py` (bwrap), `web_search.py` |
 | `code_scalpel/checks/` | machine checks: `lint_pass.py`, `import_graph.py`, `empty_tests.py`, `syntax_check.py` |
-| `code_scalpel/skills/` | per-stack test/lint/format contracts + the ProjectAdapter superset: `base.py` (`Skill` ABC + `ScaffoldSpec` + `provides_acceptance`/`bind`), `registry.py` (+ `acceptance_adapter(root)` selector), `python_skill.py`, `js_skill.py`, `go_skill.py`, `docker_skill.py`, `postgres_skill.py`, `sqlite_skill.py`, `python_cli_adapter.py` (first `ProjectAdapter`, `hidden`, `provides_acceptance=True`, root-binding `bind`), `python_pkg.py` (`resolve_pkg` — deterministic `python -m <pkg>` resolution, src-layout/hatchling only) |
+| `code_scalpel/skills/` | per-stack test/lint/format contracts + the ProjectAdapter superset: `base.py` (`Skill` ABC + `ScaffoldSpec` + `provides_acceptance`/`bind`), `registry.py` (+ `acceptance_adapter(root)` selector), `python_skill.py`, `js_skill.py`, `go_skill.py`, `docker_skill.py`, `postgres_skill.py`, `sqlite_skill.py`, `python_cli_adapter.py` (first `ProjectAdapter`, `hidden`, `provides_acceptance=True`, root-binding `bind`), `python_pkg.py` (`resolve_pkg` → `RunTarget(kind, target)` — deterministic run-target resolution; src-layout/hatchling **and** flat-layout: root package, `[project.scripts]` entry, or root entry script, declared-outranks-discovered, ambiguity/absence raises) |
 | `code_scalpel/patch/` | `edit_block.py` — SEARCH/REPLACE parse + apply (fallback patch engine) |
 | `code_scalpel/mermaid/` | mermaid parse + ASCII layout/render (`parser.py`, `layout.py`, `render.py`, `classes.py`, `sequence.py`) |
 | `code_scalpel/prompts/` | all model-facing prompts as `.md` (system, mode_*, narrow passes, `retry/*`, `skills/*`, `derive_acceptance.md` — intent-judging acceptance-spec derivation); `__init__.py` is the single loader |
@@ -606,8 +688,11 @@ since v0.14 (`feat/acceptance-spec-in-tasks`), ENFORCES — it demotes
 `done → failed` — but ONLY when three signals agree** (intent × position ×
 state): the spec is *applicable* (a derived spec judged from task text to be
 a runnable CLI deliverable; the default-floor never is), the task is the
-*last not-done task* (`should_run_now`, the position the deliverable should
-be runnable end-to-end), and the deterministic run-smoke *fails*. **An early
+*last applicable task* (`should_run_now`, the structurally last not-done
+task whose derived spec is applicable — the point the deliverable should be
+runnable end-to-end; v0.14 moved this from the *last not-done task* so an
+early-built CLI is enforced even when later plan tasks are non-CLI), and the
+deterministic run-smoke *fails*. **An early
 not-built-yet task of a CLI plan, a library, and a no-spec project are all
 observed, never demoted.** **The taxonomy is unchanged** — no new status;
 enforcement reuses the existing `done → failed` edge. Everywhere the three
@@ -669,8 +754,8 @@ for json_schema fork resolution, not for tool loops.
   never an exception — stated inline above (tool surface).
 - **Acceptance enforcement is three-signal-gated (v0.14):** verification
   #4 demotes `done → failed` only when intent (`applicable`) × position
-  (`should_run_now`, the last not-done task) × state (failing run-smoke)
-  all agree; an early not-built-yet CLI task, a library/no-spec project, and
+  (`should_run_now`, the last *applicable* task — `_last_applicable_index`,
+  v0.14) × state (failing run-smoke) all agree; an early not-built-yet CLI task, a library/no-spec project, and
   the default-floor are all observed, never demoted (the feature-2
   no-regression lock plus the greenfield early-task lock) — stated inline
   above (task outcome status) and in `## State model`. Model-derived
@@ -707,18 +792,22 @@ the non-empty `expected` observable present) · `failed` (non-zero exit /
 `passed`/`failed`. **Since v0.14 this verdict drives the `done → failed`
 edge above ONLY when three signals agree** — intent (`spec.applicable`,
 a derived-and-applicable CLI spec judged from task text), position
-(`should_run_now`, the structurally last not-done task), and a *failing*
-state (the run-smoke): `applicable AND should_run_now AND not run_smoke_ok`
-demotes. An **early not-built-yet** task of a CLI plan (`should_run_now`
+(`should_run_now`, the structurally last not-done task **whose derived spec
+is applicable** — `_last_applicable_index`; v0.14 moved this from the last
+not-done task), and a *failing* state (the run-smoke):
+`applicable AND should_run_now AND not run_smoke_ok` demotes. An **early not-built-yet** task of a CLI plan (`should_run_now`
 False), a **library / not-applicable** spec, and the **default-floor** are
 all recorded/surfaced only — they drive no edge, exactly as in feature 2.
 The intent (`applicable`) is derived once pre-loop from task text and
 written back (stable on resume/re-run, and correct on a greenfield/empty
 repo); the position is recomputed deterministically in the run-loop; the
-state is the deterministic verify-time run-smoke. **Known limitation:**
-position is proxied by "last not-done task", so a plan whose final task is
-non-CLI observes rather than enforces (safe under-enforcement) — see the
-*Acceptance gate enforcement* decision. **Self-fix deferral (v0.14, feature 3):** at `optimist`/`yolo` the demoting edge is not taken on the first failing run-smoke — the run loop rebuilds and re-runs (bounded by `acceptance_self_fix_max_attempts`, default 3, with a byte-identical-output early stop) and only records `failed` after the budget is spent; at `skeptic` it still fires immediately. The verdict values and the edge are unchanged — only the timing of the edge at `optimist`/`yolo` is deferred (see the *Acceptance self-fix loop* decision).
+state is the deterministic verify-time run-smoke. **Position now the last *applicable* task (v0.14):**
+the earlier "last not-done task" proxy under-enforced a plan whose final task
+is non-CLI; `should_run_now` is now `idx == _last_applicable_index`, so the
+runnable CLI is enforced at the point it should be complete even when later
+non-CLI tasks remain (early CLI tasks and library/no-spec plans still never
+demote — `_last_applicable_index == -1` for the latter). See the
+*Flat-layout run-smoke + deliverable-complete enforcement* decision. **Self-fix deferral (v0.14, feature 3):** at `optimist`/`yolo` the demoting edge is not taken on the first failing run-smoke — the run loop rebuilds and re-runs (bounded by `acceptance_self_fix_max_attempts`, default 3, with a byte-identical-output early stop) and only records `failed` after the budget is spent; at `skeptic` it still fires immediately. The verdict values and the edge are unchanged — only the timing of the edge at `optimist`/`yolo` is deferred (see the *Acceptance self-fix loop* decision).
 
 Loop-level stops: `all_done`, `no_tasks`, `plan_modified` (TASKS.md hash
 changed mid-run), `CancelledError` (ESC — already-marked tasks stay).
