@@ -41,6 +41,23 @@ from code_scalpel.tools.shell import ShellRunner
 
 _MAX_TOOL_ROUNDS = 6
 
+# Providers that support OpenAI-style strict json_schema response_format.
+# Others (DeepSeek, OpenRouter, local models) either reject it (400) or
+# silently ignore it. Fallback: json_object for API providers that accept
+# it, skip entirely for local models.
+_JSON_SCHEMA_PROVIDERS: frozenset[str] = frozenset({"openai"})
+_JSON_OBJECT_PROVIDERS: frozenset[str] = frozenset({"deepseek", "openrouter"})
+
+
+def _plan_response_format(provider: str) -> str:
+    """Return the response_format type to use for plan-mode JSON output:
+    'json_schema', 'json_object', or '' (skip)."""
+    if provider in _JSON_SCHEMA_PROVIDERS:
+        return "json_schema"
+    if provider in _JSON_OBJECT_PROVIDERS:
+        return "json_object"
+    return ""
+
 # Prompt aliases — kept as module attributes for the moment so existing
 # code (and tests that import these names) keeps working. The source of
 # truth is `code_scalpel/prompts/`.
@@ -2545,14 +2562,25 @@ class StepAgent:
         if mode == "plan":
             from code_scalpel.plan import PLAN_JSON_SCHEMA
 
-            stream_kwargs["response_format"] = {
-                "type": "json_schema",
-                "json_schema": {
-                    "name": "plan",
-                    "strict": True,
-                    "schema": PLAN_JSON_SCHEMA,
-                },
-            }
+            # json_schema (strict structured output) is OpenAI-only;
+            # most other providers (DeepSeek, OpenRouter, local models
+            # via LM Studio) reject it or silently ignore it. Fall back
+            # to json_object for providers known to accept it, and skip
+            # response_format entirely for local models.
+            _plan_format = _plan_response_format(self._config.current_profile.provider)
+            if _plan_format == "json_schema":
+                stream_kwargs["response_format"] = {
+                    "type": "json_schema",
+                    "json_schema": {
+                        "name": "plan",
+                        "strict": True,
+                        "schema": PLAN_JSON_SCHEMA,
+                    },
+                }
+            elif _plan_format == "json_object":
+                stream_kwargs["response_format"] = {"type": "json_object"}
+            # else: skip response_format — the prompt alone must guide
+            # the model to emit JSON (local/weak models).
             stream_tools = None
         for _ in range(_MAX_TOOL_ROUNDS):
             full = ""
