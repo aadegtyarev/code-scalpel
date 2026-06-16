@@ -2604,9 +2604,7 @@ class StepAgent:
                     prompt_total = chunk.usage.prompt_tokens
                     completion_total += chunk.usage.completion_tokens
 
-            asst_msg: dict[str, Any] = {"role": "assistant"}
-            if full:
-                asst_msg["content"] = full
+            asst_msg: dict[str, Any] = {"role": "assistant", "content": full}
             if round_tool_calls:
                 asst_msg["tool_calls"] = [
                     {
@@ -2657,9 +2655,7 @@ class StepAgent:
                 )
             final_assistant = full
 
-        final_msg: dict[str, Any] = {"role": "assistant"}
-        if final_assistant:
-            final_msg["content"] = final_assistant
+        final_msg: dict[str, Any] = {"role": "assistant", "content": final_assistant}
         turn_history.append(final_msg)
         self._history.extend(turn_history)
 
