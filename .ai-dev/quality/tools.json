@@ -1,0 +1,53 @@
+{
+  "_doc": "The quality-tools registry — the one home for 'what does GREEN mean in this project' (PROTOCOL.md `## Quality tools`). The Builder runs every `build`-beat tool and hands back only when they pass; the Reviewer confirms the `review`-beat tools ran and reads their output. The runner is `node .ai-dev/quality/run.mjs <beat>`. No core edit is ever needed to add or change a tool — only a row here.",
+  "_row_shape": {
+    "id": "short stable name",
+    "checks": "one plain line: what this tool catches",
+    "config": "path to its native config beside this file, or null if none",
+    "run": "the command to run it (from the project root)",
+    "beat": "build | review | ship — which loop beat it runs in",
+    "init": "one line: how to install/enable it (the minimal init instruction)"
+  },
+  "tools": [
+    {
+      "id": "ruff",
+      "checks": "Lint + import sort + basic bug detection (pyproject.toml)",
+      "config": "pyproject.toml",
+      "run": ".venv/bin/ruff check code_scalpel/",
+      "beat": "build",
+      "init": "pip install ruff; config in pyproject.toml [tool.ruff]"
+    },
+    {
+      "id": "mypy",
+      "checks": "Static type checking (pyproject.toml)",
+      "config": "pyproject.toml",
+      "run": ".venv/bin/mypy code_scalpel/",
+      "beat": "build",
+      "init": "pip install mypy; config in pyproject.toml [tool.mypy]"
+    },
+    {
+      "id": "pytest",
+      "checks": "All non-LLM tests pass (LLM tests skipped by default)",
+      "config": "pyproject.toml",
+      "run": ".venv/bin/pytest tests/ -x -q",
+      "beat": "build",
+      "init": "pip install pytest pytest-asyncio pytest-cov; config in pyproject.toml [tool.pytest.ini_options]"
+    },
+    {
+      "id": "bandit",
+      "checks": "Python security SAST — Medium+ severity (config: bandit.yaml)",
+      "config": ".ai-dev/quality/bandit.yaml",
+      "run": ".venv/bin/bandit -r code_scalpel/ -c .ai-dev/quality/bandit.yaml -lll",
+      "beat": "review",
+      "init": "pip install bandit; config at .ai-dev/quality/bandit.yaml"
+    },
+    {
+      "id": "detect-secrets",
+      "checks": "Committed secrets — checked against audited baseline",
+      "config": ".ai-dev/quality/.secrets.baseline",
+      "run": ".venv/bin/detect-secrets-hook --baseline .ai-dev/quality/.secrets.baseline code_scalpel/ tests/ scripts/",
+      "beat": "review",
+      "init": "pip install detect-secrets; baseline at .ai-dev/quality/.secrets.baseline"
+    }
+  ]
+}

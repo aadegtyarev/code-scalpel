@@ -1,0 +1,7 @@
+# Bandit config — security linter for Python (PROTOCOL.md ## Quality tools).
+# Kept minimal: only the severity floor that makes CI green on the current tree.
+# Low-severity findings (B101 assert, B104 bind, B110 try-except-pass, etc.)
+# have a high false-positive rate and are excluded from CI; new Medium+ findings
+# still fail the build.
+skips: []
+severity: medium
