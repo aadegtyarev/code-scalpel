@@ -105,7 +105,7 @@ class McpServer:
         if hasattr(self, "_stdio_ctx") and self._stdio_ctx is not None:
             with contextlib.suppress(Exception):
                 await self._stdio_ctx.__aexit__(None, None, None)
-            self._stdio_ctx = None
+            self._stdio_ctx = None  # type: ignore[assignment]
 
 
 class McpManager:
@@ -152,7 +152,7 @@ class McpManager:
                     return json.loads(loc.read_text())
                 except (json.JSONDecodeError, OSError):
                     pass
-        return {}
+        return {}  # type: ignore[return-value]
 
     async def start(self) -> list[McpTool]:
         """Start all configured servers and collect their tools."""
