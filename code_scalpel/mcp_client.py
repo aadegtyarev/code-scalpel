@@ -8,6 +8,7 @@ and any other MCP-compatible tool.
 
 from __future__ import annotations
 
+import contextlib
 import json
 import os
 from pathlib import Path
@@ -64,7 +65,8 @@ class McpServer:
             args=self.args,
             env=env,
         )
-        read_stream, write_stream = await stdio_client(params)
+        self._stdio_ctx = stdio_client(params)
+        read_stream, write_stream = await self._stdio_ctx.__aenter__()
         self._session = ClientSession(read_stream, write_stream)
         await self._session.initialize()
 
@@ -100,6 +102,10 @@ class McpServer:
             with contextlib.suppress(Exception):
                 await self._session.__aexit__(None, None, None)
             self._session = None
+        if hasattr(self, "_stdio_ctx") and self._stdio_ctx is not None:
+            with contextlib.suppress(Exception):
+                await self._stdio_ctx.__aexit__(None, None, None)
+            self._stdio_ctx = None
 
 
 class McpManager:
