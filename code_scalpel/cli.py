@@ -173,7 +173,7 @@ def _default_model_for(provider: str) -> str:
     if provider == "openai":
         return "gpt-4o-mini"
     if provider == "deepseek":
-        return "deepseek-chat"
+        return "deepseek-v4-flash"
     return ""
 
 
