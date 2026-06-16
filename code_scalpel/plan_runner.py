@@ -35,33 +35,32 @@ if TYPE_CHECKING:
 
 @dataclass
 class _Streaks:
-    """Consecutive-failure / consecutive-skip counters for the run loop.
+    """Consecutive-skip counter for the run loop.
 
-    Skips are tracked separately from failures: a skip is almost always
-    harmless — the 14b coder builds holistically (all commands in one
-    notes.py across T002-T003), so later "implement list/delete" tasks
-    become no-ops. Counting a skip as a failure lets max_failures abort the
-    run before the suite goes green (observed: T004 skip + T005 fail = abort
-    before a green suite). The skip threshold is softer — it only catches a
-    total give-up (the model does nothing several tasks in a row).
+    Skips are tracked separately: a skip is almost always harmless — the
+    model builds holistically, so later tasks become no-ops. The skip
+    threshold catches a total give-up (the model does nothing several
+    tasks in a row).
+
+    max_failures was removed as a stop condition (v0.13+): it was designed
+    to protect against infinite loops, but _is_loop already catches those
+    within a task, and max_failures only prevented strong models from
+    completing their work.
     """
 
     skip_giveup_threshold: int
-    failures: int = 0
     skips: int = 0
 
-    def record(self, status: str, stop_after_failures: int) -> str | None:
+    def record(self, status: str) -> str | None:
         """Fold one task outcome into the streaks; return a stop reason or None."""
         if status == "done":
-            self.failures = 0
             self.skips = 0
             return None
         if status == "failed":
-            # A real failure (the model tried and broke something) — strict
-            # threshold. A failure breaks the skip streak: there was activity.
-            self.failures += 1
+            # Activity — reset skip counter. No failure counter: the model
+            # tried and may succeed on the next task (or after self-fix).
             self.skips = 0
-            return "max_failures" if self.failures >= stop_after_failures else None
+            return None
         # "skipped" — the model did not touch the workspace for this task.
         self.skips += 1
         return "task_not_done" if self.skips >= self.skip_giveup_threshold else None
@@ -131,7 +130,7 @@ class PlanRunner:
     async def run(
         self,
         *,
-        stop_after_failures: int = 2,
+        stop_after_failures: int = 2,  # kept for API compat, no longer used
         max_tasks: int | None = None,
         on_task_start: Callable[[Task], None] | None = None,
         on_task_end: Callable[[TaskOutcome], None] | None = None,
@@ -142,24 +141,13 @@ class PlanRunner:
         """Walk `.code-scalpel/TASKS.md`, execute each non-done task through
         `code_with_retry`, and mark completed tasks `[✓]` atomically.
 
-        Stop reasons: max_failures, plan_modified, all_done, no_tasks,
-        max_tasks (see RunPlanResult). The `on_task_*` / `on_tool_executed`
-        hooks let the TUI render progress; exceptions inside them are
-        swallowed so a buggy widget cannot kill the loop.
+        Stop reasons: plan_modified, all_done, no_tasks, max_tasks,
+        task_not_done (skip streak). max_failures was removed — the
+        model is allowed to fail and retry any number of times; only
+        a skip streak (doing nothing) or max_tasks stops the loop.
         """
         from code_scalpel.agent import RunPlanResult
         from code_scalpel.plan_loading import load_plan
-
-        # Scale max-failure tolerance with trust: a strong model (or yolo)
-        # deserves more chances to self-correct before the loop gives up.
-        # Non-default values from the caller always win; the default (2) is
-        # the skeptic floor — only then do we scale up with trust.
-        if stop_after_failures == 2:
-            trust = self._agent._config.agent.trust
-            if trust == "yolo":
-                stop_after_failures = 4
-            elif trust == "optimist":
-                stop_after_failures = 3
 
         loaded = await load_plan(self._agent, on_tool_executed, fork_resolver)
         if loaded is None:
@@ -173,7 +161,6 @@ class PlanRunner:
             tasks=tasks,
             tasks_path=tasks_path,
             initial_hash=initial_hash,
-            stop_after_failures=stop_after_failures,
             max_tasks=max_tasks,
             on_task_start=on_task_start,
             on_task_end=on_task_end,
@@ -187,7 +174,6 @@ class PlanRunner:
         tasks: tuple[Task, ...],
         tasks_path: Path,
         initial_hash: str,
-        stop_after_failures: int,
         max_tasks: int | None,
         on_task_start: Callable[[Task], None] | None,
         on_task_end: Callable[[TaskOutcome], None] | None,
@@ -198,7 +184,7 @@ class PlanRunner:
         from code_scalpel.skills import acceptance_adapter
 
         outcomes: list[TaskOutcome] = []
-        streaks = _Streaks(skip_giveup_threshold=stop_after_failures + 2)
+        streaks = _Streaks(skip_giveup_threshold=5)
         # Mutable so we can flip individual tasks done without rebuilding it.
         live_tasks: list[Task] = list(tasks)
         stopped_reason = "all_done"
@@ -242,7 +228,7 @@ class PlanRunner:
                 live_tasks[idx] = Task(id=task.id, title=task.title, body=task.body, done=True)
                 initial_hash = self._mark_done(live_tasks, tasks_path, current_text)
 
-            stop = streaks.record(outcome.status, stop_after_failures)
+            stop = streaks.record(outcome.status)
             if stop is not None:
                 stopped_reason = stop
                 break
