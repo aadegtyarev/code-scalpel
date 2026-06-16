@@ -414,8 +414,59 @@ def check_notes_cli(tree: Path, *, run_tests: bool = True) -> CheckResult:
     return CheckResult(criteria=criteria, gating=gating)
 
 
+def check_fullstack(tree: Path, *, run_tests: bool = True) -> CheckResult:
+    """Чекер fullstack-сценария: FastAPI + PostgreSQL + Redis, Docker Compose."""
+    criteria: dict[str, Criterion] = {
+        "docker": _has_docker(tree),
+        "app_package": _has_package(tree),
+        "four_endpoints": _has_fullstack_endpoints(tree),
+        "sha256": _has_sha256(tree),
+        "rate_limit": _has_rate_limit(tree),
+        "tests_present": _has_tests(tree),
+        "docs": _has_docs(tree),
+    }
+    gating = ("docker", "four_endpoints", "sha256", "rate_limit", "docs", "tests_pass")
+    if run_tests:
+        installable, tests_pass = _install_and_test(tree)
+        criteria["installable"] = installable
+        criteria["tests_pass"] = tests_pass
+    return CheckResult(criteria=criteria, gating=gating)
+
+
+def _has_docker(tree: Path) -> Criterion:
+    for name in ("docker-compose.yml", "docker-compose.yaml", "Dockerfile"):
+        if (tree / name).is_file():
+            return Criterion(True, f"{name} найден")
+    return Criterion(False, "ни Dockerfile, ни docker-compose.yml")
+
+
+def _has_fullstack_endpoints(tree: Path) -> Criterion:
+    """Ищет /keys и /verify эндпоинты в исходниках."""
+    text = _source_text(tree)
+    endpoints = ["/keys", "/verify"]
+    found = [e for e in endpoints if e in text]
+    if len(found) == len(endpoints):
+        return Criterion(True, "все эндпоинты упомянуты")
+    return Criterion(False, f"найдены: {found}, не найдены: {set(endpoints) - set(found)}")
+
+
+def _has_sha256(tree: Path) -> Criterion:
+    text = _source_text(tree)
+    if "sha256" in text or "sha-256" in text or "hashlib" in text:
+        return Criterion(True, "SHA-256 хеширование найдено")
+    return Criterion(False, "SHA-256 не используется")
+
+
+def _has_rate_limit(tree: Path) -> Criterion:
+    text = _source_text(tree)
+    if "rate_limit" in text or "rate_limiter" in text or "zremrangebyscore" in text or "sliding" in text:
+        return Criterion(True, "rate limiting найден")
+    return Criterion(False, "rate limiting отсутствует")
+
+
 _CHECKERS: dict[str, Callable[..., CheckResult]] = {
     "notes_cli": check_notes_cli,
+    "fullstack": check_fullstack,
 }
 
 

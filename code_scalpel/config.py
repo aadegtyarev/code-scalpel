@@ -421,6 +421,8 @@ class ModelProfile(BaseModel):
 
     def api_key(self) -> str:
         caps = get_provider_capabilities(self.provider)
+        # "lm-studio" is the default sentinel for local models that don't
+        # need an API key; real providers require the env var to be set.
         return os.environ.get(caps.api_key_env_var, "lm-studio")
 
 

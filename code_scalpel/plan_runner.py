@@ -366,7 +366,7 @@ class PlanRunner:
         failure_context = sr.reply or ""
         if sr.edits:
             failure_context += "\n\nFiles modified: " + ", ".join(
-                e.path for e in sr.edits if hasattr(e, "path")
+                e.path for e in sr.edits
             )
         retry_prompt = (
             f"{prompt}\n\n"
@@ -388,11 +388,16 @@ class PlanRunner:
             )
             if new_outcome.status == "done":
                 return new_outcome
-            # Update retry prompt with latest failure
+            # Anti-loop: if the model produces byte-identical output two
+            # attempts in a row, stop — it's stuck (mirrors acceptance self-fix).
+            new_reply = (step_result.reply or "")[:3000]
+            prev_reply = retry_prompt.split("Latest output:\n")[-1].split("\n\nFix")[0] if "Latest output" in retry_prompt else ""
+            if new_reply == prev_reply:
+                return new_outcome
             retry_prompt = (
                 f"{prompt}\n\n"
                 f"Still failing. Latest output:\n"
-                f"{(step_result.reply or '')[:3000]}\n\n"
+                f"{new_reply}\n\n"
                 f"Fix the remaining issues."
             )
         return outcome
