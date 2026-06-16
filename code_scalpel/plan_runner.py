@@ -152,7 +152,8 @@ class PlanRunner:
 
         # Scale max-failure tolerance with trust: a strong model (or yolo)
         # deserves more chances to self-correct before the loop gives up.
-        # The explicit arg always wins; the default (2) is the skeptic floor.
+        # Non-default values from the caller always win; the default (2) is
+        # the skeptic floor — only then do we scale up with trust.
         if stop_after_failures == 2:
             trust = self._agent._config.agent.trust
             if trust == "yolo":
