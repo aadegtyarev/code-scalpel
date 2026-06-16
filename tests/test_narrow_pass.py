@@ -187,7 +187,13 @@ async def test_debug_pass_returns_structured_hint(project: Path) -> None:
         ' "suggested_fix": "rename queue.py to job_queue.py"}'
     )
     llm = MockLLMAdapter([payload])
-    agent = StepAgent(llm=llm, cwd=project, config=_CONFIG)
+    # Use openai provider — the test asserts json_schema response_format
+    # which lmstudio/local models no longer receive (they skip it).
+    config = AppConfig(
+        profiles={"local": ModelProfile(provider="openai", model="gpt-4o")},
+        agent=AgentConfig(debug_pass=True, debug_pass_temperature=0.1),
+    )
+    agent = StepAgent(llm=llm, cwd=project, config=config)
 
     result = await agent.debug_pass(
         task_id="T001",

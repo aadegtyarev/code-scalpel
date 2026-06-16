@@ -639,10 +639,17 @@ def _plan_task(tid: str = "T001", **over: object) -> dict[str, object]:
 async def test_derivation_uses_json_schema_structured_output(tmp_path: Path) -> None:
     """Stack-spec: the derivation pass is configured with `output_schema`
     (sampler-enforced JSON via response_format=json_schema), not prompt-parsed.
-    Cites narrow_pass / LM Studio json_schema (narrow_pass.py docstring)."""
+    Uses openai provider — lmstudio skips structured output."""
     project = _python_cli_project(tmp_path)
     llm = MockLLMAdapter([json.dumps({"applicable": True, "args": "add x", "expected": "x"})])
-    agent = _agent(project, MockShellRunner([]), llm=llm)
+    # Use openai provider for json_schema assertion — lmstudio skips it.
+    cfg = AppConfig(
+        profiles={"local": ModelProfile(provider="openai", model="gpt-4o", temperature=0.1)},
+        agent=AgentConfig(max_files=2, max_file_lines=50, auto_git=False, sandbox="off",
+                          auto_annotate_plan=False, auto_derive_acceptance=True,
+                          shell_exec_timeout=_SHELL_TIMEOUT, trust="yolo"),
+    )
+    agent = StepAgent(llm=llm, cwd=project, config=cfg, shell_runner=MockShellRunner([]))
     task = Task(id="T001", title="t", body="", done=False, goal="g")
     data = await agent.derive_acceptance_args(task)
     assert data == {"applicable": True, "args": "add x", "expected": "x"}
