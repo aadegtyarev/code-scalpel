@@ -2221,7 +2221,24 @@ class StepAgent:
             result = await self.run_narrow_pass(pass_spec, user_message)
             data = json.loads(result.text)
         except Exception:
-            return None
+            # Structured output failed (unsupported provider or bad format).
+            # Retry without schema — the prompt alone must guide the model.
+            try:
+                from code_scalpel.fork import _extract_json_object
+
+                fallback = NarrowPass(
+                    name="derive_acceptance_fb",
+                    system_prompt=_prompts.DERIVE_ACCEPTANCE,
+                    temperature=0.0,
+                    output_schema=None,
+                )
+                result = await self.run_narrow_pass(fallback, user_message)
+                data = _extract_json_object(result.text)
+                if data is None:
+                    return None
+                data = json.loads(data)
+            except Exception:
+                return None
         if not isinstance(data, dict) or "applicable" not in data:
             return None
         return data
