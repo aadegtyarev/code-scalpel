@@ -8,7 +8,6 @@ and any other MCP-compatible tool.
 
 from __future__ import annotations
 
-import asyncio
 import json
 import os
 from pathlib import Path
@@ -58,14 +57,14 @@ class McpServer:
             env.update(self.env)
 
         from mcp import ClientSession
-        from mcp.client.stdio import stdio_client
+        from mcp.client.stdio import StdioServerParameters, stdio_client
 
-        params = await stdio_client(
+        params = StdioServerParameters(
             command=self.command,
             args=self.args,
             env=env,
         )
-        read_stream, write_stream = params
+        read_stream, write_stream = await stdio_client(params)
         self._session = ClientSession(read_stream, write_stream)
         await self._session.initialize()
 
@@ -91,19 +90,15 @@ class McpServer:
         contents = result.content if hasattr(result, "content") else []
         text_parts = []
         for c in contents:
-            if hasattr(c, "text"):
-                text_parts.append(c.text)
-            elif hasattr(c, "type") and c.type == "text":
+            if hasattr(c, "text") or hasattr(c, "type") and c.type == "text":
                 text_parts.append(c.text)
         return "\n".join(text_parts) if text_parts else str(result)
 
     async def close(self) -> None:
         """Shut down the server connection."""
         if self._session is not None:
-            try:
+            with contextlib.suppress(Exception):
                 await self._session.__aexit__(None, None, None)
-            except Exception:
-                pass
             self._session = None
 
 
