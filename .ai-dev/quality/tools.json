@@ -13,7 +13,7 @@
       "id": "ruff",
       "checks": "Lint + import sort + basic bug detection (pyproject.toml)",
       "config": "pyproject.toml",
-      "run": ".venv/bin/ruff check code_scalpel/",
+      "run": "python -m ruff check code_scalpel/",
       "beat": "build",
       "init": "pip install ruff; config in pyproject.toml [tool.ruff]"
     },
@@ -21,7 +21,7 @@
       "id": "mypy",
       "checks": "Static type checking (pyproject.toml)",
       "config": "pyproject.toml",
-      "run": ".venv/bin/mypy code_scalpel/",
+      "run": "python -m mypy code_scalpel/",
       "beat": "build",
       "init": "pip install mypy; config in pyproject.toml [tool.mypy]"
     },
@@ -29,7 +29,7 @@
       "id": "pytest",
       "checks": "All non-LLM tests pass (LLM tests skipped by default)",
       "config": "pyproject.toml",
-      "run": ".venv/bin/pytest tests/ -x -q",
+      "run": "python -m pytest tests/ -x -q",
       "beat": "build",
       "init": "pip install pytest pytest-asyncio pytest-cov; config in pyproject.toml [tool.pytest.ini_options]"
     },
@@ -37,7 +37,7 @@
       "id": "bandit",
       "checks": "Python security SAST — Medium+ severity (config: bandit.yaml)",
       "config": ".ai-dev/quality/bandit.yaml",
-      "run": ".venv/bin/bandit -r code_scalpel/ -c .ai-dev/quality/bandit.yaml -lll",
+      "run": "python -m bandit -r code_scalpel/ -c .ai-dev/quality/bandit.yaml -lll",
       "beat": "review",
       "init": "pip install bandit; config at .ai-dev/quality/bandit.yaml"
     },
@@ -45,7 +45,7 @@
       "id": "detect-secrets",
       "checks": "Committed secrets — checked against audited baseline",
       "config": ".ai-dev/quality/.secrets.baseline",
-      "run": ".venv/bin/detect-secrets-hook --baseline .ai-dev/quality/.secrets.baseline code_scalpel/ tests/ scripts/",
+      "run": "detect-secrets-hook --baseline .ai-dev/quality/.secrets.baseline code_scalpel/ tests/ scripts/",
       "beat": "review",
       "init": "pip install detect-secrets; baseline at .ai-dev/quality/.secrets.baseline"
     }
