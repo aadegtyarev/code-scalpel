@@ -1,0 +1,20 @@
+{
+  "run_id": "linkcheck_fix-linkcheck_fix-55ab4f2-20260616-185851",
+  "scenario": "linkcheck_fix",
+  "project": "linkcheck_fix",
+  "version_tag": "main_55ab4f2",
+  "git_sha": "55ab4f2739a47eff8dd0c7ef15aa2af2e0dbb5c7",
+  "git_dirty": true,
+  "git_commit_url": "https://github.com/aadegtyarev/code-scalpel/commit/55ab4f2739a47eff8dd0c7ef15aa2af2e0dbb5c7",
+  "git_checkout_cmd": "git checkout 55ab4f2739a47eff8dd0c7ef15aa2af2e0dbb5c7",
+  "model_name_expected": "deepseek-v4-flash",
+  "model_name_actual": "deepseek-v4-flash",
+  "model_base_url": "https://api.deepseek.com/v1",
+  "profile": "deepseek",
+  "upstream_model": null,
+  "started_at": "2026-06-16T18:58:51Z",
+  "ended_at": "2026-06-16T19:16:47Z",
+  "ended_reason": "user_gave_up",
+  "user_role": "claude-acting-as-user-per-tone-of-voice.md",
+  "command": "probe start linkcheck_fix linkcheck_fix --profile=deepseek"
+}

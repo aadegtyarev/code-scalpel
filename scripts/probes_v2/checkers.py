@@ -471,9 +471,147 @@ def _has_rate_limit(tree: Path) -> Criterion:
     return Criterion(False, "rate limiting отсутствует")
 
 
+def check_gh_release(tree: Path, *, run_tests: bool = True) -> CheckResult:
+    """Чекер сценария gh_release: GitHub Release Publisher."""
+    criteria: dict[str, Criterion] = {
+        "package": _has_package(tree),
+        "github_api": _has_github_api(tree),
+        "changelog_parser": _has_changelog_parser(tree),
+        "bearer_auth": _has_bearer_auth(tree),
+        "cli_commands": _has_release_cli(tree),
+        "tests_present": _has_tests(tree),
+        "docs": _has_docs(tree),
+    }
+    gating = ("github_api", "changelog_parser", "bearer_auth", "cli_commands", "docs")
+    if run_tests:
+        installable, tests_pass = _install_and_test(tree)
+        criteria["installable"] = installable
+        criteria["tests_pass"] = tests_pass
+    return CheckResult(criteria=criteria, gating=gating)
+
+
+def _has_github_api(tree: Path) -> Criterion:
+    text = _source_text(tree)
+    if "/repos/" in text and "releases" in text:
+        return Criterion(True, "GitHub Releases API найден")
+    return Criterion(False, "GitHub API не используется")
+
+
+def _has_changelog_parser(tree: Path) -> Criterion:
+    text = _source_text(tree)
+    if "changelog" in text and ("## " in text or "version" in text):
+        return Criterion(True, "парсинг CHANGELOG найден")
+    return Criterion(False, "CHANGELOG-парсер отсутствует")
+
+
+def _has_bearer_auth(tree: Path) -> Criterion:
+    text = _source_text(tree)
+    if "bearer" in text.lower() or "GITHUB_TOKEN" in text or "Authorization" in text:
+        return Criterion(True, "Bearer-аутентификация найдена")
+    return Criterion(False, "аутентификация не настроена")
+
+
+def _has_release_cli(tree: Path) -> Criterion:
+    text = _source_text(tree)
+    cmds = ["publish", "list"]
+    found = [c for c in cmds if c in text]
+    if len(found) >= 2:
+        return Criterion(True, f"CLI команды: {found}")
+    return Criterion(False, f"CLI команд найдено: {len(found)}/2")
+
+
+def check_bookclub_bot(tree: Path, *, run_tests: bool = True) -> CheckResult:
+    """Чекер сценария bookclub_bot: Telegram Book Club Bot."""
+    criteria: dict[str, Criterion] = {
+        "package": _has_package(tree),
+        "aiogram_handlers": _has_aiogram_handlers(tree),
+        "sqlite_storage": _has_sqlite(tree),
+        "inline_keyboard": _has_inline_keyboard(tree),
+        "bot_commands": _has_bot_commands(tree),
+        "tests_present": _has_tests(tree),
+        "docs": _has_docs(tree),
+    }
+    gating = ("aiogram_handlers", "sqlite_storage", "inline_keyboard", "bot_commands")
+    if run_tests:
+        installable, tests_pass = _install_and_test(tree)
+        criteria["installable"] = installable
+        criteria["tests_pass"] = tests_pass
+    return CheckResult(criteria=criteria, gating=gating)
+
+
+def _has_aiogram_handlers(tree: Path) -> Criterion:
+    text = _source_text(tree)
+    markers = ["router", "message", "Dispatcher", "callback_query", "State", "FSMContext"]
+    found = [m for m in markers if m.lower() in text.lower()]
+    if len(found) >= 3:
+        return Criterion(True, f"aiogram handlers: {found}")
+    return Criterion(False, f"aiogram-паттернов найдено: {len(found)}/5")
+
+
+def _has_sqlite(tree: Path) -> Criterion:
+    text = _source_text(tree)
+    if "sqlite" in text.lower() or "aiosqlite" in text.lower():
+        return Criterion(True, "SQLite/aiosqlite найдено")
+    return Criterion(False, "SQLite не используется")
+
+
+def _has_inline_keyboard(tree: Path) -> Criterion:
+    text = _source_text(tree)
+    if "InlineKeyboard" in text or "inline_keyboard" in text or "callback_data" in text:
+        return Criterion(True, "inline-клавиатура найдена")
+    return Criterion(False, "inline-клавиатура отсутствует")
+
+
+def _has_bot_commands(tree: Path) -> Criterion:
+    text = _source_text(tree)
+    cmds = ["/start", "/add_book", "/vote", "/next", "/list"]
+    found = [c for c in cmds if c in text]
+    if len(found) >= 4:
+        return Criterion(True, f"команды: {found}")
+    return Criterion(False, f"команд найдено: {len(found)}/5")
+
+
+def check_linkcheck(tree: Path, *, run_tests: bool = True) -> CheckResult:
+    """Чекер сценария linkcheck: Markdown Link Checker."""
+    criteria: dict[str, Criterion] = {
+        "package": _has_package(tree),
+        "link_parsing": _has_link_parsing(tree),
+        "url_checking": _has_url_checking(tree),
+        "tests_present": _has_tests(tree),
+        "docs": _has_docs(tree),
+    }
+    gating = ("link_parsing", "url_checking")
+    if run_tests:
+        installable, tests_pass = _install_and_test(tree)
+        criteria["installable"] = installable
+        criteria["tests_pass"] = tests_pass
+    return CheckResult(criteria=criteria, gating=gating)
+
+
+def _has_link_parsing(tree: Path) -> Criterion:
+    text = _source_text(tree)
+    markers = [".md", "markdown", "regex", r"\[.*\]\(.*\)", "link", "href"]
+    found = [m for m in markers if m.lower() in text.lower()]
+    if len(found) >= 3:
+        return Criterion(True, f"парсинг ссылок: {found}")
+    return Criterion(False, "парсинг Markdown-ссылок не найден")
+
+
+def _has_url_checking(tree: Path) -> Criterion:
+    text = _source_text(tree)
+    markers = ["http", "requests", "httpx", "status", "urllib", "HEAD", "get"]
+    found = [m for m in markers if m.lower() in text.lower()]
+    if len(found) >= 2:
+        return Criterion(True, f"проверка URL: {found}")
+    return Criterion(False, "HTTP-проверка ссылок не найдена")
+
+
 _CHECKERS: dict[str, Callable[..., CheckResult]] = {
     "notes_cli": check_notes_cli,
     "fullstack": check_fullstack,
+    "gh_release": check_gh_release,
+    "bookclub_bot": check_bookclub_bot,
+    "linkcheck": check_linkcheck,
 }
 
 

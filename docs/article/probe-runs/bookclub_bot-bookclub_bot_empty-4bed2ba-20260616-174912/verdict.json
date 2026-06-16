@@ -1,0 +1,45 @@
+{
+  "scenario": "bookclub_bot",
+  "pass_score": 6,
+  "pass_max": 9,
+  "criteria": {
+    "package": {
+      "passed": true,
+      "detail": "4 непустых .py-файла(ов) с исходным кодом"
+    },
+    "aiogram_handlers": {
+      "passed": true,
+      "detail": "aiogram handlers: ['router', 'message', 'Dispatcher', 'callback_query', 'State', 'FSMContext']"
+    },
+    "sqlite_storage": {
+      "passed": true,
+      "detail": "SQLite/aiosqlite найдено"
+    },
+    "inline_keyboard": {
+      "passed": true,
+      "detail": "inline-клавиатура найдена"
+    },
+    "bot_commands": {
+      "passed": true,
+      "detail": "команды: ['/start', '/add_book', '/vote', '/next', '/list']"
+    },
+    "tests_present": {
+      "passed": false,
+      "detail": "тест-файлов не найдено (tests/ exists=True)"
+    },
+    "docs": {
+      "passed": true,
+      "detail": "README найден (README.md)"
+    },
+    "installable": {
+      "passed": false,
+      "detail": "editable/requirements install не прошёл: ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"<frozen importlib._bootstrap>\", line 1387, in _gcd_import\n  File \"<frozen importlib._bootstrap>\", line 1360, in _find_and_load\n  File \"<frozen importlib._bootstrap>\", line 1310, in _find_and_load_unlocked\n  File \"<frozen importlib._bootstrap>\", line 488, in _call_with_frames_removed\n  File \"<frozen importlib._bootstrap>\", line 1387, in _gcd_import\n  File \"<frozen importlib._bootstrap>\", line 1360, in _find_and_load\n  File \"<frozen importlib._bootstrap>\", line 1324, in _find_and_load_unlocked\nModuleNotFoundError: No module named 'setuptools.backends'"
+    },
+    "tests_pass": {
+      "passed": false,
+      "detail": "pytest упал (rc=5): no tests ran in 0.01s"
+    }
+  },
+  "ended_reason": "task_solved",
+  "mechanical_solved": true
+}

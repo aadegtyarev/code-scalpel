@@ -1,0 +1,45 @@
+{
+  "scenario": "fullstack",
+  "pass_score": 8,
+  "pass_max": 9,
+  "criteria": {
+    "docker": {
+      "passed": true,
+      "detail": "docker-compose.yml найден"
+    },
+    "app_package": {
+      "passed": true,
+      "detail": "8 непустых .py-файла(ов) с исходным кодом"
+    },
+    "four_endpoints": {
+      "passed": true,
+      "detail": "все эндпоинты упомянуты"
+    },
+    "sha256": {
+      "passed": true,
+      "detail": "SHA-256 хеширование найдено"
+    },
+    "rate_limit": {
+      "passed": true,
+      "detail": "rate limiting найден"
+    },
+    "tests_present": {
+      "passed": true,
+      "detail": "58 тест-файл(ов)"
+    },
+    "docs": {
+      "passed": true,
+      "detail": "README найден (README.md)"
+    },
+    "installable": {
+      "passed": true,
+      "detail": "проект ставится как пакет"
+    },
+    "tests_pass": {
+      "passed": false,
+      "detail": "pytest упал (rc=5): no tests ran in 0.00s"
+    }
+  },
+  "ended_reason": "task_solved",
+  "mechanical_solved": true
+}

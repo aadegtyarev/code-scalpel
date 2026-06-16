@@ -1,0 +1,20 @@
+{
+  "run_id": "notes_cli-notes_cli_empty-36182df-20260616-123240",
+  "scenario": "notes_cli",
+  "project": "notes_cli_empty",
+  "version_tag": "main_36182df",
+  "git_sha": "36182dfabf328fbb1863114c36b5cabd32b24157",
+  "git_dirty": true,
+  "git_commit_url": "https://github.com/aadegtyarev/code-scalpel/commit/36182dfabf328fbb1863114c36b5cabd32b24157",
+  "git_checkout_cmd": "git checkout 36182dfabf328fbb1863114c36b5cabd32b24157",
+  "model_name_expected": "deepseek-v4-flash",
+  "model_name_actual": "deepseek-v4-flash",
+  "model_base_url": "https://api.deepseek.com/v1",
+  "profile": "deepseek",
+  "upstream_model": null,
+  "started_at": "2026-06-16T12:32:40Z",
+  "ended_at": "2026-06-16T12:36:33Z",
+  "ended_reason": "user_gave_up",
+  "user_role": "claude-acting-as-user-per-tone-of-voice.md",
+  "command": "probe start notes_cli notes_cli_empty --profile=deepseek"
+}

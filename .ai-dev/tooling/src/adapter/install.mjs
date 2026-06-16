@@ -1,0 +1,573 @@
+#!/usr/bin/env node
+// The unified installer — the one realisation of the adapter's "install into a
+// project" contract point (PROTOCOL.md `## Core and adapter`,
+// docs/contracts/one-command-install.md). It automates exactly the manual
+// procedure src/adapter/INSTALL.md documents: vendor the shared adapter, lay down
+// the core, and wire the active platform — idempotently.
+//
+// This is ADAPTER-LAYER code: platform-specific by nature, so concrete platform
+// names (claude / opencode, .claude/, .opencode/) are allowed here. The neutral
+// core (PROTOCOL.md, the role bodies, docs/architecture.md prose) names none of them.
+//
+// Usage:  node src/adapter/install.mjs <target-dir> [--platform claude|opencode] [--dogfood]
+//   platform: the --platform flag, else the target's .ai-dev/config.json `platform`,
+//   else a clear error (never a silent guess).
+//   --dogfood: SELF-HOST mode — only valid when the target IS the protocol's own
+//   source repo. It wires the three tracked surfaces to the source tree (src/...),
+//   skips vendoring .ai-dev/tooling/ and skips the .ai-dev/VERSION stamp + UPGRADING
+//   marker, so a reinstall into this repo converges to the committed bytes
+//   (git status clean) instead of churning tracked files to the downstream layout.
+//   Fail-closed, symmetric: --dogfood against a non-source target, OR its absence
+//   when the target IS the source repo, is a hard error (the footgun made loud).
+//
+// Security (threat-model): the two untrusted inputs are the target path and the
+// platform string, both validated AT entry (the boundary). The platform is checked
+// against a literal allow-list before any filesystem or process use. Every write
+// lands beneath the RESOLVED target root; the project-boundary deny (invariant 2)
+// is the mechanical floor under that — installing into an external sibling from
+// the protocol repo is blocked, so this is tested against a temp dir INSIDE the
+// root. Child scripts are invoked via execFileSync with an argv ARRAY (no shell),
+// so no path is ever parsed by a shell. No network, no secrets, no new dependency
+// (Node stdlib only).
+
+import fs from "node:fs";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+import { execFileSync } from "node:child_process";
+
+// This script lives at <repo>/src/adapter/install.mjs — SOURCE is the protocol repo
+// root (three dirs up), the tree we copy FROM.
+const SOURCE = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..");
+
+const PLATFORMS = ["claude", "opencode"];
+
+// ── filesystem helpers ───────────────────────────────────────────────────────
+
+// Recursively copy a directory tree, OVERWRITING files (so a re-run converges to
+// the same bytes — idempotent). node:fs cpSync does this in one call; the explicit
+// recursive form keeps the behaviour obvious and lets us skip node_modules / dot-git
+// noise that must never be vendored. Identity guard: when the vendored installer
+// re-runs from .ai-dev/tooling/ (the upgrade path), SOURCE and the vendor target
+// coincide — copying a tree onto itself must be a no-op, never a truncation.
+function copyTree(src, dest) {
+  if (path.resolve(src) === path.resolve(dest)) return;
+  fs.mkdirSync(dest, { recursive: true });
+  for (const entry of fs.readdirSync(src, { withFileTypes: true })) {
+    if (entry.name === "node_modules" || entry.name === ".git") continue;
+    const from = path.join(src, entry.name);
+    const to = path.join(dest, entry.name);
+    if (entry.isDirectory()) copyTree(from, to);
+    else if (entry.isFile()) fs.copyFileSync(from, to);
+  }
+}
+
+// Copy a single file, overwriting (idempotent — same bytes on a re-run). Same
+// identity guard as copyTree (the vendored self-re-run case).
+function copyFile(src, dest) {
+  if (path.resolve(src) === path.resolve(dest)) return;
+  fs.mkdirSync(path.dirname(dest), { recursive: true });
+  fs.copyFileSync(src, dest);
+}
+
+// Copy a file ONLY when the destination is absent — never clobber a project's real
+// file (the doc-template rule: lay down a template where the target has none).
+function copyIfAbsent(src, dest) {
+  if (fs.existsSync(dest)) return false;
+  copyFile(src, dest);
+  return true;
+}
+
+// Append a line to a text file only if it is not already present — idempotent
+// import wiring (CLAUDE.md / AGENTS.md). Creates the file if absent.
+function ensureLine(file, line) {
+  const existing = fs.existsSync(file) ? fs.readFileSync(file, "utf8") : "";
+  if (existing.split("\n").some((l) => l.trim() === line.trim())) return false;
+  const sep = existing && !existing.endsWith("\n") ? "\n" : "";
+  fs.writeFileSync(file, existing + sep + line + "\n");
+  return true;
+}
+
+// Run an install script as a child process (node, argv array — no shell).
+// `scriptBase` is the dir the script's `scriptRelPath` is resolved against: the
+// vendored tooling copy in downstream mode, the source tree (<target>/src/...) in
+// dogfood mode — the children self-locate their ROOT three dirs up, so the source
+// copies point ROOT at the repo root (correct for self-host). `env` overrides
+// (e.g. AI_DEV_CONFIG) layer onto the current environment.
+function runScript(scriptBase, scriptRelPath, args, env) {
+  const script = path.join(scriptBase, scriptRelPath);
+  execFileSync("node", [script, ...args], {
+    stdio: "inherit",
+    env: { ...process.env, ...env },
+  });
+}
+
+// ── version stamp + upgrade detection (docs/decisions/upgrade-migration.md) ──
+
+// The installing protocol's own version: this repo's package.json when running from
+// the repo / the npx package; the vendored stamp (.ai-dev/tooling/VERSION, written by
+// vendorTooling) when the vendored installer re-runs from a downstream's tooling dir.
+function resolveSourceVersion() {
+  const pkg = path.join(SOURCE, "package.json");
+  if (fs.existsSync(pkg)) return JSON.parse(fs.readFileSync(pkg, "utf8")).version;
+  const vendored = path.join(SOURCE, "VERSION");
+  if (fs.existsSync(vendored)) return fs.readFileSync(vendored, "utf8").trim();
+  throw new Error("cannot resolve the protocol version — neither package.json nor VERSION sits beside the installer's source root");
+}
+
+// The target's previously installed version, read BEFORE any write: the stamp where
+// one exists; "pre-5.10" for an existing .ai-dev/ tree that predates the stamp
+// (every version before the stamp shipped); null for a fresh install (no upgrade).
+function readPriorVersion(target) {
+  const stamp = path.join(target, ".ai-dev", "VERSION");
+  if (fs.existsSync(stamp)) return fs.readFileSync(stamp, "utf8").trim();
+  if (fs.existsSync(path.join(target, ".ai-dev"))) return "pre-5.10";
+  return null;
+}
+
+// Stamp .ai-dev/VERSION on every run (outside the agent-read-denied tooling dir, so
+// the session can read it). On a detected version CHANGE additionally write the
+// transient handoff marker .ai-dev/UPGRADING.md and print the restart notice — an
+// installer cannot restart a session; the print is the whole ask. The marker is the
+// session's to consume and delete (orchestrator `## Upgrade`); a same-version re-run
+// never touches it, so idempotence holds.
+function stampVersion(target, version, prior) {
+  fs.mkdirSync(path.join(target, ".ai-dev"), { recursive: true });
+  fs.writeFileSync(path.join(target, ".ai-dev", "VERSION"), version + "\n");
+  // An unconsumed marker from an earlier bump keeps its ORIGIN: the migration range
+  // must start at the last version whose notes actually RAN, not at the last
+  // stamped (installed-but-unmigrated) one — chained re-runs must not eat notes.
+  const markerPath = path.join(target, ".ai-dev", "UPGRADING.md");
+  if (prior && fs.existsSync(markerPath)) {
+    const origin = fs.readFileSync(markerPath, "utf8").match(/Upgraded (\S+) → /);
+    if (origin) prior = origin[1];
+  }
+  if (!prior || prior === version) return false;
+  const date = new Date().toISOString().slice(0, 10);
+  fs.writeFileSync(
+    markerPath,
+    `# Protocol upgrade pending\n\nUpgraded ${prior} → ${version} on ${date}.\n` +
+      `Next session: read the \`(${prior}, ${version}]\` sections of \`.ai-dev/upgrades.md\` and run the upgrade check ` +
+      "(the orchestrator's `## Upgrade`); the check deletes this marker last.\n",
+  );
+  console.log(`\n⚠ Protocol upgraded ${prior} → ${version} — RESTART YOUR SESSION.`);
+  console.log("  The next session will offer the migration check (.ai-dev/UPGRADING.md → .ai-dev/upgrades.md).");
+  return true;
+}
+
+// ── steps ──────────────────────────────────────────────────────────────────
+
+// 1. Vendor the shared adapter AND the neutral bodies the assembler reads, into the
+// target's tooling location. The vendored install-*.mjs self-locate their ROOT as
+// .ai-dev/tooling/ (three dirs up from the script), and read src/agents, src/modules,
+// src/adapter from there — so all three must sit under .ai-dev/tooling/src/.
+// Also vendored: everything the vendored installer ITSELF reads on the upgrade
+// re-run (PROTOCOL.md, src/quality/, src/templates/ — layDownCore's sources) plus
+// its own VERSION (resolveSourceVersion's vendored branch + the audit's skew check)
+// — without these the documented upgrade command ENOENTs.
+function vendorTooling(target, version) {
+  const toolingRoot = path.join(target, ".ai-dev", "tooling");
+  const tooling = path.join(toolingRoot, "src");
+  copyTree(path.join(SOURCE, "src", "adapter"), path.join(tooling, "adapter"));
+  copyTree(path.join(SOURCE, "src", "agents"), path.join(tooling, "agents"));
+  copyTree(path.join(SOURCE, "src", "modules"), path.join(tooling, "modules"));
+  copyTree(path.join(SOURCE, "src", "quality"), path.join(tooling, "quality"));
+  copyTree(path.join(SOURCE, "src", "templates"), path.join(tooling, "templates"));
+  copyFile(path.join(SOURCE, "PROTOCOL.md"), path.join(toolingRoot, "PROTOCOL.md"));
+  fs.writeFileSync(path.join(toolingRoot, "VERSION"), version + "\n");
+}
+
+// 2. Lay down the core the downstream loads + the quality-layer shape.
+// agents and modules are already vendored under .ai-dev/tooling/ (step 1);
+// the downstream does NOT get a bare src/agents/ or src/modules/ at its root.
+// Doc templates are NOT copied to the project root — they are accessible via
+// .ai-dev/tooling/src/templates/ when product discovery / doc bootstrap run.
+function layDownCore(target) {
+  // The constitution lives inside .ai-dev/ — not at the project root.
+  copyFile(path.join(SOURCE, "PROTOCOL.md"), path.join(target, ".ai-dev", "PROTOCOL.md"));
+
+  // The quality layer: ship the SHAPE (the registry format + the runner),
+  // NOT this repo's own tool rows. tools.json is laid down only where absent
+  // so a project's own registry is never clobbered; the runner is the shared
+  // mechanism and is overwritten.
+  copyFile(path.join(SOURCE, "src", "quality", "run.mjs"), path.join(target, ".ai-dev", "quality", "run.mjs"));
+  copyIfAbsent(path.join(SOURCE, "src", "templates", "tools.json"), path.join(target, ".ai-dev", "quality", "tools.json"));
+
+  // The per-version migration notes, readable by the session (the tooling dir is
+  // agent-read-denied). Overwritten every run — it is always the NEW version's copy.
+  copyFile(path.join(SOURCE, "src", "adapter", "upgrades.md"), path.join(target, ".ai-dev", "upgrades.md"));
+
+  // The session-state dir: gitignored (ensureTransientsGitignore) but the
+  // orchestrator's first current.md write expects the parent to exist — create it
+  // here so a fresh install is write-ready. Only state/; feedback/ and worktrees/
+  // are created on demand by their own use.
+  fs.mkdirSync(path.join(target, ".ai-dev", "state"), { recursive: true });
+}
+
+// 3. Ensure a config exists so the agent assembly has its `roles` bindings. A real
+// project configures via /dev-setup; pre-setup we write a minimal default carrying
+// the resolved platform + the standard seat ids. Written ONLY where absent — a
+// re-run never overwrites the Operator's configured file. Config lives inside
+// .ai-dev/ — not at the project root.
+function ensureConfig(target, platform) {
+  const dest = path.join(target, ".ai-dev", "config.json");
+  if (fs.existsSync(dest)) return;
+  const config = {
+    mode: "interactive",
+    profile: "solo",
+    platform,
+    kind: "code",
+    roles: {
+      orchestrator: { agent: "ai-dev" },
+      builder: { agent: "dev-builder" },
+      reviewer: { agent: "dev-reviewer", model: "auto" },
+    },
+  };
+  fs.writeFileSync(dest, JSON.stringify(config, null, 2) + "\n");
+}
+
+// 4. Ensure the local-only transient dirs are gitignored: state (the session
+// pointer), feedback (the self-report holds RAW pre-leak-sweep context — a
+// crash before its delete, or a blind `git add -A`, must not commit it), and
+// worktrees (parallel-feature checkouts live inside the root so the
+// project-boundary deny still covers them — but they are never repo content).
+// Idempotent: appends only the lines not already present.
+function ensureTransientsGitignore(target) {
+  ensureLine(path.join(target, ".gitignore"), ".ai-dev/state/");
+  ensureLine(path.join(target, ".gitignore"), ".ai-dev/feedback/");
+  ensureLine(path.join(target, ".gitignore"), ".ai-dev/worktrees/");
+}
+
+// 5a. Wire Claude: assemble the agents + the setup command against the target root,
+// merge the deny hooks into .claude/settings.json (keyed so a re-run never
+// duplicates), and import the constitution + the orchestrator procedure via CLAUDE.md.
+function wireClaude(target, dogfood) {
+  const cfg = { AI_DEV_CONFIG: path.join(target, ".ai-dev", "config.json") };
+  // Children run from the vendored tooling copy downstream, the source tree in
+  // dogfood mode (they self-locate ROOT three dirs up — the source copies point
+  // ROOT at the repo root, correct for self-host).
+  const scriptBase = dogfood ? path.join(target, "src") : path.join(target, ".ai-dev", "tooling", "src");
+  runScript(scriptBase, path.join("adapter", "claude", "install-agents.mjs"), [path.join(target, ".claude", "agents")], cfg);
+  runScript(scriptBase, path.join("adapter", "claude", "install-commands.mjs"), [path.join(target, ".claude", "commands")], cfg);
+
+  // Merge the two deny hooks into .claude/settings.json idempotently. The hook
+  // fragment is the claude/hooks.json (the single home of the hook shape) — read
+  // from the source tree in dogfood mode, the vendored copy downstream; we merge
+  // its PreToolUse/UserPromptSubmit arrays, de-duping by command.
+  const hooksFragment = JSON.parse(
+    fs.readFileSync(path.join(scriptBase, "adapter", "claude", "hooks.json"), "utf8"),
+  );
+  // The hooks.json fragment carries the DOWNSTREAM shim path
+  // (.ai-dev/tooling/src/adapter/claude/shim.mjs). In dogfood mode the active shim
+  // is the source copy — retarget the command to src/adapter/claude/shim.mjs so the
+  // wired settings.json matches the committed self-host form. The HOOK_MARKER (the
+  // path tail) is unchanged, so the merge still prunes a prior group correctly.
+  if (dogfood) {
+    for (const groups of Object.values(hooksFragment.hooks)) {
+      for (const g of groups) {
+        for (const h of g.hooks || []) {
+          if (typeof h.command === "string") {
+            h.command = h.command.split(".ai-dev/tooling/src/adapter/claude/shim.mjs").join("src/adapter/claude/shim.mjs");
+          }
+        }
+      }
+    }
+  }
+  const settingsPath = path.join(target, ".claude", "settings.json");
+  const settings = fs.existsSync(settingsPath) ? JSON.parse(fs.readFileSync(settingsPath, "utf8")) : {};
+  settings.hooks = mergeHooks(settings.hooks || {}, hooksFragment.hooks);
+  fs.mkdirSync(path.dirname(settingsPath), { recursive: true });
+  fs.writeFileSync(settingsPath, JSON.stringify(settings, null, 2) + "\n");
+
+  // Load instructions: the orchestrator session loads the constitution + its
+  // procedure via CLAUDE.md imports — appended only if not already present. A
+  // breadcrumb left from when this platform was inactive is replaced by this
+  // full wiring. Dogfood wires to the SOURCE paths (the committed self-host form);
+  // downstream wires to the vendored layout.
+  const claudeMd = path.join(target, "CLAUDE.md");
+  stripBreadcrumbFile(claudeMd);
+  ensureLine(claudeMd, dogfood ? "@PROTOCOL.md" : "@.ai-dev/PROTOCOL.md");
+  ensureLine(claudeMd, dogfood ? "@src/agents/orchestrator.md" : "@.ai-dev/tooling/src/agents/orchestrator.md");
+}
+
+// A hook group is OURS when any of its commands targets the protocol shim. The
+// marker is the shim's stable path tail — it survives a vendor-location change
+// (.ai-pm/tooling/ → .ai-dev/tooling/) where an exact-command compare would not.
+const HOOK_MARKER = "adapter/claude/shim.mjs";
+
+// Merge a hooks fragment into an existing hooks object: foreign groups are kept
+// untouched; every group recognised as ours (HOOK_MARKER) is REPLACED by the
+// fragment's current group. Replace-not-append is both the idempotence guarantee
+// (a re-run converges to the same bytes) and the prune: a stale ai-dev group whose
+// command changed no longer accumulates beside the new one.
+function mergeHooks(existing, fragment) {
+  const merged = { ...existing };
+  for (const [event, groups] of Object.entries(fragment)) {
+    const foreign = (Array.isArray(merged[event]) ? merged[event] : []).filter(
+      (g) => !(g.hooks || []).some((h) => typeof h.command === "string" && h.command.includes(HOOK_MARKER)),
+    );
+    merged[event] = [...foreign, ...groups];
+  }
+  return merged;
+}
+
+// ── cross-platform breadcrumb (backlog: downstream field report 2026-06-13) ──
+// The INACTIVE platform always gets a minimal load-surface: a session opened on the
+// unwired platform otherwise starts with zero protocol surface and cannot even know
+// what it is missing (the platform-switch offer is prose that never loads there).
+// The block is marker-delimited so a re-run REPLACES it (never duplicates, never
+// clobbers the file's real content) and the active wiring can strip it.
+
+const BREADCRUMB_OPEN = "<!-- ai-dev:breadcrumb -->";
+const BREADCRUMB_CLOSE = "<!-- /ai-dev:breadcrumb -->";
+
+// Remove a previously written breadcrumb block from a text, leaving the real
+// content (normalised to one trailing newline) — the strip half of replace.
+function stripBreadcrumb(text) {
+  const start = text.indexOf(BREADCRUMB_OPEN);
+  if (start < 0) return text;
+  const close = text.indexOf(BREADCRUMB_CLOSE);
+  const end = close < 0 ? text.length : close + BREADCRUMB_CLOSE.length;
+  const kept = text.slice(0, start) + text.slice(end).replace(/^\n+/, "");
+  return kept.replace(/\n+$/, "\n").replace(/^\n$/, "");
+}
+
+// Strip the breadcrumb from a file in place — called by the active platform's
+// wiring: when a platform becomes active, its full wiring REPLACES the breadcrumb.
+function stripBreadcrumbFile(file) {
+  if (!fs.existsSync(file)) return;
+  const existing = fs.readFileSync(file, "utf8");
+  const kept = stripBreadcrumb(existing);
+  if (kept !== existing) fs.writeFileSync(file, kept);
+}
+
+// Write (replace) the breadcrumb on the inactive platform's load surface. Skipped
+// when that surface already carries the real protocol import (a prior platform
+// switch left both wirings live) — a "not wired" claim there would be false.
+function writeInactiveBreadcrumb(target, activePlatform, dogfood) {
+  // Dogfood mode: BOTH load surfaces (CLAUDE.md and AGENTS.md) are real,
+  // hand-authored, committed files carrying their own protocol content — appending a
+  // breadcrumb to the inactive one would churn a tracked file (break idempotency).
+  // The self-host repo always carries both wirings; no breadcrumb is ever needed.
+  if (dogfood) return;
+  const inactive = activePlatform === "claude" ? "opencode" : "claude";
+  const file = path.join(target, inactive === "claude" ? "CLAUDE.md" : "AGENTS.md");
+  const existing = fs.existsSync(file) ? fs.readFileSync(file, "utf8") : "";
+  const kept = stripBreadcrumb(existing);
+  if (kept.split("\n").some((l) => l.trim() === "@.ai-dev/PROTOCOL.md")) {
+    if (kept !== existing) fs.writeFileSync(file, kept);
+    return;
+  }
+  const harness = inactive === "claude" ? "Claude Code" : "OpenCode";
+  const block = [
+    BREADCRUMB_OPEN,
+    `This project runs the **ai-dev protocol**; its active platform is **${activePlatform}** — this ${harness} session has no protocol wiring yet.`,
+    `Run \`node .ai-dev/tooling/src/adapter/install.mjs . --platform ${inactive}\` to wire ${harness}, then offer the Operator the platform switch (\`.ai-dev/tooling/src/agents/orchestrator.md\` \`## Setup\`, "Platform switch").`,
+    BREADCRUMB_CLOSE,
+  ].join("\n");
+  const sep = kept ? (kept.endsWith("\n") ? "\n" : "\n\n") : "";
+  fs.writeFileSync(file, kept + sep + block + "\n");
+}
+
+// 5b. Wire OpenCode: assemble the three agents + the setup command + generate the
+// plugin (downstream layout, since the adapter is now vendored under .ai-dev/tooling/),
+// merge opencode.json keys, and import the constitution via AGENTS.md.
+function wireOpenCode(target, dogfood) {
+  const cfg = { AI_DEV_CONFIG: path.join(target, ".ai-dev", "config.json") };
+  const scriptBase = dogfood ? path.join(target, "src") : path.join(target, ".ai-dev", "tooling", "src");
+  runScript(scriptBase, path.join("adapter", "opencode", "install-agents.mjs"), [path.join(target, ".opencode", "agents")], cfg);
+  runScript(scriptBase, path.join("adapter", "opencode", "install-commands.mjs"), [path.join(target, ".opencode", "commands")], cfg);
+  // The plugin generator resolves the adapter layout from the TARGET root (passed via
+  // --root). Downstream: the target has .ai-dev/tooling/src/adapter ⇒ tooling-submodule
+  // import path. Dogfood: the target has src/adapter/opencode/plugin-entry.mjs ⇒
+  // detectLayout resolves the DEV layout ⇒ the deployed plugin imports ../../src/adapter
+  // (the committed self-host form) — no extra flag needed, the existing signal handles it.
+  runScript(
+    scriptBase,
+    path.join("adapter", "opencode", "install-plugin.mjs"),
+    [path.join(target, ".opencode", "plugins", "ai-dev.mjs"), "--root", target],
+    cfg,
+  );
+
+  // opencode.json — merge the protocol's keys without dropping a project's own.
+  // Key order matters for byte-idempotency in dogfood mode: the committed self-host
+  // file leads with $schema and orders permission question→edit→bash→webfetch, so
+  // dogfood emits exactly that canonical shape (the committed opencode.json is the
+  // single home of that form; the installer converges to it rather than the reverse).
+  const ocPath = path.join(target, ".opencode", "opencode.json");
+  const existing = fs.existsSync(ocPath) ? JSON.parse(fs.readFileSync(ocPath, "utf8")) : {};
+  // The protocol plugin is the SOLE project-boundary guard; OpenCode's native
+  // permission dial is set to full-speed inside the project. Division of labor:
+  // plugin = the mechanical boundary (deny outside-root reads/writes/finds);
+  // native permission = speed dial for tool calls inside the boundary.
+  // Honest residual: bash boundary is best-effort (the engine parses obvious path
+  // tokens; an opaque escape like `python3 -c` is not mechanically caught). edit/read/write
+  // tool checks are exact; webfetch=allow because research needs it (exfil via
+  // HTTP is a separate persona rule, not a filesystem-boundary concern).
+  const instructionsEntry = dogfood ? "PROTOCOL.md" : ".ai-dev/PROTOCOL.md";
+  let oc;
+  if (dogfood) {
+    oc = {
+      ...(existing.$schema ? { $schema: existing.$schema } : { $schema: "https://opencode.ai/config.json" }),
+      default_agent: "ai-dev",
+      instructions: Array.from(new Set([...(existing.instructions || []), instructionsEntry])),
+      permission: { ...(existing.permission || {}), question: "allow", edit: "allow", bash: "allow", webfetch: "allow" },
+      agent: { ...(existing.agent || {}), build: { disable: true }, plan: { disable: true } },
+    };
+  } else {
+    oc = { ...existing };
+    oc.default_agent = "ai-dev";
+    oc.instructions = Array.from(new Set([...(oc.instructions || []), instructionsEntry]));
+    oc.permission = { ...(oc.permission || {}), edit: "allow", bash: "allow", webfetch: "allow", question: "allow" };
+    oc.agent = { ...(oc.agent || {}), build: { disable: true }, plan: { disable: true } };
+  }
+  fs.mkdirSync(path.dirname(ocPath), { recursive: true });
+  fs.writeFileSync(ocPath, JSON.stringify(oc, null, 2) + "\n");
+
+  // AGENTS.md is OpenCode's always-on surface. Downstream: import the constitution
+  // via an @-line (replacing any breadcrumb). Dogfood: the committed AGENTS.md is a
+  // rich hand-authored file that loads PROTOCOL.md via opencode.json `instructions`,
+  // NOT an @-import — so dogfood only strips a stale breadcrumb and never appends an
+  // @-line that isn't in the committed form.
+  const agentsMd = path.join(target, "AGENTS.md");
+  stripBreadcrumbFile(agentsMd);
+  if (!dogfood) ensureLine(agentsMd, "@.ai-dev/PROTOCOL.md");
+}
+
+// ── orchestration ────────────────────────────────────────────────────────────
+
+// Resolve the active platform: --platform flag, else the target config's `platform`,
+// else a hard error (fail-closed — never wire a guessed platform).
+function resolvePlatform(target, flag) {
+  if (flag) {
+    if (!PLATFORMS.includes(flag)) {
+      throw new Error(`unknown --platform "${flag}" — expected one of ${PLATFORMS.join(" | ")}`);
+    }
+    return flag;
+  }
+  const cfgPath = path.join(target, ".ai-dev", "config.json");
+  if (fs.existsSync(cfgPath)) {
+    const platform = JSON.parse(fs.readFileSync(cfgPath, "utf8")).platform;
+    if (PLATFORMS.includes(platform)) return platform;
+  }
+  throw new Error(
+    `cannot resolve the platform — pass --platform ${PLATFORMS.join("|")} ` +
+      `or set "platform" in ${path.join(target, ".ai-dev", "config.json")}`,
+  );
+}
+
+// Is `target` the protocol's OWN source repo? The sentinel is the installer's own
+// source presence at <target>/src/adapter/install.mjs (the same SOURCE===target
+// signal install-plugin.mjs uses with plugin-entry.mjs). A real downstream never
+// carries the installer source at its root.
+function isSourceRepo(target) {
+  return fs.existsSync(path.join(target, "src", "adapter", "install.mjs"));
+}
+
+// Install the protocol into `targetDir`. Returns the resolved platform. Exported so
+// the test drives it directly against a temp dir. `opts.dogfood` selects SELF-HOST
+// mode (wire to src/, skip vendoring + stamping) — fail-closed and symmetric: it is
+// valid ONLY against the protocol's own source repo, and its ABSENCE against that
+// repo is equally a hard error (the footgun made loud, the Operator's call).
+export function install(targetDir, platformFlag, opts = {}) {
+  const target = path.resolve(targetDir);
+  const dogfood = !!opts.dogfood;
+  const source = isSourceRepo(target);
+  if (dogfood && !source) {
+    throw new Error(
+      "--dogfood is only valid when installing into the protocol's own source repo " +
+        `(no src/adapter/install.mjs found under ${target}) — drop the flag for a downstream install`,
+    );
+  }
+  if (!dogfood && source) {
+    throw new Error(
+      `target ${target} IS the protocol's own source repo — pass --dogfood to wire it to its own src/ ` +
+        "(a downstream-mode install here would churn the tracked source-mode files)",
+    );
+  }
+
+  const platform = resolvePlatform(target, platformFlag);
+
+  if (dogfood) {
+    // SELF-HOST: skip vendoring AND skip layDownCore — the self-host repo carries its
+    // core at the root (PROTOCOL.md, src/quality/, src/templates/), so it needs no
+    // copy under .ai-dev/ (a copy would be untracked debris that breaks idempotency).
+    // No version stamp / UPGRADING marker either — the repo's authoritative version is
+    // its own package.json (read live). config.json + .gitignore are committed and
+    // present, so ensureConfig / ensureTransientsGitignore are no-ops; only the
+    // gitignored session-state dir is created for write-readiness. This is the path
+    // that converges to the committed bytes (git status clean).
+    fs.mkdirSync(path.join(target, ".ai-dev", "state"), { recursive: true });
+    ensureConfig(target, platform);
+    ensureTransientsGitignore(target);
+    if (platform === "claude") wireClaude(target, true);
+    else wireOpenCode(target, true);
+    return platform;
+  }
+
+  const version = resolveSourceVersion();
+  const prior = readPriorVersion(target); // BEFORE any write creates .ai-dev/
+
+  vendorTooling(target, version);
+  layDownCore(target);
+  ensureConfig(target, platform);
+  ensureTransientsGitignore(target);
+  if (platform === "claude") wireClaude(target, false);
+  else wireOpenCode(target, false);
+  writeInactiveBreadcrumb(target, platform, false);
+  stampVersion(target, version, prior);
+
+  return platform;
+}
+
+// Does the target carry a git repository? The protocol's loop stands on git
+// (branches, commits, the merge-gate reads pushes) — the CLI warns when none
+// exists. A check, never an init: a one-shot script must not mutate the
+// target's VCS state; the interactive offer lives in setup's repo check
+// (src/agents/orchestrator.md `## Setup` step 0). Exported for the test.
+export function hasGitRepo(targetDir) {
+  return fs.existsSync(path.join(path.resolve(targetDir), ".git"));
+}
+
+// CLI entry — only when invoked directly, not when imported by the test. argv[1] is
+// realpath'd because an npm bin shim invokes this file through a symlink, while the
+// loaded module URL is the real path — without it the npx run would silently no-op.
+if (process.argv[1] && fs.realpathSync(process.argv[1]) === fileURLToPath(import.meta.url)) {
+  const args = process.argv.slice(2);
+  const flagIdx = args.indexOf("--platform");
+  const platformFlag = flagIdx >= 0 ? args[flagIdx + 1] : undefined;
+  const dogfood = args.includes("--dogfood");
+  const targetDir = args.find((a, i) => !a.startsWith("--") && (flagIdx < 0 || i !== flagIdx + 1));
+
+  if (!targetDir) {
+    console.error("Usage: node src/adapter/install.mjs <target-dir> [--platform claude|opencode] [--dogfood]");
+    process.exit(2);
+  }
+
+  try {
+    const platform = install(targetDir, platformFlag, { dogfood });
+    const rel = path.relative(process.cwd(), path.resolve(targetDir)) || ".";
+    if (dogfood) {
+      console.log(`\nInstalled the ai-dev protocol into ${rel} in DOGFOOD (self-host) mode (platform: ${platform}).`);
+      console.log("  • wired the tracked surfaces to the source tree (src/...) — no .ai-dev/tooling/ vendored copy");
+      console.log("  • skipped the .ai-dev/VERSION stamp + UPGRADING marker (the repo's version is its own package.json)");
+      console.log(`  • wired ${platform} (deny hooks, agents, the /dev-setup command${platform === "opencode" ? ", the plugin" : ""}) against src/`);
+      console.log("  • a reinstall here converges to the committed bytes — git status stays clean");
+      process.exit(0);
+    }
+    console.log(`\nInstalled the ai-dev protocol into ${rel} (platform: ${platform}).`);
+    console.log("  • vendored the shared adapter into .ai-dev/tooling/ (self-sufficient for the upgrade re-run)");
+    console.log("  • laid down .ai-dev/PROTOCOL.md, .ai-dev/quality/ (the quality-runner shape), and .ai-dev/upgrades.md");
+    console.log("  • wrote .ai-dev/config.json (minimal default — run /dev-setup to configure)");
+    console.log(`  • wired ${platform} (deny hooks, agents, the /dev-setup command${platform === "opencode" ? ", the plugin" : ""})`);
+    console.log("  • stamped .ai-dev/VERSION and left a breadcrumb load-surface for the inactive platform");
+    if (!hasGitRepo(targetDir)) {
+      console.log("\n⚠ No git repository found — the protocol's loop (branches, reviews, merges) requires one.");
+      console.log("  Initialize before the first feature:  git init -b main && git add . && git commit -m 'init'");
+      console.log("  (setup will also offer this; the remote — gh repo create / git remote add — is yours.)");
+    }
+    console.log("\nNext: run /dev-setup to configure roles, models, mode, and the module kit.");
+  } catch (e) {
+    console.error(`install failed: ${e.message}`);
+    process.exit(1);
+  }
+}
