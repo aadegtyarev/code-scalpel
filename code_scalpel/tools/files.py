@@ -5,7 +5,7 @@ from pathlib import Path
 import pathspec
 
 
-def _load_gitignore(root: Path) -> pathspec.PathSpec:
+def _load_gitignore(root: Path) -> pathspec.PathSpec:  # type: ignore[unused-ignore,type-arg]
     gitignore = root / ".gitignore"
     patterns = [".git/", ".*/"]
     if gitignore.is_file():
