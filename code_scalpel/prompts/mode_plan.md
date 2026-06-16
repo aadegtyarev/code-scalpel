@@ -42,6 +42,11 @@ Rules:
   Do NOT create the virtualenv or install packages in T001 or in any
   later feature task — environment setup belongs here and only here.
 - Each task self-contained: a separate person could pick one up.
+- Split large files across tasks: if a task plans to write a single file
+  that will exceed ~150 lines, break it into a responsibility per file
+  (storage, CLI, HTTP client, config). Each file becomes its own task
+  or a sub-bullet in the `files` list. A 300-line single-file task is
+  a design smell — catch it here, not in the code.
 - `files`: only paths THIS task itself creates or modifies. Files
   created by a later task belong to that task — don't list them
   here. For new files, write the path you'll create.

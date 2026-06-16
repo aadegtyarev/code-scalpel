@@ -100,6 +100,11 @@ Anti-duplication:
 - Don't recreate files that already exist with the content you want.
   Run `project_map()` first; if a file is already there and right, skip it.
 
+Module boundaries — keep files focused:
+- If a file exceeds ~150 lines, split into modules: one responsibility each.
+  Move helpers into `<pkg>/helpers.py`, HTTP into `<pkg>/client.py`, etc.
+- A file doing three different things is a design smell — fix it now, not later.
+
 Anti-loop:
 - `read_file` returned "file not found" → DON'T retry it. Call
   `write_file(path, content)` to create the file.
