@@ -411,14 +411,22 @@ def finalize(
         typer.echo(f"error: bad --reason: {reason}", err=True)
         raise typer.Exit(2)
     paths = _resolve_run(run_id)
-    host, port = _daemon_info(paths)
-    response = send_request(host, port, {"op": "stop"})
-    if not response.get("ok"):
-        typer.echo(f"warning: daemon stop returned: {response}", err=True)
-    # Даём демону до 5 сек на shutdown
-    deadline = time.monotonic() + 5.0
-    while time.monotonic() < deadline and paths.daemon_info.exists():
-        time.sleep(0.1)
+
+    # Stop the daemon if it's still running. If the session was restarted
+    # and the daemon is already dead, skip — we can still snapshot the
+    # workdir and run mechanical checks.
+    try:
+        host, port = _daemon_info(paths)
+        response = send_request(host, port, {"op": "stop"})
+        if not response.get("ok"):
+            typer.echo(f"warning: daemon stop returned: {response}", err=True)
+        # Give daemon up to 5s to shut down and release the workdir.
+        deadline = time.monotonic() + 5.0
+        while time.monotonic() < deadline and paths.daemon_info.exists():
+            time.sleep(0.1)
+    except typer.Exit:
+        # Daemon already dead — ok, workdir should still be on disk.
+        pass
 
     # Снапшот workdir → final_tree (раскрытый, не tar.gz —
     # удобно `grep`/`ls` в репо). Исключаем `.git` чтобы он не
