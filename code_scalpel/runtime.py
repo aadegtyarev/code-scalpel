@@ -63,6 +63,7 @@ class Runtime:
         confirm_shell_exec: ConfirmShellExec | None = None,
         fork_ui_hook: ChoiceUIHook | None = None,
         upstream_profile: UpstreamProfile | None = None,
+        mcp_manager: object | None = None,
         state: AgentState | None = None,
     ) -> None:
         self.cwd = cwd
@@ -104,6 +105,7 @@ class Runtime:
             session=self.session,
             upstream_queue=self.upstream_queue,
             state=self.state,
+            mcp_manager=mcp_manager,
         )
         # Fork resolver. TUI passes a ui_hook that mounts a ChoiceCard
         # and awaits the user; headless callers (probe / bench) leave

@@ -824,6 +824,7 @@ class StepAgent:
         session: Session | None = None,
         upstream_queue: object | None = None,
         state: object | None = None,
+        mcp_manager: object | None = None,
     ) -> None:
         self._llm = llm
         self._cwd = cwd
@@ -882,6 +883,8 @@ class StepAgent:
         # task transitions so a crash resumes near where we stopped.
         # Headless callers leave it None — saves become no-ops.
         self._state = state
+        # Optional MCP manager — pre-started by the caller (daemon/probe).
+        self._mcp = mcp_manager
         # Context window size for the sliding-window guard. Set by
         # Runtime.resolve_context() after autodetect; _state.context_limit
         # is used as a fallback so the TUI path works without an extra call.
@@ -1762,6 +1765,15 @@ class StepAgent:
             return self._tool_unload_skill(call)
         if tc.name == "web_learn":
             return await self._tool_web_learn(call)
+        # MCP tools — dispatched to external server, not scalpel's own tools.
+        if self._mcp is not None:
+            try:
+                args = json.loads(tc.arguments) if tc.arguments else {}
+            except json.JSONDecodeError:
+                args = {}
+            mcp_result = await self._mcp.call_tool(tc.name, args)
+            if mcp_result and not mcp_result.startswith("error:"):
+                return ToolResult(call=call, output=mcp_result, ok=True)
         result = await execute(
             call,
             self._cwd,
@@ -1832,7 +1844,10 @@ class StepAgent:
         confirmation callback registered at construction time (the
         TUI provides one; headless callers like probe/bench leave it
         `None` and shell_exec refuses in skeptic)."""
-        return [*TOOL_SCHEMAS, SHELL_EXEC_SCHEMA, LOAD_SKILL_SCHEMA, UNLOAD_SKILL_SCHEMA]
+        schemas = [*TOOL_SCHEMAS, SHELL_EXEC_SCHEMA, LOAD_SKILL_SCHEMA, UNLOAD_SKILL_SCHEMA]
+        if self._mcp is not None:
+            schemas.extend(self._mcp.get_tool_schemas())
+        return schemas
 
     def _remember(self, user_msg: str, assistant_msg: str) -> None:
         self._history.append({"role": "user", "content": user_msg})
