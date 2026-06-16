@@ -39,7 +39,8 @@ class McpTool:
 class McpServer:
     """One MCP server — managed via subprocess + JSON-RPC on stdio."""
 
-    def __init__(self, name: str, command: str, args: list[str], env: dict[str, str] | None = None):
+    def __init__(self, name: str, command: str, args: list[str],
+                 env: dict[str, str] | None = None):
         self.name = name
         self.command = command
         self.args = args
@@ -75,7 +76,6 @@ class McpServer:
             "capabilities": {},
             "clientInfo": {"name": "code-scalpel", "version": "1.0"},
         })
-        # Notify initialized
         self._proc.stdin.write(b'{"jsonrpc":"2.0","method":"notifications/initialized"}\n')
         await self._proc.stdin.drain()
 
@@ -98,7 +98,6 @@ class McpServer:
     async def close(self) -> None:
         if self._proc is not None:
             with contextlib.suppress(Exception):
-                self._proc.stdin.close()
                 self._proc.terminate()
                 await self._proc.wait()
             self._proc = None
