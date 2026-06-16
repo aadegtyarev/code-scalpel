@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Literal
 
@@ -12,12 +13,59 @@ from pydantic import BaseModel, Field, field_validator, model_validator
 SYSTEM_CONFIG = Path.home() / ".config" / "code-scalpel" / "config.yaml"
 PROJECT_CONFIG = Path(".code-scalpel") / "config.yaml"
 
-_PROVIDER_BASE_URLS: dict[str, str] = {
-    "lmstudio": "http://localhost:1234",
-    "openai": "https://api.openai.com",
-    "openrouter": "https://openrouter.ai/api",
-    "deepseek": "https://api.deepseek.com",
+@dataclass(frozen=True)
+class ProviderCapabilities:
+    """What a provider supports — single home for per-provider behaviour.
+
+    Language-agnostic: describes API-level capabilities, never language or
+    framework specifics. Unknown providers get the safe defaults (all False).
+    """
+
+    supports_json_schema: bool = False
+    supports_json_object: bool = False
+    rejects_null_content: bool = False
+    requires_tool_response_ordering: bool = False
+    api_key_env_var: str = "LLM_API_KEY"
+    base_url: str = "http://localhost:1234"
+
+    def response_format_type(self) -> str:
+        """Best available structured output format: json_schema, json_object, or ''."""
+        if self.supports_json_schema:
+            return "json_schema"
+        if self.supports_json_object:
+            return "json_object"
+        return ""
+
+
+_PROVIDER_CAPABILITIES: dict[str, ProviderCapabilities] = {
+    "openai": ProviderCapabilities(
+        supports_json_schema=True,
+        supports_json_object=True,
+        api_key_env_var="OPENAI_API_KEY",
+        base_url="https://api.openai.com",
+    ),
+    "deepseek": ProviderCapabilities(
+        supports_json_object=True,
+        rejects_null_content=True,
+        requires_tool_response_ordering=True,
+        api_key_env_var="DEEPSEEK_API_KEY",
+        base_url="https://api.deepseek.com",
+    ),
+    "openrouter": ProviderCapabilities(
+        supports_json_object=True,
+        api_key_env_var="OPENROUTER_API_KEY",
+        base_url="https://openrouter.ai/api",
+    ),
+    "lmstudio": ProviderCapabilities(
+        api_key_env_var="LMSTUDIO_API_KEY",
+        base_url="http://localhost:1234",
+    ),
 }
+
+
+def get_provider_capabilities(provider: str) -> ProviderCapabilities:
+    """Return the capability profile for a provider, or safe defaults for unknown."""
+    return _PROVIDER_CAPABILITIES.get(provider, ProviderCapabilities())
 
 
 class AgentConfig(BaseModel):
@@ -368,17 +416,12 @@ class ModelProfile(BaseModel):
     def provider_base_url(self) -> str:
         if self.base_url:
             return self.base_url
-        return _PROVIDER_BASE_URLS.get(self.provider, "http://localhost:1234")
+        caps = get_provider_capabilities(self.provider)
+        return caps.base_url
 
     def api_key(self) -> str:
-        env_map = {
-            "lmstudio": "LMSTUDIO_API_KEY",
-            "openai": "OPENAI_API_KEY",
-            "openrouter": "OPENROUTER_API_KEY",
-            "deepseek": "DEEPSEEK_API_KEY",
-        }
-        var = env_map.get(self.provider, "LLM_API_KEY")
-        return os.environ.get(var, "lm-studio")
+        caps = get_provider_capabilities(self.provider)
+        return os.environ.get(caps.api_key_env_var, "lm-studio")
 
 
 # Model name substrings known to support reasoning_effort / thinking params.
