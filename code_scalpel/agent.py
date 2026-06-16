@@ -72,7 +72,7 @@ def _sanitize_tool_sequence(messages: list[dict[str, Any]]) -> list[dict[str, An
         elif role == "assistant" and msg.get("tool_calls"):
             tcs = msg["tool_calls"]
             if isinstance(tcs, list):
-                ids = {tc.get("id") for tc in tcs if isinstance(tc, dict) and "id" in tc}
+                ids = {tc["id"] for tc in tcs if isinstance(tc, dict) and isinstance(tc.get("id"), str)}
                 if ids and ids.issubset(pending):
                     # All tool_calls answered — consume them, they're no longer orphans.
                     for tid in ids:
