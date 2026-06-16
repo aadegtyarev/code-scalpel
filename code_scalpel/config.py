@@ -16,6 +16,7 @@ _PROVIDER_BASE_URLS: dict[str, str] = {
     "lmstudio": "http://localhost:1234",
     "openai": "https://api.openai.com",
     "openrouter": "https://openrouter.ai/api",
+    "deepseek": "https://api.deepseek.com",
 }
 
 
@@ -374,6 +375,7 @@ class ModelProfile(BaseModel):
             "lmstudio": "LMSTUDIO_API_KEY",
             "openai": "OPENAI_API_KEY",
             "openrouter": "OPENROUTER_API_KEY",
+            "deepseek": "DEEPSEEK_API_KEY",
         }
         var = env_map.get(self.provider, "LLM_API_KEY")
         return os.environ.get(var, "lm-studio")

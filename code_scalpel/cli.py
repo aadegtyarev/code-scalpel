@@ -71,7 +71,7 @@ def _root(
         typer.echo(summary)
 
 
-_PROVIDERS = ("lmstudio", "openrouter", "openai")
+_PROVIDERS = ("lmstudio", "openrouter", "openai", "deepseek")
 _SANDBOX = ("auto", "on", "off")
 
 
@@ -172,6 +172,8 @@ def _default_model_for(provider: str) -> str:
         return "anthropic/claude-sonnet-4"
     if provider == "openai":
         return "gpt-4o-mini"
+    if provider == "deepseek":
+        return "deepseek-chat"
     return ""
 
 
@@ -199,7 +201,7 @@ def _render_config(*, provider: str, model: str, base_url: str, sandbox: str) ->
     if base_url:
         lines.append(f"    base_url: {base_url}")
     lines.append("")
-    if provider in {"openrouter", "openai"}:
+    if provider in {"openrouter", "openai", "deepseek"}:
         lines.extend(
             [
                 "# Provider key — set the env var instead of writing it here.",
