@@ -362,13 +362,12 @@ async def test_resolve_uses_config_value() -> None:
 
 
 @pytest.mark.asyncio
-async def test_resolve_raises_when_no_source() -> None:
+async def test_resolve_falls_back_to_provider_default() -> None:
+    """When auto-detection fails, use the provider's default_context_tokens."""
     profile = ModelProfile(provider="lmstudio", model="qwen")
-    with (
-        patch("code_scalpel.config.autodetect_context_tokens", return_value=None),
-        pytest.raises(ValueError, match="context_tokens"),
-    ):
-        await resolve_context_tokens(profile)
+    with patch("code_scalpel.config.autodetect_context_tokens", return_value=None):
+        result = await resolve_context_tokens(profile)
+    assert result == 8192  # lmstudio default
 
 
 # ── model name detection / resolution ────────────────────────────────────────
