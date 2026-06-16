@@ -3139,3 +3139,86 @@ async def test_runsmoke_verdict_resumes_from_state(project: Path) -> None:
     state.save(project)
     reloaded = AgentState.load(project)
     assert reloaded.last_acceptance_verdict == "passed"
+
+
+# ── _sanitize_tool_sequence unit tests ────────────────────────────────────────
+
+
+class TestSanitizeToolSequence:
+    def test_noop_on_empty(self) -> None:
+        from code_scalpel.agent import _sanitize_tool_sequence
+
+        assert _sanitize_tool_sequence([]) == []
+
+    def test_passes_valid_sequence(self) -> None:
+        """Happy path: assistant(tool_calls) → tool(response) — no cuts."""
+        from code_scalpel.agent import _sanitize_tool_sequence
+
+        msgs = [
+            {"role": "user", "content": "hi"},
+            {"role": "assistant", "content": "", "tool_calls": [{"id": "1", "type": "function", "function": {"name": "f", "arguments": "{}"}}]},
+            {"role": "tool", "tool_call_id": "1", "content": "result"},
+            {"role": "assistant", "content": "done"},
+        ]
+        assert _sanitize_tool_sequence(msgs) == msgs
+
+    def test_cuts_orphaned_assistant(self) -> None:
+        """Assistant with tool_calls but no tool responses → cut at assistant."""
+        from code_scalpel.agent import _sanitize_tool_sequence
+
+        msgs = [
+            {"role": "user", "content": "hi"},
+            {"role": "assistant", "content": "", "tool_calls": [{"id": "1", "type": "function", "function": {"name": "f", "arguments": "{}"}}]},
+            # No tool response for id=1 → orphaned
+            {"role": "user", "content": "next turn"},
+        ]
+        result = _sanitize_tool_sequence(msgs)
+        assert len(result) == 1  # only the first user message survives
+        assert result[0]["role"] == "user"
+
+    def test_cuts_orphaned_tool_messages(self) -> None:
+        """Tool responses without matching assistant (e.g. loop detection
+        popped the assistant) → cut at first orphaned tool message."""
+        from code_scalpel.agent import _sanitize_tool_sequence
+
+        msgs = [
+            {"role": "user", "content": "hi"},
+            {"role": "assistant", "content": "done"},
+            # Orphaned tool — its assistant was popped by loop detection
+            {"role": "tool", "tool_call_id": "orphan1", "content": "orphan result"},
+        ]
+        result = _sanitize_tool_sequence(msgs)
+        assert len(result) == 2  # user + valid assistant survive
+        assert result[-1]["content"] == "done"
+
+    def test_multi_turn_valid_preserved(self) -> None:
+        """Multiple complete turns — all survive."""
+        from code_scalpel.agent import _sanitize_tool_sequence
+
+        msgs = [
+            {"role": "user", "content": "t1"},
+            {"role": "assistant", "content": "", "tool_calls": [{"id": "a", "type": "function", "function": {"name": "f", "arguments": "{}"}}]},
+            {"role": "tool", "tool_call_id": "a", "content": "r1"},
+            {"role": "assistant", "content": "done1"},
+            {"role": "user", "content": "t2"},
+            {"role": "assistant", "content": "", "tool_calls": [{"id": "b", "type": "function", "function": {"name": "g", "arguments": "{}"}}]},
+            {"role": "tool", "tool_call_id": "b", "content": "r2"},
+            {"role": "assistant", "content": "done2"},
+        ]
+        assert _sanitize_tool_sequence(msgs) == msgs
+
+    def test_orphan_preserves_earlier_valid_turns(self) -> None:
+        """An orphaned tool at the end doesn't kill earlier valid history."""
+        from code_scalpel.agent import _sanitize_tool_sequence
+
+        msgs = [
+            {"role": "user", "content": "t1"},
+            {"role": "assistant", "content": "ok"},
+            {"role": "user", "content": "t2"},
+            {"role": "tool", "tool_call_id": "orphan", "content": "orphan"},
+        ]
+        result = _sanitize_tool_sequence(msgs)
+        # Orphan cut at index 3; indices 0-2 survive
+        assert len(result) == 3
+        assert result[0]["role"] == "user"
+        assert result[2]["role"] == "user"  # t2 survives before orphan

@@ -43,17 +43,24 @@ _MAX_TOOL_ROUNDS = 6
 
 
 def _sanitize_tool_sequence(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """Drop trailing assistant(tool_calls) messages that lack matching tool
-    responses. A broken turn can leave unmatched tool_calls in history;
-    strict providers reject the sequence as invalid ordering.
+    """Remove orphaned tool messages and unmatched assistant(tool_calls).
 
-    Scans backwards: each tool message adds its ID to a pending set. When an
-    assistant(tool_calls) is found, ALL its tool IDs must be in pending. If
-    so, those IDs are consumed (removed from pending) — they were answered.
-    If not, the assistant is orphaned and everything from it onward is cut.
+    A broken turn (loop detection popping the assistant, crash mid-tool-exec)
+    can leave tool messages without a matching assistant, or assistant(tool_calls)
+    without tool responses. Strict providers reject both as invalid ordering.
+
+    Scans backwards: tool IDs are collected, consumed by matching assistants.
+    After the scan, any leftover IDs belong to orphaned tool messages — their
+    assistant was removed. Find the earliest orphan and cut everything from
+    there (the broken turn tail). Similarly, assistant(tool_calls) lacking
+    responses are cut at their position.
     """
     pending: set[str] = set()
+    # Track the earliest index of each orphaned tool message so we can cut
+    # at the right boundary — the first broken message in the broken turn tail.
+    orphan_indices: dict[str, int] = {}
     cut_at: int | None = None
+
     for i in range(len(messages) - 1, -1, -1):
         msg = messages[i]
         role = msg.get("role")
@@ -61,17 +68,30 @@ def _sanitize_tool_sequence(messages: list[dict[str, Any]]) -> list[dict[str, An
             tc_id = msg.get("tool_call_id")
             if isinstance(tc_id, str) and tc_id:
                 pending.add(tc_id)
+                orphan_indices.setdefault(tc_id, i)
         elif role == "assistant" and msg.get("tool_calls"):
             tcs = msg["tool_calls"]
             if isinstance(tcs, list):
                 ids = {tc.get("id") for tc in tcs if isinstance(tc, dict) and "id" in tc}
                 if ids and ids.issubset(pending):
-                    # All tool_calls have responses — consume them and continue.
+                    # All tool_calls answered — consume them, they're no longer orphans.
+                    for tid in ids:
+                        orphan_indices.pop(tid, None)
                     pending -= ids
                 else:
-                    # Some tool_calls lack responses — orphaned. Cut here.
+                    # Assistant has unanswered tool_calls — orphaned. Cut here.
                     cut_at = i
-                    break
+                    # Don't break — we need to keep scanning to find whether
+                    # there are also orphaned tool messages further back (which
+                    # would mean an even earlier cut point).
+                    pending.clear()
+                    orphan_indices.clear()
+
+    # If no assistant-level orphan was found, check for orphaned tool messages
+    # (tool responses whose assistant was removed, e.g. by loop detection).
+    if cut_at is None and orphan_indices:
+        cut_at = min(orphan_indices.values())
+
     if cut_at is not None:
         return messages[:cut_at]
     return messages
