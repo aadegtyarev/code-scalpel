@@ -1,7 +1,7 @@
 # Stack notes
 
 Living document. Initialised at bootstrap, extended on every feature that touches a new external system.
-Maintained by `pm-stack-researcher`. Read by `pm-plan`, `pm-architect`, `pm-coder`, `pm-plan-checker`.
+Maintained by `stack-researcher fold`. Read by `ai-dev plan`, `architect fold`, `coder fold`, `plan-checker fold`.
 
 **Last full review:** 2026-06-06
 
@@ -9,10 +9,10 @@ Maintained by `pm-stack-researcher`. Read by `pm-plan`, `pm-architect`, `pm-code
 
 ## How this document is used
 
-- **pm-plan** reads it before drafting a plan that touches any listed component. If the feature touches a component that is missing here, `/pm-plan` spawns `pm-stack-researcher` to extend this document **before** continuing.
-- **pm-architect** reads it when proposing variants — stack constraints are part of the trade-off space.
-- **pm-coder** reads it before writing a mapping, handler, schema, or any integration code for a listed component. On contradiction between task and stack-notes, coder stops and escalates — no fallback to WebSearch.
-- **pm-plan-checker** checks every diff against the relevant entries. Code that contradicts an idiom or constraint listed here is **blocking** with a citation back to this file.
+- **ai-dev plan** reads it before drafting a plan that touches any listed component. If the feature touches a component that is missing here, `/ai-dev plan` spawns `stack-researcher fold` to extend this document **before** continuing.
+- **architect fold** reads it when proposing variants — stack constraints are part of the trade-off space.
+- **coder fold** reads it before writing a mapping, handler, schema, or any integration code for a listed component. On contradiction between task and stack-notes, coder stops and escalates — no fallback to WebSearch.
+- **plan-checker fold** checks every diff against the relevant entries. Code that contradicts an idiom or constraint listed here is **blocking** with a citation back to this file.
 
 If this document is missing or empty for a component the feature touches — that is a protocol-level defect, not a content gap.
 
@@ -226,7 +226,7 @@ If this document is missing or empty for a component the feature touches — tha
 - **Role in this project:** Render ```mermaid``` blocks from model replies inside the TUI. `mmdc` (npm, on PATH) produces a PNG; `rich-pixels` draws it as Unicode half-blocks. Without both, fall back to raw text of the block.
 - **Canonical docs:** https://github.com/mermaid-js/mermaid-cli ; https://github.com/darrenburns/rich-pixels
 - **Idioms and constraints:**
-  - `mmdc` is an **npm-installed external binary** (`npm i -g @mermaid-js/mermaid-cli`), not a pip dep — detect on PATH and fall back to raw text when absent. Source: `pyproject.toml` lines 41-48; `docs/architecture.md` "Integration contract". `confidence: doc-cited (unverified)`
+  - `mmdc` is an **nai-dev installed external binary** (`npm i -g @mermaid-js/mermaid-cli`), not a pip dep — detect on PATH and fall back to raw text when absent. Source: `pyproject.toml` lines 41-48; `docs/architecture.md` "Integration contract". `confidence: doc-cited (unverified)`
   - `[diagrams]` (`rich-pixels`) is the Python half; the npm `mmdc` is a separate manual install — both required for image render. Source: `pyproject.toml` lines 46-48.
 - **Known gotchas:**
   - `mmdc` uses headless Chromium (Puppeteer) under the hood; in restricted/CI/sandboxed environments it may need `--no-sandbox` Puppeteer args and can be slow — treat render as best-effort, never block the turn on it. Source: https://github.com/mermaid-js/mermaid-cli
@@ -310,6 +310,6 @@ This document **maps and flags** the option; it does **not** prescribe enabling 
 
 ## How to extend this document
 
-Only `pm-stack-researcher` edits this file. Other agents read it. If `pm-coder` or `pm-plan-checker` notices a missing rule or stale entry, they surface it to the orchestrator — orchestrator spawns `pm-stack-researcher` to update.
+Only `stack-researcher fold` edits this file. Other agents read it. If `coder fold` or `plan-checker fold` notices a missing rule or stale entry, they surface it to the orchestrator — orchestrator spawns `stack-researcher fold` to update.
 
 Each rule must cite a source URL. Unsourced claims do not belong here.
