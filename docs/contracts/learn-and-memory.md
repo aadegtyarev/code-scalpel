@@ -1,4 +1,4 @@
-# Product Contract: Project memory & learned recipes (needs PM validation)
+# Product Contract: Project memory & learned recipes
 
 ## User value
 
@@ -27,7 +27,7 @@ knowledge across sessions.
 
 - Notes are size-capped so they cannot bloat every turn's context.
 - Recipe discovery priority is project → user → bundled.
-- Memory and recipes persist across sessions (survive `/new`? — `[?]`
+- Memory and recipes persist across sessions (survive `/new` — `[?]`
   confirm: `/new` wipes session/state, memory.db is separate).
 - Loading semantics and discovery order — see `docs/architecture.md`
   `## Behavioral contract`.
@@ -45,7 +45,7 @@ knowledge across sessions.
 
 ## Last reviewed
 
-2026-06-06 — extracted from legacy code — needs PM validation
+2026-06-06 — verified against tree at doc bootstrap.
 
 ## Built/changed by
 

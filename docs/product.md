@@ -1,6 +1,6 @@
 # code-scalpel — what it is and why
 
-Authored product front door. Owned by `pm-architect`, validated one-pass by the PM. This is **not** the generated map — the contract→features map lives in `docs/product-map.md` (linked from `## Features` below).
+Authored product front door.
 
 ## Why this exists
 

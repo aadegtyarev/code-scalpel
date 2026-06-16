@@ -1,4 +1,4 @@
-# Product Contract: Ask mode — conversational code Q&A (needs PM validation)
+# Product Contract: Ask mode — conversational code Q&A
 
 ## User value
 
@@ -41,12 +41,12 @@ making changes.
 
 ## Out of scope
 
-- Applying changes, running the plan, or writing patches (that is code/go).
+- Applying changes, running the plan, or writing patches.
 
 ## Last reviewed
 
-2026-06-06 — extracted from legacy code — needs PM validation
+2026-06-06 — verified against tree at doc bootstrap.
 
 ## Built/changed by
 
-- (legacy — pre-protocol; v0.1–v0.3)
+- (legacy — pre-protocol; v0.1–v0.9)

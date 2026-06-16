@@ -1,4 +1,4 @@
-# Product Contract: Debug mode — failure investigation (needs PM validation)
+# Product Contract: Debug mode — failure investigation
 
 ## User value
 
@@ -25,7 +25,7 @@ hypothesis-driven diagnosis on a weak local model.
 - The debug pass cannot write files (investigate, don't mutate).
 - The debug loop is bounded (max attempts, hypothesis/test-output equality
   stops) — it cannot thrash forever.
-- See `docs/architecture.md` `## Behavioral contract` and `## State model`.
+- See `docs/architecture.md` `## Behavioral contract`.
 
 ## Acceptance checks
 
@@ -38,7 +38,7 @@ hypothesis-driven diagnosis on a weak local model.
 
 ## Last reviewed
 
-2026-06-06 — extracted from legacy code — needs PM validation
+2026-06-06 — verified against tree at doc bootstrap.
 
 ## Built/changed by
 
