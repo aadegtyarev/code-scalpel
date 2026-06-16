@@ -76,22 +76,12 @@ def _sanitize_tool_sequence(messages: list[dict[str, Any]]) -> list[dict[str, An
         return messages[:cut_at]
     return messages
 
-# Providers that support OpenAI-style strict json_schema response_format.
-# Others (DeepSeek, OpenRouter, local models) either reject it (400) or
-# silently ignore it. Fallback: json_object for API providers that accept
-# it, skip entirely for local models.
-_JSON_SCHEMA_PROVIDERS: frozenset[str] = frozenset({"openai"})
-_JSON_OBJECT_PROVIDERS: frozenset[str] = frozenset({"deepseek", "openrouter"})
-
-
 def _plan_response_format(provider: str) -> str:
-    """Return the response_format type to use for plan-mode JSON output:
-    'json_schema', 'json_object', or '' (skip)."""
-    if provider in _JSON_SCHEMA_PROVIDERS:
-        return "json_schema"
-    if provider in _JSON_OBJECT_PROVIDERS:
-        return "json_object"
-    return ""
+    """Return the best response_format type for the given provider.
+    Delegates to ProviderCapabilities — the single home (config.py)."""
+    from code_scalpel.config import get_provider_capabilities
+
+    return get_provider_capabilities(provider).response_format_type()
 
 # Prompt aliases — kept as module attributes for the moment so existing
 # code (and tests that import these names) keeps working. The source of
