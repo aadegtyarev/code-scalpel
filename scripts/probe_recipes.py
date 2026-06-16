@@ -73,7 +73,7 @@ async def _project_with_recipes(
                 src = _REAL_PROJECT / name
                 if src.exists():
                     shutil.copytree(src, cwd / name)
-            for name in ("pyproject.toml", "CLAUDE.md"):
+            for name in ("pyproject.toml", "AGENTS.md"):
                 src = _REAL_PROJECT / name
                 if src.exists():
                     shutil.copy2(src, cwd / name)

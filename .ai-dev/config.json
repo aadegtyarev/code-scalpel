@@ -1,0 +1,18 @@
+{
+  "mode": "interactive",
+  "profile": "solo",
+  "platform": "opencode",
+  "kind": "mixed",
+  "roles": {
+    "orchestrator": {
+      "agent": "ai-dev"
+    },
+    "builder": {
+      "agent": "dev-builder"
+    },
+    "reviewer": {
+      "agent": "dev-reviewer",
+      "model": "auto"
+    }
+  }
+}

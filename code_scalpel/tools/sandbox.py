@@ -67,7 +67,7 @@ def wrap_command_with_bwrap(command: str, project_dir: Path) -> list[str]:
         "/proc",
         # Empty tmpfs for /tmp — pytest/coverage write here.
         "--tmpfs",
-        "/tmp",
+        "/tmp",  # nosec B108 — tmpfs mount target, not a real temp directory
         # Empty tmpfs for /home — hides ~/.ssh, ~/.aws, browser profiles…
         "--tmpfs",
         "/home",

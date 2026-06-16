@@ -5,7 +5,8 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
-## [0.12.5.dev5] — 2026-06-07
+## [0.13.0] — 2026-06-16
+
 ### Added
 - Flat-layout run-smoke. The acceptance gate can now find and run the CLI of a
   flat-layout Python project — one where the package sits at the repo root
@@ -19,6 +20,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   the self-fix loop inert on the canonical flat-layout scenario.
 - New config `run_smoke_script_candidates` lets you set which root script names
   count as entry points; the values are validated against path traversal.
+- AI-Dev protocol setup: configured quality toolkit (ruff, mypy, pytest,
+  bandit, detect-secrets) with CI wired through the quality runner
+  (`node .ai-dev/quality/run.mjs`), ensuring every tool addition automatically
+  enters CI.
+
 ### Changed
 - The acceptance gate now verifies the runnable CLI at the **last task that
   actually builds it**, not merely the last task in the plan. So a CLI finished
@@ -28,6 +34,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   gap. No new task status is introduced, and both existing safety invariants
   hold: an early task is never demoted, and a library (no-CLI) project is never
   failed by this gate.
+- Doc bootstrap: migrated system canon from old protocol format. `docs/architecture.md`
+  compressed 984→121 lines into current protocol template. Contracts extracted
+  from legacy `.ai-pm/contracts/` into `docs/contracts/` (8 files). Threat model
+  refreshed. Old-protocol artifacts (`.ai-pm/`, `CLAUDE.md`) deleted — truth
+  moved to its single home.
+- Project `kind` changed from `code` to `mixed` — both code and documentation
+  are first-class products.
+
+## [0.12.5.dev5] — 2026-06-07
+Prerelease — content subsumed by 0.13.0.
 
 ## [0.12.5.dev4] — 2026-06-07
 ### Added

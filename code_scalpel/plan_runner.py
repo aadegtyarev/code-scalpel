@@ -9,7 +9,7 @@ verbatim from `agent.py`, `self.` → `self._agent.`, so the existing run_plan
 test suite passes unchanged.
 
 The wide `PlanRunner(self)` coupling is deliberate for the safe move — the seam
-the runner uses is documented in `.ai-pm/arch/acceptance-gate-run-plan_arch.md`
+the runner uses is documented in `docs/architecture.md` `## Decisions` #7
 (Question 3) so a later opportunistic step can narrow it to explicit deps
 without re-discovering the boundary.
 """

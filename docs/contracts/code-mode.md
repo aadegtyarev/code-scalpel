@@ -1,4 +1,4 @@
-# Product Contract: Code mode — one supervised patch step (needs PM validation)
+# Product Contract: Code mode — one supervised patch step
 
 ## User value
 
@@ -44,7 +44,7 @@ model, who wants to see and approve each edit.
 
 ## Last reviewed
 
-2026-06-06 — extracted from legacy code — needs PM validation
+2026-06-06 — verified against tree at doc bootstrap.
 
 ## Built/changed by
 

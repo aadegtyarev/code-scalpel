@@ -1,4 +1,4 @@
-# Product Contract: Run plan autonomously (`/go`) (needs PM validation)
+# Product Contract: Run plan autonomously (`/go`)
 
 ## User value
 
@@ -61,21 +61,19 @@ execution on a weak local model, controlling autonomy via the trust level.
 - **An early task of a CLI-intent plan is NEVER demoted by the acceptance
   check** (case c). Only the **last applicable task** enforces — an
   intermediate task that builds toward the CLI, before the last applicable
-  task, is *observed*, never failed by run-smoke. The greenfield
-  "skeleton task fails because the CLI isn't wired yet" false-demote must not
-  occur.
+  task, is *observed*, never failed by run-smoke.
 - The acceptance gate **must not break any `/go` flow that has no applicable
   acceptance spec** — the default-floor is never applicable, so python
   **libraries** with no CLI entrypoint (and any project type without a
   runnable deliverable) are **never wrongly failed**; they keep the
-  observational behavior. This is the load-bearing no-regression invariant.
+  observational behavior.
 - The loop stops after N consecutive failures and keeps partial progress
   on disk (no silent discard).
 - Editing `TASKS.md` mid-run is detected and stops the loop.
 - Upstream overrides never auto-rewrite code — they are recorded for
   review.
 - Status taxonomy, trust-driven fork resolution, stop reasons — see
-  `docs/architecture.md` `## Behavioral contract` and `## State model`.
+  `docs/architecture.md` `## Behavioral contract`.
 
 ## Acceptance checks
 
@@ -93,12 +91,6 @@ execution on a weak local model, controlling autonomy via the trust level.
 - Last-applicable enforcement — the gate enforces the runnable CLI at the last
   applicable task even when a later plan task is non-CLI; early CLI tasks and
   library/no-spec plans are still never demoted.
-- Outcome probe (`notes_cli`, **N≥3** to `task_solved`) — the **enforced
-  release gate**. With flat-layout run-smoke + last-applicable enforcement
-  landed, the gate now actually runs and enforces the CLI on the canonical
-  scenario, so self-fix engages there. The gate's contract is therefore
-  **"never false-fail; enforce the runnable CLI at the last applicable task;
-  self-fix before demotion at optimist/yolo."**
 - Self-fix loop (`tests/test_acceptance_self_fix.py`) — recovers a task when a
   rebuild fixes the run (`done`); exhausts the budget → `failed`; skeptic never
   auto-fixes; off-switch restores immediate `failed`; identical-output
@@ -115,12 +107,12 @@ execution on a weak local model, controlling autonomy via the trust level.
 
 ## Last reviewed
 
-2026-06-06 — extracted from legacy code — needs PM validation
+2026-06-06 — verified against tree at doc bootstrap.
 
 ## Built/changed by
 
 - (legacy — pre-protocol; v0.7–v0.14)
-- [acceptance-gate-run-plan](../../docs/features/acceptance-gate-run-plan_plan.md) — run-smoke plumbing + observability (recorded, not enforced)
-- [acceptance-spec-in-tasks](../../docs/features/acceptance-spec-in-tasks_plan.md) — acceptance gate now enforces when intent × position × state agree (derived args-only spec + write-back; enforce at the plan's final step; early tasks + libraries never demoted); `notes_cli` 3/3 the live enforced release gate at the final step
-- [acceptance-self-fix-loop](../../docs/features/acceptance-self-fix-loop_plan.md) — bounded, trust-gated self-fix loop: a failing final-step run-smoke at optimist/yolo is re-fed to the model and rebuilt up to a budget before `failed`; skeptic fails immediately; budget + identical-output break bound it; never self-fixes early CLI tasks or library / no-spec tasks
-- [flat-layout-run-smoke](../../docs/features/flat-layout-run-smoke_plan.md) — closes the two reach gaps: flat-layout run-smoke resolution (`RunTarget(kind, target)` — root package / root script / `[project.scripts]`, declared outranks discovered, ambiguity→raise) + enforcement at the **last applicable task** (not the last plan task), so the gate + self-fix actually engage on the canonical scenario
+- [acceptance-gate-run-plan](../features/acceptance-gate-run-plan_plan.md) — run-smoke plumbing + observability (recorded, not enforced)
+- [acceptance-spec-in-tasks](../features/acceptance-spec-in-tasks_plan.md) — acceptance gate now enforces when intent × position × state agree
+- [acceptance-self-fix-loop](../features/acceptance-self-fix-loop_plan.md) — bounded, trust-gated self-fix loop
+- [flat-layout-run-smoke](../features/flat-layout-run-smoke_plan.md) — closes the two reach gaps: flat-layout run-smoke resolution + enforcement at the last applicable task

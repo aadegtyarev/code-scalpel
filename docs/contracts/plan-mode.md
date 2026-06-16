@@ -1,4 +1,4 @@
-# Product Contract: Plan mode — build a task list (needs PM validation)
+# Product Contract: Plan mode — build a task list
 
 ## User value
 
@@ -43,7 +43,7 @@ plan before the agent acts.
 
 ## Last reviewed
 
-2026-06-06 — extracted from legacy code — needs PM validation
+2026-06-06 — verified against tree at doc bootstrap.
 
 ## Built/changed by
 

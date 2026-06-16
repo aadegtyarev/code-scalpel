@@ -1,14 +1,14 @@
 # Threat Model
 
-**Last reviewed:** 2026-06-07
+**Last reviewed:** 2026-06-16
 
-> Canonical threat model for code-scalpel. Owned by `pm-architect`.
-> Finalized at legacy adoption from the `pm-codebase-reader` draft
+> Canonical threat model for code-scalpel.
+> Finalized at doc bootstrap from the legacy codebase
 > (observed security-bearing surfaces in `code_scalpel/`: model-issued
 > shell execution, model-issued file writes, autonomous plan execution
 > that commits, fork auto-resolution, secrets handling). This is the
 > **risk layer**; the enforceable rules live in `docs/architecture.md`
-> `## Security constraints` (the **rule layer**) and are referenced here
+> `## Security surface` (the **rule layer**) and are referenced here
 > by `SCn` ID (one-way, no rule text duplicated).
 
 This is an **internal developer tool** that runs on the developer's own
@@ -157,3 +157,8 @@ stays args-only (SC7), and the self-fix loop stays bounded by SC8. T05/T06
 (autonomous-loop rows) and T10 (wrong auto-resolution) updated to note the
 wider reach; **SC7 and SC8 reaffirmed, no new constraint added**. No new asset,
 adversary, or do-NOT-protect entry.
+
+Reviewed 2026-06-16 at doc bootstrap: no new threats — docs-only change.
+Header updated to remove legacy protocol references (`pm-architect`,
+`pm-codebase-reader`). Threat rows, SC constraints, and review records
+carry forward unchanged.

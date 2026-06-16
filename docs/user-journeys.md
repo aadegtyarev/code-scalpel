@@ -1,11 +1,9 @@
 # User Journeys
 
-> Canonical user journeys for code-scalpel. Owned by `pm-architect`.
-> Finalized at legacy adoption from the `pm-codebase-reader` draft (derived
-> bottom-up from CLI entry points, TUI slash commands/keybindings, agent
-> modes, and `plan.md` scenarios). Format / taxonomy identifiers live once
-> in `docs/architecture.md` `## Behavioral contract (taxonomies &
-> invariants)` and are referenced here, never restated.
+> Canonical user journeys for code-scalpel.
+> Derived bottom-up from CLI entry points, TUI slash commands/keybindings, agent
+> modes, and `plan.md` scenarios. Format / taxonomy identifiers live once
+> in `docs/architecture.md` `## Behavioral contract` and are referenced here, never restated.
 
 The single user role is **a developer using this terminal agent on their
 own codebase through a weak local LLM** (default: qwen2.5-coder-14b in LM
@@ -127,7 +125,7 @@ The acceptance check may be auto-derived (one LLM pass per acceptance-less
 task at `/go`) and written into the plan so it is the same on every later
 run. Trust-driven fork resolution, status taxonomy, the run-smoke verdict
 values, and stop reasons — see `docs/architecture.md`
-`## Behavioral contract` and `## State model`.
+`## Behavioral contract`.
 
 ---
 
@@ -158,7 +156,7 @@ investigation.
 
 **Invariants:** the debug pass cannot write files (investigate, don't
 mutate) and is bounded by attempt caps. Tool-surface and step semantics —
-see `docs/architecture.md` `## Behavioral contract` and `## State model`.
+see `docs/architecture.md` `## Behavioral contract`.
 
 ---
 
@@ -192,7 +190,7 @@ separately `[?]` (confirm). Loading semantics + discovery order — see
 
 **Invariants:** `STATE.json` is written atomically on each meaningful
 transition; the resume hash distinguishes "same state we saved" from "user
-edited / fresh start". See `docs/architecture.md` `## State model`.
+edited / fresh start". See `docs/architecture.md` `## Behavioral contract`.
 
 ---
 

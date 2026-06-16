@@ -26,3 +26,6 @@ memory/
 
 # Probe-run scratch working copies (nested git repos) — never part of the corpus.
 docs/article/probe-runs/*/.workdir/
+.ai-dev/state/
+.ai-dev/feedback/
+.ai-dev/worktrees/

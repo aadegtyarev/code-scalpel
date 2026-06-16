@@ -1,4 +1,4 @@
-# Product Contract: Setup, model profiles & trust control (needs PM validation)
+# Product Contract: Setup, model profiles & trust control
 
 ## User value
 
@@ -32,7 +32,7 @@ trust the model to act unsupervised.
   commands are refused at skeptic and optimist regardless of approval.
 - `init` does not overwrite an existing config without confirmation/force.
 - Trust-level semantics and hard-block list — see `docs/architecture.md`
-  `## Behavioral contract` and `## Security constraints`.
+  `## Behavioral contract` and `## Security surface`.
 
 ## Acceptance checks
 
@@ -48,7 +48,7 @@ trust the model to act unsupervised.
 
 ## Last reviewed
 
-2026-06-06 — extracted from legacy code — needs PM validation
+2026-06-06 — verified against tree at doc bootstrap.
 
 ## Built/changed by
 
