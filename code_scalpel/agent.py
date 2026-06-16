@@ -2604,7 +2604,9 @@ class StepAgent:
                     prompt_total = chunk.usage.prompt_tokens
                     completion_total += chunk.usage.completion_tokens
 
-            asst_msg: dict[str, Any] = {"role": "assistant", "content": full or None}
+            asst_msg: dict[str, Any] = {"role": "assistant"}
+            if full:
+                asst_msg["content"] = full
             if round_tool_calls:
                 asst_msg["tool_calls"] = [
                     {
@@ -2650,7 +2652,10 @@ class StepAgent:
                 )
             final_assistant = full
 
-        turn_history.append({"role": "assistant", "content": final_assistant})
+        final_msg: dict[str, Any] = {"role": "assistant"}
+        if final_assistant:
+            final_msg["content"] = final_assistant
+        turn_history.append(final_msg)
         self._history.extend(turn_history)
 
         out["final_assistant"] = final_assistant
@@ -2763,7 +2768,9 @@ class StepAgent:
         # underscore-prefixed keys before handing the list to the LLM —
         # OpenAI-compat backends reject unknown fields on `tool` role.
         for entry in self._history:
-            msgs.append({k: v for k, v in entry.items() if not k.startswith("_")})
+            msgs.append(
+                {k: v for k, v in entry.items() if not k.startswith("_") and v is not None}
+            )
         msgs.append({"role": "user", "content": user_msg})
         return msgs
 
