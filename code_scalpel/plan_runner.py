@@ -327,8 +327,75 @@ class PlanRunner:
             should_run_now=should_run_now,
         )
         if not self._acceptance_demoted(outcome, should_run_now):
+            # Not an acceptance failure — but if the task failed for other
+            # reasons (build error, test failure) and trust permits, give
+            # the model a chance to self-correct with the failure output.
+            if outcome.status == "failed":
+                return await self._self_fix_build(task, outcome, prompt, on_tool_executed)
             return outcome
         return await self._self_fix_acceptance(task, outcome, prompt, on_tool_executed)
+
+    async def _self_fix_build(
+        self,
+        task: Task,
+        outcome: TaskOutcome,
+        prompt: str,
+        on_tool_executed: Callable[[ToolCall, ToolResult], None] | None,
+    ) -> TaskOutcome:
+        """Bounded self-fix for general build failures (pip, tests, missing files).
+
+        Same trust gate as acceptance self-fix: skeptic never auto-fixes.
+        Feeds the failure context from the last StepResult back to the model.
+        """
+        from code_scalpel.policy import auto_confirm
+
+        agent = self._agent
+        if not auto_confirm(agent._config.agent.trust):
+            return outcome
+        if not agent._config.agent.acceptance_self_fix:
+            return outcome
+
+        from code_scalpel.agent import _classify_outcome
+
+        budget = agent._config.agent.acceptance_self_fix_max_attempts
+        sr = self._last_step_result
+        if sr is None:
+            return outcome
+        # Build a retry prompt from the failure output — the model's own
+        # reply + any tool errors are the failure signal.
+        failure_context = sr.reply or ""
+        if sr.edits:
+            failure_context += "\n\nFiles modified: " + ", ".join(
+                e.path for e in sr.edits if hasattr(e, "path")
+            )
+        retry_prompt = (
+            f"{prompt}\n\n"
+            f"The previous attempt failed. Here is the output:\n"
+            f"{failure_context[:3000]}\n\n"
+            f"Fix the issues and try again."
+        )
+        for _ in range(budget):
+            try:
+                head_before = await self._build_task(task, retry_prompt, on_tool_executed)
+            except Exception:
+                return outcome
+            step_result = self._last_step_result
+            assert step_result is not None
+            new_outcome = _classify_outcome(task, step_result)
+            new_outcome = await verify_task(
+                agent, task, new_outcome, head_before, on_tool_executed,
+                should_run_now=False,
+            )
+            if new_outcome.status == "done":
+                return new_outcome
+            # Update retry prompt with latest failure
+            retry_prompt = (
+                f"{prompt}\n\n"
+                f"Still failing. Latest output:\n"
+                f"{(step_result.reply or '')[:3000]}\n\n"
+                f"Fix the remaining issues."
+            )
+        return outcome
 
     async def _build_task(
         self,
