@@ -41,6 +41,37 @@ from code_scalpel.tools.shell import ShellRunner
 
 _MAX_TOOL_ROUNDS = 6
 
+
+def _sanitize_tool_sequence(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Drop trailing assistant(tool_calls) messages that lack matching tool
+    responses. A broken turn can leave unmatched tool_calls in history;
+    strict providers reject the sequence as invalid ordering."""
+    # Scan backwards: for each assistant-with-tool_calls, count how many
+    # tool messages follow it. If zero, the assistant message is orphaned
+    # and must be removed along with everything after it (the incomplete
+    # turn tail).
+    pending: set[str] = set()
+    cut_at: int | None = None
+    for i in range(len(messages) - 1, -1, -1):
+        msg = messages[i]
+        role = msg.get("role")
+        if role == "tool":
+            tc_id = msg.get("tool_call_id")
+            if isinstance(tc_id, str) and tc_id:
+                pending.add(tc_id)
+        elif role == "assistant" and msg.get("tool_calls"):
+            tcs = msg["tool_calls"]
+            if isinstance(tcs, list):
+                ids = {tc.get("id") for tc in tcs if isinstance(tc, dict) and "id" in tc}
+                if not ids.issubset(pending):
+                    # This assistant(tool_calls) has no matching tool responses
+                    # following it → orphaned. Cut everything from here onward.
+                    cut_at = i
+                    break
+    if cut_at is not None:
+        return messages[:cut_at]
+    return messages
+
 # Providers that support OpenAI-style strict json_schema response_format.
 # Others (DeepSeek, OpenRouter, local models) either reject it (400) or
 # silently ignore it. Fallback: json_object for API providers that accept
@@ -2772,6 +2803,11 @@ class StepAgent:
             msgs.append(
                 {k: v for k, v in entry.items() if not k.startswith("_") and v is not None}
             )
+        # Safety net: strip trailing assistant(tool_calls) messages that lack
+        # matching tool responses. A broken turn (crash / timeout / early exit)
+        # can leave an unmatched tool_calls in history; strict providers
+        # (DeepSeek) reject assistant(tool_calls) → user as invalid ordering.
+        msgs = _sanitize_tool_sequence(msgs)
         msgs.append({"role": "user", "content": user_msg})
         return msgs
 
