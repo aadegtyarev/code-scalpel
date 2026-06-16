@@ -824,7 +824,7 @@ class StepAgent:
         session: Session | None = None,
         upstream_queue: object | None = None,
         state: object | None = None,
-        mcp_manager: object | None = None,
+        mcp_manager: Any | None = None,
     ) -> None:
         self._llm = llm
         self._cwd = cwd
