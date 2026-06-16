@@ -1,0 +1,45 @@
+{
+  "scenario": "gh_release",
+  "pass_score": 9,
+  "pass_max": 9,
+  "criteria": {
+    "package": {
+      "passed": true,
+      "detail": "4 непустых .py-файла(ов) с исходным кодом"
+    },
+    "github_api": {
+      "passed": true,
+      "detail": "GitHub Releases API найден"
+    },
+    "changelog_parser": {
+      "passed": true,
+      "detail": "парсинг CHANGELOG найден"
+    },
+    "bearer_auth": {
+      "passed": true,
+      "detail": "Bearer-аутентификация найдена"
+    },
+    "cli_commands": {
+      "passed": true,
+      "detail": "CLI команды: ['publish', 'list']"
+    },
+    "tests_present": {
+      "passed": true,
+      "detail": "3 тест-файл(ов)"
+    },
+    "docs": {
+      "passed": true,
+      "detail": "README найден (README.md)"
+    },
+    "installable": {
+      "passed": true,
+      "detail": "проект ставится как пакет"
+    },
+    "tests_pass": {
+      "passed": true,
+      "detail": "pytest зелёный"
+    }
+  },
+  "ended_reason": "task_solved",
+  "mechanical_solved": true
+}

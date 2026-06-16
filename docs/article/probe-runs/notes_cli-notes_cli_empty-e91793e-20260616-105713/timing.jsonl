@@ -1,0 +1,4 @@
+{"ts": "2026-06-16T10:57:23Z", "event": "step.start", "turn": 1, "mode": "plan"}
+{"ts": "2026-06-16T10:57:25Z", "event": "step.error", "error": "AuthenticationError(\"Error code: 401 - {'error': {'message': 'Authentication Fails, Your api key: ****fcde is invalid', 'type': 'authentication_error', 'param': None, 'code': 'invalid_request_error'}}\")"}
+{"ts": "2026-06-16T10:57:33Z", "event": "step.start", "turn": 2, "mode": "plan"}
+{"ts": "2026-06-16T10:57:35Z", "event": "step.error", "error": "AuthenticationError(\"Error code: 401 - {'error': {'message': 'Authentication Fails, Your api key: ****fcde is invalid', 'type': 'authentication_error', 'param': None, 'code': 'invalid_request_error'}}\")"}

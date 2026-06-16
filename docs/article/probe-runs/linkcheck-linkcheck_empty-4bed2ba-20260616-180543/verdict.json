@@ -1,0 +1,37 @@
+{
+  "scenario": "linkcheck",
+  "pass_score": 7,
+  "pass_max": 7,
+  "criteria": {
+    "package": {
+      "passed": true,
+      "detail": "1 непустых .py-файла(ов) с исходным кодом"
+    },
+    "link_parsing": {
+      "passed": true,
+      "detail": "парсинг ссылок: ['.md', 'markdown', 'link']"
+    },
+    "url_checking": {
+      "passed": true,
+      "detail": "проверка URL: ['http', 'requests', 'status', 'urllib', 'HEAD', 'get']"
+    },
+    "tests_present": {
+      "passed": true,
+      "detail": "4 тест-файл(ов)"
+    },
+    "docs": {
+      "passed": true,
+      "detail": "README найден (README.md)"
+    },
+    "installable": {
+      "passed": true,
+      "detail": "проект ставится как пакет"
+    },
+    "tests_pass": {
+      "passed": true,
+      "detail": "pytest зелёный"
+    }
+  },
+  "ended_reason": "task_solved",
+  "mechanical_solved": true
+}

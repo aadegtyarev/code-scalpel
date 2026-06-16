@@ -1,0 +1,12 @@
+ВНИМАНИЕ: найдены битые ссылки!
+  ✓ ./docs/example.md:7  https://python.org  →  200 OK
+  ✓ ./docs/example.md:8  https://peps.python.org/pep-0008/  →  200 OK
+  ✗ ./docs/example.md:9  https://realpython.com  →  403 forbidden
+  ✓ ./docs/example.md:10  ./relative.md  →  файл найден
+  ✓ ./docs/example.md:11  https://docs.python.org/3/#documentation  →  200 OK
+  ✓ ./docs/example.md:15  https://pypi.org/project/requests/  →  200 OK
+  ✓ ./docs/example.md:19  https://python.org  →  200 OK
+  ✓ ./docs/example.md:19  https://docs.python.org/3/  →  200 OK
+  ✓ ./docs/relative.md:5  ./example.md  →  файл найден
+
+Проверено: 9, доступно: 8, битых: 1

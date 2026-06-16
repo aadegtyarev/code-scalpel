@@ -1,0 +1,20 @@
+{
+  "run_id": "fullstack-fullstack_empty-45d225e-20260616-135821",
+  "scenario": "fullstack",
+  "project": "fullstack_empty",
+  "version_tag": "main_45d225e",
+  "git_sha": "45d225e7cf212f8fa12ef1daa01f5662868f73e0",
+  "git_dirty": true,
+  "git_commit_url": "https://github.com/aadegtyarev/code-scalpel/commit/45d225e7cf212f8fa12ef1daa01f5662868f73e0",
+  "git_checkout_cmd": "git checkout 45d225e7cf212f8fa12ef1daa01f5662868f73e0",
+  "model_name_expected": "deepseek-v4-flash",
+  "model_name_actual": "deepseek-v4-flash",
+  "model_base_url": "https://api.deepseek.com/v1",
+  "profile": "deepseek",
+  "upstream_model": null,
+  "started_at": "2026-06-16T13:58:21Z",
+  "ended_at": null,
+  "ended_reason": null,
+  "user_role": "claude-acting-as-user-per-tone-of-voice.md",
+  "command": "probe start fullstack fullstack_empty --profile=deepseek"
+}

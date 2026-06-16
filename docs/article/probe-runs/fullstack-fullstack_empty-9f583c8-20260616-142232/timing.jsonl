@@ -1,0 +1,4 @@
+{"ts": "2026-06-16T14:22:35Z", "event": "step.start", "turn": 1, "mode": "plan"}
+{"ts": "2026-06-16T14:22:53Z", "event": "step.end", "turn": 1}
+{"ts": "2026-06-16T14:22:54Z", "event": "go.start"}
+{"ts": "2026-06-16T14:24:40Z", "event": "go.error", "error": "BadRequestError('Error code: 400 - {\\'error\\': {\\'message\\': \"An assistant message with \\'tool_calls\\' must be followed by tool messages responding to each \\'tool_call_id\\'. (insufficient tool messages following tool_calls message)\", \\'type\\': \\'invalid_request_error\\', \\'param\\': None, \\'code\\': \\'invalid_request_error\\'}}')"}

@@ -1,0 +1,23 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "notescli"
+version = "0.1.0"
+description = "CLI для заметок с JSON-хранилищем"
+requires-python = ">=3.11"
+dependencies = []
+
+[project.optional-dependencies]
+dev = ["pytest>=8"]
+
+[project.scripts]
+notescli = "notescli.cli:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/notescli"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
