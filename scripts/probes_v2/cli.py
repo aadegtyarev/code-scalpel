@@ -424,8 +424,8 @@ def finalize(
         deadline = time.monotonic() + 5.0
         while time.monotonic() < deadline and paths.daemon_info.exists():
             time.sleep(0.1)
-    except typer.Exit:
-        # Daemon already dead — ok, workdir should still be on disk.
+    except (typer.Exit, ConnectionError, OSError):
+        # Daemon dead or unreachable — ok, workdir should still be on disk.
         pass
 
     # Снапшот workdir → final_tree (раскрытый, не tar.gz —
