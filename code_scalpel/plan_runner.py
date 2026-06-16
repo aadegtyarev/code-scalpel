@@ -150,6 +150,16 @@ class PlanRunner:
         from code_scalpel.agent import RunPlanResult
         from code_scalpel.plan_loading import load_plan
 
+        # Scale max-failure tolerance with trust: a strong model (or yolo)
+        # deserves more chances to self-correct before the loop gives up.
+        # The explicit arg always wins; the default (2) is the skeptic floor.
+        if stop_after_failures == 2:
+            trust = self._agent._config.agent.trust
+            if trust == "yolo":
+                stop_after_failures = 4
+            elif trust == "optimist":
+                stop_after_failures = 3
+
         loaded = await load_plan(self._agent, on_tool_executed, fork_resolver)
         if loaded is None:
             return RunPlanResult(outcomes=(), stopped_reason="no_tasks", tasks_completed=0)

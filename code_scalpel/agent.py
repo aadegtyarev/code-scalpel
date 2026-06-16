@@ -1910,14 +1910,18 @@ class StepAgent:
         # showed this is faster than JSON-via-prompt on 14b and removes
         # the parser-error class entirely.
         if pass_spec.output_schema is not None:
-            kwargs["response_format"] = {
-                "type": "json_schema",
-                "json_schema": {
-                    "name": pass_spec.name,
-                    "strict": True,
-                    "schema": pass_spec.output_schema,
-                },
-            }
+            _nf = _plan_response_format(self._config.current_profile.provider)
+            if _nf == "json_schema":
+                kwargs["response_format"] = {
+                    "type": "json_schema",
+                    "json_schema": {
+                        "name": pass_spec.name,
+                        "strict": True,
+                        "schema": pass_spec.output_schema,
+                    },
+                }
+            elif _nf == "json_object":
+                kwargs["response_format"] = {"type": "json_object"}
         response = await self._llm.chat(messages, **kwargs)
         if self._session is not None:
             self._session.record(response)
