@@ -1,0 +1,1 @@
+"""LLM adapter layer — OpenAI-compatible chat/stream + LM Studio native API."""

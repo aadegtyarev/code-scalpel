@@ -77,7 +77,7 @@ execution on a weak local model, controlling autonomy via the trust level.
 
 ## Acceptance checks
 
-- `run_plan` tests — task status transitions, stop reasons (max_failures,
+- `run_plan` tests — task status transitions, stop reasons (task_not_done,
   plan_modified, all_done, no_tasks), HEAD validation, auto-commit hook.
 - Fork wiring / `UpstreamPendingQueue` / `flush_upstream` tests.
 - Acceptance gate — demotes `done → failed` when intent × position × state

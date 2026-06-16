@@ -8,7 +8,7 @@
 // invoked it" mechanical. That invocation stays a persona act — a runner cannot
 // force a positive act (PROTOCOL.md `## Enforcement`).
 //
-// Usage: node src/quality/run.mjs <build|review|ship>
+// Usage: node .ai-dev/quality/run.mjs <build|review|ship>
 //
 // Exit codes: 0 = every matched row passed (or no rows matched, or no registry);
 //             non-zero = a row failed, a bad beat arg, or a malformed registry.
@@ -31,7 +31,7 @@ const BEATS = ["build", "review", "ship"];
 // `registryPath` overrides the default location (the self-test points it at a
 // synthetic registry). The default registry resolves NEXT TO this runner — the
 // installer ships run.mjs and tools.json together as a pair (`.ai-dev/quality/`
-// downstream, `src/quality/` here), so "beside me" is correct on every layout.
+// downstream, `.ai-dev/quality/` here), so "beside me" is correct on every layout.
 export function run(beat, root, registryPath) {
   if (!BEATS.includes(beat)) {
     console.error(`run.mjs: unknown beat "${beat}" — expected one of ${BEATS.join(" | ")}`);
@@ -85,7 +85,7 @@ export function run(beat, root, registryPath) {
   return failed ? 1 : 0;
 }
 
-// Self-locate the project root from this script's path: src/quality/run.mjs ⇒
+// Self-locate the project root from this script's path: .ai-dev/quality/run.mjs ⇒
 // root is two levels up (mirrors neutral-prose.test.mjs).
 function projectRoot() {
   const here = path.dirname(fileURLToPath(import.meta.url));
@@ -96,7 +96,7 @@ function projectRoot() {
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
   const beat = process.argv[2];
   if (!beat) {
-    console.error(`Usage: node src/quality/run.mjs <${BEATS.join("|")}>`);
+    console.error(`Usage: node .ai-dev/quality/run.mjs <${BEATS.join("|")}>`);
     process.exit(2);
   }
   process.exit(run(beat, projectRoot()));
