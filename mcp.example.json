@@ -1,0 +1,11 @@
+{
+  "_doc": "MCP servers for code-scalpel. Copy to mcp.json to enable.",
+  "servers": {
+    "playwright": {
+      "command": "npx",
+      "args": ["-y", "@playwright/mcp", "--port", "0"],
+      "transport": "sse",
+      "_note": "Port 0 = random. Transport SSE required for @playwright/mcp."
+    }
+  }
+}
