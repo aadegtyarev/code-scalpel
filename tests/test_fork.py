@@ -100,7 +100,13 @@ async def test_local_meta_forker_resolves(project: Path) -> None:
     mock LLM returns, at temperature 0.0, with sampler-enforced
     structured output (`response_format=json_schema`)."""
     llm = MockLLMAdapter(['{"chosen": "asyncpg", "reasoning": "non-blocking I/O"}'])
-    agent = StepAgent(llm=llm, cwd=project, config=_CONFIG)
+    # Use openai provider — the test asserts json_schema response_format
+    # which lmstudio no longer receives (it skips structured output).
+    config = AppConfig(
+        profiles={"local": ModelProfile(provider="openai", model="gpt-4o")},
+        agent=AgentConfig(),
+    )
+    agent = StepAgent(llm=llm, cwd=project, config=config)
     forker = LocalMetaForker(agent)
 
     res = await forker.resolve(
@@ -499,7 +505,12 @@ async def test_detect_forks_uses_structured_output(project: Path) -> None:
     from code_scalpel.fork import detect_forks
 
     llm = MockLLMAdapter(['{"forks": []}'])
-    agent = StepAgent(llm=llm, cwd=project, config=_CONFIG)
+    # Use openai provider — the test asserts json_schema response_format.
+    config = AppConfig(
+        profiles={"local": ModelProfile(provider="openai", model="gpt-4o")},
+        agent=AgentConfig(),
+    )
+    agent = StepAgent(llm=llm, cwd=project, config=config)
 
     await detect_forks(agent, "plan")
 
