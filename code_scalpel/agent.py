@@ -45,11 +45,13 @@ _MAX_TOOL_ROUNDS = 6
 def _sanitize_tool_sequence(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """Drop trailing assistant(tool_calls) messages that lack matching tool
     responses. A broken turn can leave unmatched tool_calls in history;
-    strict providers reject the sequence as invalid ordering."""
-    # Scan backwards: for each assistant-with-tool_calls, count how many
-    # tool messages follow it. If zero, the assistant message is orphaned
-    # and must be removed along with everything after it (the incomplete
-    # turn tail).
+    strict providers reject the sequence as invalid ordering.
+
+    Scans backwards: each tool message adds its ID to a pending set. When an
+    assistant(tool_calls) is found, ALL its tool IDs must be in pending. If
+    so, those IDs are consumed (removed from pending) — they were answered.
+    If not, the assistant is orphaned and everything from it onward is cut.
+    """
     pending: set[str] = set()
     cut_at: int | None = None
     for i in range(len(messages) - 1, -1, -1):
@@ -63,9 +65,11 @@ def _sanitize_tool_sequence(messages: list[dict[str, Any]]) -> list[dict[str, An
             tcs = msg["tool_calls"]
             if isinstance(tcs, list):
                 ids = {tc.get("id") for tc in tcs if isinstance(tc, dict) and "id" in tc}
-                if not ids.issubset(pending):
-                    # This assistant(tool_calls) has no matching tool responses
-                    # following it → orphaned. Cut everything from here onward.
+                if ids and ids.issubset(pending):
+                    # All tool_calls have responses — consume them and continue.
+                    pending -= ids
+                else:
+                    # Some tool_calls lack responses — orphaned. Cut here.
                     cut_at = i
                     break
     if cut_at is not None:
