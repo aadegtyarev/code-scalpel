@@ -1961,10 +1961,12 @@ def hello():
 
     result = await agent.run_plan(stop_after_failures=2)
 
-    assert result.stopped_reason == "max_failures"
+    # max_failures was removed — the loop no longer stops on failures.
+    # All tasks run to completion; stopped_reason is all_done (or
+    # max_tasks when configured), never max_failures.
+    assert result.stopped_reason == "all_done"
     assert result.tasks_completed == 0
-    # Two outcomes (both failed); T003 never started.
-    assert len(result.outcomes) == 2
+    assert len(result.outcomes) == 3  # all three tasks attempted
     assert all(o.status == "failed" for o in result.outcomes)
 
 
@@ -2096,8 +2098,9 @@ async def test_run_plan_stops_on_repeated_skips(project: Path) -> None:
 
     result = await agent.run_plan(stop_after_failures=2)
 
+    # Five consecutive skips → skip giveup threshold (5) → stops at T005.
     assert result.stopped_reason == "task_not_done"
-    assert [o.status for o in result.outcomes] == ["skipped"] * 4
+    assert [o.status for o in result.outcomes] == ["skipped"] * 5
     assert result.tasks_completed == 0
 
 
