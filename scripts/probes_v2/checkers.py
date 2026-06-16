@@ -276,9 +276,23 @@ def check_cli_acceptance(tree: Path) -> Criterion:
                 False, "нет точки входа CLI (__main__/argparse) — не запускается как CLI"
             )
         for launcher in launchers:
-            rc, _out = _run([*launcher, "add", _ACC_TOKEN], work, 30)
-            added = _json_storage_has(work, _ACC_TOKEN)
-            if rc != 0 and not added:
+            # Try multiple CLI argument patterns: positional first
+            # (simplest — `add <text>`), then named args (`add --title
+            # X --content Y`), then title-only. Exit-2 means argparse
+            # rejected (wrong args), not a runtime crash — keep trying.
+            add_variants = [
+                [*launcher, "add", _ACC_TOKEN],
+                [*launcher, "add", "--title", _ACC_TOKEN, "--content", _ACC_TOKEN],
+                [*launcher, "add", "--title", _ACC_TOKEN],
+            ]
+            ok = False
+            for add_cmd in add_variants:
+                rc, _out = _run(add_cmd, work, 30)
+                added = _json_storage_has(work, _ACC_TOKEN)
+                if rc == 0 or added:
+                    ok = True
+                    break
+            if not ok:
                 continue
             _, list_out = _run([*launcher, "list"], work, 30)
             if _ACC_TOKEN in list_out or added:
