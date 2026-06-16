@@ -2625,6 +2625,11 @@ class StepAgent:
             turn_history.append(asst_msg)
 
             if self._is_loop(tuple(round_tool_calls), seen):
+                # Detected repeated identical tool calls — the model is stuck.
+                # Push a hint to break the loop WITHOUT executing the tools,
+                # and skip appending tool results (which would leave an
+                # unmatched assistant(tool_calls) that strict APIs reject).
+                messages.pop()  # remove the asst_msg we just appended
                 messages.append(_FORCE_ANSWER_MSG)
                 final_assistant = full
                 continue
