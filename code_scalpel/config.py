@@ -27,6 +27,7 @@ class ProviderCapabilities:
     requires_tool_response_ordering: bool = False
     api_key_env_var: str = "LLM_API_KEY"
     base_url: str = "http://localhost:1234"
+    default_context_tokens: int = 8192  # conservative: local models
 
     def response_format_type(self) -> str:
         """Best available structured output format: json_schema, json_object, or ''."""
@@ -43,6 +44,7 @@ _PROVIDER_CAPABILITIES: dict[str, ProviderCapabilities] = {
         supports_json_object=True,
         api_key_env_var="OPENAI_API_KEY",
         base_url="https://api.openai.com",
+        default_context_tokens=131072,
     ),
     "deepseek": ProviderCapabilities(
         supports_json_object=True,
@@ -50,15 +52,18 @@ _PROVIDER_CAPABILITIES: dict[str, ProviderCapabilities] = {
         requires_tool_response_ordering=True,
         api_key_env_var="DEEPSEEK_API_KEY",
         base_url="https://api.deepseek.com",
+        default_context_tokens=131072,
     ),
     "openrouter": ProviderCapabilities(
         supports_json_object=True,
         api_key_env_var="OPENROUTER_API_KEY",
         base_url="https://openrouter.ai/api",
+        default_context_tokens=131072,
     ),
     "lmstudio": ProviderCapabilities(
         api_key_env_var="LMSTUDIO_API_KEY",
         base_url="http://localhost:1234",
+        default_context_tokens=8192,
     ),
 }
 
@@ -653,7 +658,7 @@ async def resolve_context_tokens(profile: ModelProfile) -> int:
     detected = await autodetect_context_tokens(profile)
     if detected is not None:
         return detected
-    raise ValueError(
-        f"Cannot determine context_tokens for model '{profile.model}'. "
-        "Set context_tokens in your config profile."
-    )
+    # Auto-detection failed (API doesn't expose context, network issue).
+    # Fall back to the provider's known default.
+    caps = get_provider_capabilities(profile.provider)
+    return caps.default_context_tokens
