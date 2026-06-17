@@ -44,6 +44,20 @@ _NS = "."
 # in AgentConfig.mcp_tool_timeout and is passed in by callers.
 _DEFAULT_TOOL_TIMEOUT = 30.0
 
+# Default connect/handshake timeout if the manager is built without an explicit
+# one. The real default lives in AgentConfig.mcp_connect_timeout. Bounds the
+# subprocess spawn / HTTP open + `initialize` + first `tools/list` so a
+# live-but-silent endpoint can't wedge startup forever.
+_DEFAULT_CONNECT_TIMEOUT = 10.0
+
+# Grace period (seconds) the worker is given to finish closing its own stack
+# after a _Shutdown sentinel before we cancel it. Short on purpose: the clean
+# path only has to unwind an AsyncExitStack, which takes milliseconds. If a
+# connect hangs inside `initialize()` the worker never reaches the shutdown
+# loop, so cancellation is the only way out — keeping this small bounds how long
+# close()/quit waits on a wedged worker before falling back to cancel.
+_SHUTDOWN_GRACE = 2.0
+
 
 @dataclass(frozen=True)
 class ServerConfig:
@@ -140,26 +154,40 @@ def _parse_config(raw: dict[str, Any]) -> list[ServerConfig]:
             )
             continue
         if has_command:
+            raw_args = cfg.get("args", [])
+            if not isinstance(raw_args, list):
+                out.append(
+                    ServerConfig(name=name, transport="", error="'args' must be a list of strings")
+                )
+                continue
+            raw_env = cfg.get("env")
+            if raw_env is not None and not isinstance(raw_env, dict):
+                out.append(ServerConfig(name=name, transport="", error="'env' must be an object"))
+                continue
             out.append(
                 ServerConfig(
                     name=name,
                     transport="stdio",
                     command=str(cfg["command"]),
-                    args=[str(a) for a in cfg.get("args", [])],
-                    env={str(k): str(v) for k, v in cfg.get("env", {}).items()}
-                    if cfg.get("env")
-                    else None,
+                    args=[str(a) for a in raw_args],
+                    env={str(k): str(v) for k, v in raw_env.items()} if raw_env else None,
                 )
             )
             continue
         if has_url:
+            raw_headers = cfg.get("headers")
+            if raw_headers is not None and not isinstance(raw_headers, dict):
+                out.append(
+                    ServerConfig(name=name, transport="", error="'headers' must be an object")
+                )
+                continue
             out.append(
                 ServerConfig(
                     name=name,
                     transport="http",
                     url=str(cfg["url"]),
-                    headers={str(k): str(v) for k, v in cfg.get("headers", {}).items()}
-                    if cfg.get("headers")
+                    headers={str(k): str(v) for k, v in raw_headers.items()}
+                    if raw_headers
                     else None,
                 )
             )
@@ -213,15 +241,26 @@ class _ServerConnection:
     to the worker and awaits its reply; `aclose()` signals shutdown and lets
     the worker close its own stack in-task."""
 
-    def __init__(self, cfg: ServerConfig, *, session_opener: SessionOpener | None = None) -> None:
+    def __init__(
+        self,
+        cfg: ServerConfig,
+        *,
+        session_opener: SessionOpener | None = None,
+        connect_timeout: float = _DEFAULT_CONNECT_TIMEOUT,
+    ) -> None:
         self._cfg = cfg
         # When set, used instead of the real stdio/HTTP transports — the test
         # seam for an in-memory MCP server. The worker/call/teardown path is
         # otherwise identical, so tests exercise the real logic.
         self._session_opener = session_opener
+        self._connect_timeout = connect_timeout
         self._queue: asyncio.Queue[_CallRequest | _Shutdown] = asyncio.Queue()
         self._task: asyncio.Task[None] | None = None
         self._ready: asyncio.Future[None] | None = None
+        # Set once the worker breaks out of its serve loop (clean _Shutdown or
+        # an error after readiness) so call() can fail fast instead of queueing
+        # into a worker that will never service the request.
+        self._shutting_down = False
         self.tools: list[Tool] = []
         self.connected = False
         self.reason: str | None = None
@@ -229,14 +268,21 @@ class _ServerConnection:
     async def connect(self) -> bool:
         """Start the worker and wait until it either completes the MCP
         handshake + tool listing or fails. Returns True on success. Never
-        raises — a failure is captured in `self.reason`."""
+        raises — a failure (including a connect/handshake timeout) is captured
+        in `self.reason`. On timeout the worker may still be wedged inside
+        `initialize()`; `aclose()` is responsible for cancelling it so quit
+        never blocks."""
         loop = asyncio.get_running_loop()
         self._ready = loop.create_future()
         self._task = asyncio.create_task(self._run(), name=f"mcp:{self._cfg.name}")
         try:
-            await self._ready
+            await asyncio.wait_for(self._ready, timeout=self._connect_timeout)
             self.connected = True
             return True
+        except TimeoutError:
+            self.reason = f"connect timed out after {self._connect_timeout:g}s"
+            self.connected = False
+            return False
         except Exception as e:  # noqa: BLE001 — surface any connect failure as a reason
             self.reason = str(e) or e.__class__.__name__
             self.connected = False
@@ -277,6 +323,17 @@ class _ServerConnection:
             session = await self._open_session(stack)
             listed = await session.list_tools()
             self.tools = list(listed.tools)
+        except asyncio.CancelledError:
+            # aclose() cancelled us — typically a worker wedged inside
+            # `initialize()` after a connect timeout. Best-effort unwind the
+            # stack in-task (task affinity) and re-raise so the cancellation
+            # completes; do not resolve `_ready` (the connect awaiter has
+            # already given up via its wait_for).
+            self._shutting_down = True
+            self._drain_queue()
+            with suppress(Exception):
+                await stack.aclose()
+            raise
         except Exception as e:  # noqa: BLE001 — any connect/list failure → reason
             with suppress(Exception):
                 await stack.aclose()
@@ -294,7 +351,28 @@ class _ServerConnection:
                     break
                 await self._serve_call(session, item)
         finally:
+            # Stop accepting new work and fail anything already queued so no
+            # caller's `await fut` in call() hangs after shutdown. A _CallRequest
+            # can land here via a race — /mcp reload (→ aclose) interleaving with
+            # a turn that dispatches an MCP tool — where the request is enqueued
+            # just after the _Shutdown sentinel. Draining resolves every such
+            # future as a failed outcome instead of leaving it pending forever.
+            self._shutting_down = True
+            self._drain_queue()
             await stack.aclose()
+
+    def _drain_queue(self) -> None:
+        """Resolve every pending _CallRequest left in the queue as a failed
+        outcome. Called once at worker shutdown; `_shutting_down` is already set
+        so call() won't enqueue more after this point (a request that slips in
+        between is failed fast by call() itself)."""
+        while True:
+            try:
+                item = self._queue.get_nowait()
+            except asyncio.QueueEmpty:
+                break
+            if isinstance(item, _CallRequest):
+                self._resolve(item.future, McpCallOutcome(ok=False, output="error: server closed"))
 
     async def _serve_call(self, session: ClientSession, req: _CallRequest) -> None:
         """Run one tool call and resolve its future. Maps the two-tier error
@@ -338,24 +416,51 @@ class _ServerConnection:
     async def call(
         self, bare_name: str, arguments: dict[str, Any], timeout: float
     ) -> McpCallOutcome:
-        if not self.connected or self._task is None or self._task.done():
+        if self._shutting_down or not self.connected or self._task is None or self._task.done():
             return McpCallOutcome(ok=False, output="error: server not connected")
         loop = asyncio.get_running_loop()
         fut: asyncio.Future[McpCallOutcome] = loop.create_future()
-        await self._queue.put(
+        self._queue.put_nowait(
             _CallRequest(bare_name=bare_name, arguments=arguments, timeout=timeout, future=fut)
         )
+        # Close the enqueue/drain race: if the worker began shutting down (and
+        # may have already drained the queue) between the guard above and the
+        # put, resolve the future here so this call never hangs. _resolve is a
+        # no-op if the worker happened to drain it first.
+        if self._shutting_down or (self._task is not None and self._task.done()):
+            self._resolve(fut, McpCallOutcome(ok=False, output="error: server closed"))
         return await fut
 
     async def aclose(self) -> None:
         """Signal the worker to shut down and wait for it to close its stack in
-        its own task. Never raises."""
+        its own task, then return. Never raises and never hangs.
+
+        Happy path: enqueue `_Shutdown`; the worker breaks its serve loop,
+        drains queued calls, and aclose()s its stack — all in-task. We await
+        that with a short grace.
+
+        Wedged-worker path: a worker stuck inside `initialize()` (a connect that
+        timed out) never reaches the serve loop, so the `_Shutdown` sentinel is
+        never read. After the grace we `cancel()` it and await the cancellation
+        with `suppress(CancelledError)`. This is what keeps quit / `/mcp reload`
+        from blocking forever on a server that accepted the connection then went
+        silent."""
         if self._task is None:
             return
+        self._shutting_down = True
         if not self._task.done():
-            await self._queue.put(_Shutdown())
-        with suppress(Exception):
-            await self._task
+            self._queue.put_nowait(_Shutdown())
+        try:
+            await asyncio.wait_for(asyncio.shield(self._task), timeout=_SHUTDOWN_GRACE)
+        except TimeoutError:
+            # Worker didn't wind down in time (wedged in initialize / a hung
+            # transport that won't unwind). Cancel and wait it out so we never
+            # leak a pending task into quit.
+            self._task.cancel()
+            with suppress(asyncio.CancelledError, Exception):
+                await self._task
+        except Exception:  # noqa: BLE001 — worker already failed; nothing to surface
+            pass
         self._task = None
         self.connected = False
 
@@ -385,11 +490,13 @@ class McpManager:
         project_root: Path,
         *,
         tool_timeout: float = _DEFAULT_TOOL_TIMEOUT,
+        connect_timeout: float = _DEFAULT_CONNECT_TIMEOUT,
         native_tool_names: set[str] | None = None,
         session_openers: dict[str, SessionOpener] | None = None,
     ) -> None:
         self._project_root = project_root
         self._tool_timeout = tool_timeout
+        self._connect_timeout = connect_timeout
         self._native_tool_names = native_tool_names or set()
         # Per-server-name session-opener override — the test seam for in-memory
         # servers. Production leaves this empty and the real transports are used.
@@ -406,19 +513,25 @@ class McpManager:
 
     @staticmethod
     def _load_config(project_root: Path) -> dict[str, Any]:
-        """Read the first existing config from the project dir then the user
-        config dir. A malformed JSON file is treated as empty (no servers)
-        rather than crashing the session."""
+        """Read the first *usable* config from the project dir then the user
+        config dir. A malformed JSON / unreadable file at one location does not
+        mask a valid config at the next: parse failures fall through to the next
+        location rather than returning empty immediately. Only when no location
+        yields a usable dict do we fall back to no-servers."""
         for loc in (
             project_root / ".code-scalpel" / "mcp.json",
             Path.home() / ".config" / "code-scalpel" / "mcp.json",
         ):
-            if loc.exists():
-                try:
-                    data = json.loads(loc.read_text())
-                except (json.JSONDecodeError, OSError):
-                    return {}
-                return data if isinstance(data, dict) else {}
+            if not loc.exists():
+                continue
+            try:
+                data = json.loads(loc.read_text())
+            except (json.JSONDecodeError, OSError):
+                continue  # a broken file here must not hide a valid one below
+            if isinstance(data, dict):
+                return data
+            # A JSON file that isn't an object (e.g. a list) is unusable at this
+            # location; try the next rather than treating it as authoritative.
         return {}
 
     # ── lifecycle ───────────────────────────────────────────────────────────
@@ -444,7 +557,11 @@ class McpManager:
                 reason=cfg.error or "invalid config",
             )
             return
-        conn = _ServerConnection(cfg, session_opener=self._session_openers.get(cfg.name))
+        conn = _ServerConnection(
+            cfg,
+            session_opener=self._session_openers.get(cfg.name),
+            connect_timeout=self._connect_timeout,
+        )
         ok = await conn.connect()
         if not ok:
             self._status[cfg.name] = ServerStatus(

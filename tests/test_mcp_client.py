@@ -403,3 +403,231 @@ async def test_mcp_streamable_http_handles_three_tuple(monkeypatch: pytest.Monke
     assert captured["url"] == "https://h/mcp"
     assert captured["headers"] == {"A": "1"}
     assert captured["initialized"] is True
+
+
+# ── robustness: connect timeout + wedged-worker teardown ────────────────────
+
+
+async def test_mcp_connect_timeout_marks_failed_and_does_not_hang(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import code_scalpel.mcp_client as mc
+
+    monkeypatch.setattr(mc, "_SHUTDOWN_GRACE", 0.2)
+
+    # An opener that accepts the connection but hangs forever inside the
+    # handshake (a live HTTP url that goes silent / a stdio server that never
+    # answers initialize). connect() must time out, the server must be marked
+    # failed-with-reason, start() must return, and close() must not hang on the
+    # wedged worker.
+    started = asyncio.Event()
+
+    async def hanging_opener(stack: AsyncExitStack) -> ClientSession:
+        started.set()
+        await asyncio.Event().wait()  # never completes — wedged in handshake
+        raise AssertionError("unreachable")
+
+    _write_config(tmp_path, {"mcpServers": {"slowboot": {"command": "x"}}})
+    mgr = McpManager(
+        tmp_path,
+        connect_timeout=0.2,
+        session_openers={"slowboot": hanging_opener},
+    )
+    statuses = await asyncio.wait_for(mgr.start(), timeout=5.0)
+    assert started.is_set()
+    assert len(statuses) == 1
+    assert statuses[0].connected is False
+    assert statuses[0].reason is not None
+    assert "timed out" in statuses[0].reason
+    # close() must return promptly even though the worker is wedged in the
+    # opener — it cancels the task rather than awaiting it forever.
+    await asyncio.wait_for(mgr.close(), timeout=5.0)
+
+
+async def test_mcp_aclose_cancels_wedged_worker(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Directly exercise _ServerConnection.aclose against a worker that never
+    # finishes its handshake: connect() returns False (timeout), the worker task
+    # is still pending, and aclose() must cancel it and clear the task.
+    import code_scalpel.mcp_client as mc
+    from code_scalpel.mcp_client import ServerConfig, _ServerConnection
+
+    monkeypatch.setattr(mc, "_SHUTDOWN_GRACE", 0.2)
+
+    async def hanging_opener(stack: AsyncExitStack) -> ClientSession:
+        await asyncio.Event().wait()
+        raise AssertionError("unreachable")
+
+    cfg = ServerConfig(name="w", transport="stdio", command="c")
+    conn = _ServerConnection(cfg, session_opener=hanging_opener, connect_timeout=0.2)
+    ok = await conn.connect()
+    assert ok is False
+    assert conn.reason is not None and "timed out" in conn.reason
+    task = conn._task
+    assert task is not None and not task.done()
+    await asyncio.wait_for(conn.aclose(), timeout=5.0)
+    assert conn._task is None
+    assert task.cancelled() or task.done()
+
+
+async def test_mcp_close_does_not_hang_inflight_call(tmp_path: Path) -> None:
+    # A call is in flight (the tool sleeps) when close() runs. The in-flight
+    # future must not hang forever: either it resolves via the call's own
+    # timeout or the drain on shutdown. With a tool_timeout shorter than the
+    # tool's sleep, the call resolves failed and close() completes promptly.
+    async def slow() -> str:
+        await asyncio.sleep(5)
+        return "done"
+
+    srv = _make_server({"slow": slow})
+    mgr = await _manager_with_servers(tmp_path, {"s1": srv}, tool_timeout=0.3)
+    await mgr.start()
+    call_task = asyncio.create_task(mgr.call_tool("s1.slow", {}))
+    await asyncio.sleep(0.05)  # let the call get queued / start
+    await asyncio.wait_for(mgr.close(), timeout=5.0)
+    outcome = await asyncio.wait_for(call_task, timeout=5.0)
+    assert outcome.ok is False
+
+
+async def test_mcp_queued_call_resolved_on_shutdown(tmp_path: Path) -> None:
+    # A _CallRequest enqueued just as the worker shuts down (the reload-during-
+    # turn race) must be drained and resolved failed, never left pending. We
+    # drive the connection directly: enqueue several calls, then aclose, and
+    # assert every future resolved with ok=False.
+    from code_scalpel.mcp_client import ServerConfig, _ServerConnection
+
+    srv = _make_server({"echo": _echo_tool})
+    cfg = ServerConfig(name="s", transport="stdio", command="c")
+    conn = _ServerConnection(cfg, session_opener=_opener_for(srv))
+    assert await conn.connect() is True
+
+    # Flood the queue with requests that won't be serviced before shutdown,
+    # then close. Each must come back failed rather than hang.
+    futs = [conn.call("echo", {"text": str(i)}, 5.0) for i in range(5)]
+    await conn.aclose()
+    outcomes = await asyncio.wait_for(asyncio.gather(*futs), timeout=5.0)
+    assert all(o.ok is False for o in outcomes)
+
+
+async def test_mcp_call_after_close_returns_failed(tmp_path: Path) -> None:
+    # Calling after the server is closed (or while shutting down) must return a
+    # failed outcome immediately, never hang on a dead worker.
+    srv = _make_server({"echo": _echo_tool})
+    mgr = await _manager_with_servers(tmp_path, {"s1": srv})
+    await mgr.start()
+    await mgr.close()
+    outcome = await asyncio.wait_for(mgr.call_tool("s1.echo", {"text": "x"}), timeout=5.0)
+    assert outcome.ok is False
+
+
+async def test_mcp_reload_does_not_hang_inflight_call(tmp_path: Path) -> None:
+    # /mcp reload during a turn that is dispatching an MCP tool: reload tears the
+    # old connection down; the in-flight call must resolve (failed) rather than
+    # hang the turn.
+    async def slow() -> str:
+        await asyncio.sleep(5)
+        return "done"
+
+    srv = _make_server({"slow": slow})
+    mgr = await _manager_with_servers(tmp_path, {"s1": srv}, tool_timeout=0.3)
+    await mgr.start()
+    call_task = asyncio.create_task(mgr.call_tool("s1.slow", {}))
+    await asyncio.sleep(0.05)
+    try:
+        await asyncio.wait_for(mgr.reload(), timeout=5.0)
+        outcome = await asyncio.wait_for(call_task, timeout=5.0)
+        assert outcome.ok is False
+    finally:
+        await mgr.close()
+
+
+# ── robustness: _parse_config never raises on bad field types ───────────────
+
+
+def test_mcp_parse_config_bad_env_type_is_per_server_error() -> None:
+    # env declared as a string (not an object) must produce a per-server config
+    # error, not raise out of _parse_config (which would take down all servers
+    # on reload).
+    raw = {"mcpServers": {"s": {"command": "c", "env": "PATH=/x"}}}
+    parsed = {c.name: c for c in _parse_config(raw)}
+    assert parsed["s"].transport == ""
+    assert parsed["s"].error is not None
+    assert "env" in parsed["s"].error
+
+
+def test_mcp_parse_config_bad_args_type_is_per_server_error() -> None:
+    raw = {"mcpServers": {"s": {"command": "c", "args": "--flag"}}}
+    parsed = {c.name: c for c in _parse_config(raw)}
+    assert parsed["s"].transport == ""
+    assert parsed["s"].error is not None
+    assert "args" in parsed["s"].error
+
+
+def test_mcp_parse_config_bad_headers_type_is_per_server_error() -> None:
+    raw = {"mcpServers": {"s": {"url": "https://h/mcp", "headers": "Bearer x"}}}
+    parsed = {c.name: c for c in _parse_config(raw)}
+    assert parsed["s"].transport == ""
+    assert parsed["s"].error is not None
+    assert "headers" in parsed["s"].error
+
+
+def test_mcp_parse_config_bad_field_does_not_break_others() -> None:
+    # One server with a bad env type alongside a valid one: the valid one still
+    # parses, the bad one is a per-server error — no exception.
+    raw = {
+        "mcpServers": {
+            "bad": {"command": "c", "env": ["not", "a", "dict"]},
+            "good": {"command": "ok", "args": ["--x"]},
+        }
+    }
+    parsed = {c.name: c for c in _parse_config(raw)}
+    assert parsed["bad"].transport == ""
+    assert parsed["bad"].error is not None
+    assert parsed["good"].transport == "stdio"
+    assert parsed["good"].args == ["--x"]
+
+
+# ── robustness: _load_config falls through a broken file ─────────────────────
+
+
+def test_mcp_load_config_falls_through_broken_project_file(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # A broken project mcp.json must not mask a valid user (~/.config) config:
+    # _load_config falls through to the next location instead of returning {}.
+    from code_scalpel import mcp_client as mc
+
+    project = tmp_path / "project"
+    (project / ".code-scalpel").mkdir(parents=True)
+    (project / ".code-scalpel" / "mcp.json").write_text("{ this is not json ")
+
+    fake_home = tmp_path / "home"
+    user_cfg_dir = fake_home / ".config" / "code-scalpel"
+    user_cfg_dir.mkdir(parents=True)
+    user_payload = {"mcpServers": {"fromuser": {"command": "u"}}}
+    (user_cfg_dir / "mcp.json").write_text(json.dumps(user_payload))
+
+    monkeypatch.setattr(mc.Path, "home", staticmethod(lambda: fake_home))
+
+    loaded = McpManager._load_config(project)
+    assert loaded == user_payload
+
+
+def test_mcp_load_config_broken_both_returns_empty(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from code_scalpel import mcp_client as mc
+
+    project = tmp_path / "project"
+    (project / ".code-scalpel").mkdir(parents=True)
+    (project / ".code-scalpel" / "mcp.json").write_text("{ broken ")
+
+    fake_home = tmp_path / "home"
+    user_cfg_dir = fake_home / ".config" / "code-scalpel"
+    user_cfg_dir.mkdir(parents=True)
+    (user_cfg_dir / "mcp.json").write_text("also { broken")
+
+    monkeypatch.setattr(mc.Path, "home", staticmethod(lambda: fake_home))
+
+    assert McpManager._load_config(project) == {}

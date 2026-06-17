@@ -151,6 +151,14 @@ class AgentConfig(BaseModel):
     # call so a stuck server returns a failed ToolResult to the model
     # instead of freezing the turn. Threaded into McpManager at construction.
     mcp_tool_timeout: int = 30
+    # Hard cap (seconds) on connecting to an MCP server — spawning the
+    # subprocess / opening the HTTP stream plus the `initialize` handshake and
+    # the first `tools/list`. A live-but-silent endpoint (an HTTP URL that
+    # accepts the connection then never answers `initialize`, a stdio server
+    # that hangs in its handshake) would otherwise block startup forever and
+    # leave a wedged worker task that quit can't join. On timeout the server is
+    # marked failed-with-reason and startup moves on. Threaded into McpManager.
+    mcp_connect_timeout: int = 10
     # Filesystem sandbox for shell_exec. `auto` uses bwrap if installed,
     # falls back to bare subprocess otherwise. `on` requires bwrap (refuses
     # to run shell_exec without it). `off` disables sandboxing entirely.

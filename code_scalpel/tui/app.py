@@ -246,6 +246,7 @@ class ScalpelApp(App[None]):
             manager = McpManager(
                 self.cwd,
                 tool_timeout=self.config.agent.mcp_tool_timeout,
+                connect_timeout=self.config.agent.mcp_connect_timeout,
                 native_tool_names=self._agent.native_tool_names(),
             )
             with self.jobs.track("mcp", "Starting MCP servers"):
