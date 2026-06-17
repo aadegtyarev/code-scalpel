@@ -17,6 +17,7 @@ from code_scalpel.context_compress import (
     should_compress,
     summarize_with_llm,
 )
+from code_scalpel.untrusted import wrap_untrusted
 
 if TYPE_CHECKING:
     from code_scalpel.fork import HumanForker
@@ -2738,18 +2739,29 @@ class StepAgent:
                 self._note_read_file(tc, result)
                 call_view = ToolCall(name=tc.name, body=tc.arguments)
                 yield ToolExecuted(call_view, result)
+                # MCP tool output is external content (threat-model T08/T15):
+                # wrap it in an UNTRUSTED block tagged with its source before
+                # it becomes a tool-role message, so the model treats it as
+                # data, not instructions. Native tools read the user's own
+                # repo and are NOT wrapped. We wrap here, at the message
+                # boundary, rather than in `_execute_native` so the raw
+                # outcome stays observable to callers that don't feed it to
+                # the model.
+                content = result.output
+                if self._mcp is not None and tc.name in self._mcp.tool_names:
+                    content = wrap_untrusted(content, source=f"mcp:{tc.name}")
                 messages.append(
                     {
                         "role": "tool",
                         "tool_call_id": tc.id,
-                        "content": result.output,
+                        "content": content,
                     }
                 )
                 turn_history.append(
                     {
                         "role": "tool",
                         "tool_call_id": tc.id,
-                        "content": result.output,
+                        "content": content,
                         "_tool_name": tc.name,
                         "_tool_args": tc.arguments,
                     }
