@@ -57,11 +57,11 @@ Hard-blocks (refused at skeptic+optimist): `rm -rf` on absolute/home/parent, blo
 
 **Fork resolution:** `HumanForker` · `LocalMetaForker` · `UpstreamForker` (batched stronger model) · `ReviewedAutoForker`. Resolver selected by trust level. Upstream forks use `json_schema` structured output via LM Studio native path.
 
-**System invariants:** single channel through `Runtime` + `Session.prepare_turn` · cwd pinned to project root · file paths resolved under root incl. symlinks · API keys env-only · STATE.json/TASKS.md atomic writes · acceptance enforcement three-signal-gated (early tasks, libraries, no-spec projects are observed, never demoted) · model-derived acceptance args-only (`SC7`).
+**System invariants:** single channel through `Runtime` + `Session.prepare_turn` · cwd pinned to project root · file paths resolved under root incl. symlinks · API keys env-only · STATE.json/TASKS.md atomic writes · acceptance enforcement three-signal-gated (early tasks, libraries, no-spec projects are observed, never demoted) · model-derived acceptance args-only (`SC7`) · MCP servers config-launched only, output untrusted (`SC9`).
 
 ## Security surface
 
-No remote attack surface — this is a local developer tool. The dominant risk is the **model itself** emitting destructive shell or file writes. See `docs/threat-model.md` for the full threat model; enforceable rules live here as `SCn`.
+Local developer tool: the dominant risk is the **model itself** emitting destructive shell or file writes. The only outbound network surface is the LLM endpoint and any user-configured remote MCP endpoint (SC9) — both endpoint-trust choices of the user, consistent with the network-out-of-scope stance. See `docs/threat-model.md` for the full threat model; enforceable rules live here as `SCn`.
 
 - **SC1** — Shell commands pass `policy.decide(cmd, trust)`; hard-block patterns refused at skeptic+optimist.
 - **SC2** — CWD pinned to project root; escape patterns hard-blocked.
@@ -71,6 +71,7 @@ No remote attack surface — this is a local developer tool. The dominant risk i
 - **SC6** — `write_file` rejects empty content; `mkdir` bare-form is a no-op.
 - **SC7** — Model-derived acceptance input is args-only: the adapter builds the argv (`python -m <pkg> <args>`), tokenized via `shlex`.
 - **SC8** — Acceptance self-fix loop bounded: trust-gated (`optimist`/`yolo` only), capped at 3 attempts, stops early on byte-identical run-smoke output.
+- **SC9** — MCP servers are launched only from user-authored config (`.code-scalpel/mcp.json` / system config), never from model-derived text; MCP tool calls are bounded by a per-call timeout (`agent.mcp_tool_timeout`, default 30s); MCP tool output is treated as untrusted content (re-enters model context like fetched web text).
 
 Secrets (`OPENROUTER_API_KEY`, `OPENAI_API_KEY`, `LMSTUDIO_API_KEY`) are env-only. No account, no hosted state, no server-side recovery.
 
@@ -111,6 +112,7 @@ All tunables live in `config.py` (pydantic v2); no magic numbers.
 12. **Args-only model-derived acceptance (`SC7`):** the narrow pass supplies only subcommand args; the adapter builds the argv (`shlex`-tokenized). The model never emits a shell command. *(v0.14)*
 13. **Self-fix loop (feature 3):** at `optimist`/`yolo`, a failing run-smoke on the last applicable task is re-fed to the model for bounded rebuild→re-run (budget 3, byte-identical-output early stop). At `skeptic` it fails immediately. *(v0.14)*
 14. **Flat-layout run-smoke + last-applicable enforcement:** `resolve_pkg` returns `RunTarget(kind, target)` for both src-layout and flat-layout; enforcement position moved to last *applicable* task (not last plan task). Closes the reach gaps that kept gate + self-fix inert on the canonical scenario. *(v0.14)*
+15. **Official `mcp` SDK + two transports:** replaced the hand-rolled JSON-RPC MCP client with the official `mcp` SDK (correct handshake, typed two-tier errors, interleaved notifications). Supported transports are **stdio** (subprocess) and **streamable-HTTP** (remote); SSE is deliberately excluded (deprecated upstream). Scope is tools-only this iteration. The dependency is capped `mcp>=1.0,<2` because the 2.x line broke the client API (`streamablehttp_client` rename, `read_timeout_seconds` retype) — every idiom relied on is the 1.x contract. Servers are launched only from user-authored config; tool output is untrusted (SC9). *(v0.15)*
 
 ## Stack, integration & release
 

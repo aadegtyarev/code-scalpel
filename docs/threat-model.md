@@ -1,6 +1,6 @@
 # Threat Model
 
-**Last reviewed:** 2026-06-16
+**Last reviewed:** 2026-06-17
 
 > Canonical threat model for code-scalpel.
 > Finalized at doc bootstrap from the legacy codebase
@@ -65,6 +65,9 @@ self-inflicted blast radius).
 | Config / env → secrets | `.env`/env → adapter | keys env-only, never in YAML/logs/context (SC5) |
 | Autonomous loop → git | `run_plan` → repository | per-task HEAD validation; net-new files kept, no destructive git in the loop |
 | Autonomous loop → deliverable run (run-smoke) | `run_plan` verification #4 runs the project's own code (`python -m <pkg> <args>`); since v0.14 `<args>` may be model-derived | **no new boundary** — reuses the model-output→shell path: `policy.decide` + trust gate (SC1), `bwrap` sandbox (SC3), cwd pinned (SC2). The verb is code-owned (`run_smoke` builds the argv); model input is **args-only**, tokenized via `shlex`, never a free-form shell string (SC7). The floor command stays code-owned/deterministic (`resolve_pkg`, now returning a `RunTarget(kind, target)` that resolves flat-layout too — **wider reach, same boundary**, v0.14) |
+| Config → MCP server subprocess | user-authored `.code-scalpel/mcp.json` `command`/`args` → spawned process | **launched only from user-authored config, never from model output** (SC9); runs **outside** `bwrap`/`policy.py`/cwd-pin — sandboxing MCP subprocesses is residual (do-NOT-protect) |
+| Model output → external MCP endpoint | LLM MCP tool-call args → user-configured remote server (HTTP) | endpoint trust is the user's choice (consistent with network-out-of-scope); per-call timeout bounds hangs (SC9); only the configured endpoint receives args |
+| External MCP tool output → context | MCP server result → model prompt | treated as untrusted content (SC9) — analogous to fetched web text (T08); no injection sanitisation today |
 
 ## Threats
 
@@ -82,6 +85,9 @@ self-inflicted blast radius).
 | T10 | Wrong auto-resolved fork (yolo/optimist timeout) makes a bad architectural choice | A1 | M | M | critical forks force a human window; overrides recorded for review; overrides never auto-rewrite code. The v0.14 acceptance **self-fix loop** is a new place the model acts without per-step confirm (auto-rebuilding a failing final task at optimist/yolo) — mitigated by **skeptic-no-autofix** (the trust gate, a machine check) plus the bounded budget + identical-output break (SC8); a wrong self-fix is bounded and its commits stay subject to the test + HEAD-advance gates. *Reach update (v0.14, flat-layout run-smoke):* this auto-rebuild surface now reaches more project layouts and the last *applicable* task — wider auto-resolution reach, unchanged in kind; skeptic-no-autofix + SC8 bounds unchanged |
 | T11 | Autonomous acceptance run-smoke executes the project's own code at `trust="yolo"` | A1, A2 | M | M | **no new boundary** — runs through the existing trust-gated + `bwrap`-sandboxed + `policy.py`-blocked `execute()` shell path (SC1/SC2/SC3); the floor run-smoke command is **code-owned and deterministic** (`python -m <pkg> --help`, `resolve_pkg`-resolved). *Resolved (v0.14):* the model-derived acceptance commands feature 4 added are **args-only**, not free-form shell — see T12 |
 | T12 | Model-derived acceptance **args** executed at `trust="yolo"` (v0.14 `feat/acceptance-spec-in-tasks`): the narrow pass derives subcommand args that reach the deliverable run | A1, A2 | M | M | **args-only (SC7)** — the model supplies only subcommand args + an expected substring, never a shell command; the **adapter** builds the argv (`python -m <pkg> <args>`), tokenized via `shlex`, so metacharacters become literal tokens (verified: `add; rm -rf ~`, `$(whoami)`, backticks, `&&`, `\|`, `>` all neutralized). Execution stays on the SC1/SC2/SC3 boundary. **Residual:** the model-derived *args* still reach a yolo shell as a tokenized argv, and `bwrap` degrades to policy-only on restricted-userns hosts (SC3) — blast radius is "the deliverable run with odd args", not "arbitrary command". Mitigated by args-only (SC7), the sandbox where available, cwd-pinning (SC2), and the derived spec being surfaced pre-run for inspection (written back into the plan before first execution) |
+| T13 | MCP server subprocess runs outside the `bwrap` sandbox / `policy.py` gate / cwd pin (v0.15 MCP SDK rewrite) | A1, A2 | L | M | **bounded by config trust, not sandbox** — servers are launched **only from user-authored `mcp.json`**, never from model-derived text (SC9); the user vouches for any server they declare. **Residual:** a declared server's process is unsandboxed; running MCP servers inside `bwrap` is a separate hardening plan (see do-NOT-protect) |
+| T14 | MCP tool-call arguments are sent to a user-configured remote endpoint (HTTP) — exfiltration vector (v0.15) | A1, A5 | L | M | endpoint trust is the **user's choice**, consistent with the existing network-out-of-scope stance; only the configured endpoint receives args; per-call timeout bounds a hung/slow endpoint (SC9). The user points it only at a server they trust (warned in `mcp.example.json`) |
+| T15 | MCP tool output re-enters model context — prompt-injection vector analogous to T08 (v0.15) | A1, A5 | M | M | output is treated as **untrusted content** (SC9); same residual as T08 — no content sanitisation today `[?]` (PM to scope, shared with T08) |
 
 Likelihood and Impact: L / M / H
 
@@ -100,6 +106,15 @@ Likelihood and Impact: L / M / H
 - **Prompt injection in fetched web content** — `(inferred)` currently
   mitigated only by note size caps; full injection hardening is `[?]` for
   the PM to scope.
+- **Sandboxing of MCP server subprocesses** — MCP servers run outside
+  `bwrap`/`policy.py`/the cwd pin (T13). This iteration bounds the risk by
+  **user-authored-config trust + per-call timeout** (SC9), not by
+  containment; running MCP servers inside `bwrap` is a separate hardening
+  plan. A server you declare in `mcp.json` is a server you vouch for.
+- **Trust of a user-configured remote MCP endpoint** — tool args are sent
+  to whatever HTTP endpoint the user configures (T14); endpoint/TLS trust
+  is the user's choice, same stance as the LLM endpoint and the existing
+  network-attacker exclusion.
 
 ---
 
@@ -162,3 +177,22 @@ Reviewed 2026-06-16 at doc bootstrap: no new threats — docs-only change.
 Header updated to remove legacy protocol references (`pm-architect`,
 `pm-codebase-reader`). Threat rows, SC constraints, and review records
 carry forward unchanged.
+
+Reviewed 2026-06-17 for `feature/mcp-sdk-rewrite` (official `mcp` SDK
+rewrite; MCP tools usable by the agent): MCP introduces a **new trust
+boundary** that this model previously held out of scope. Three boundary
+rows added (config→MCP subprocess, model→external MCP endpoint, MCP
+output→context) and three threat rows: **T13** (MCP subprocess runs
+outside `bwrap`/`policy.py`/cwd-pin — bounded because servers launch
+**only** from user-authored `mcp.json`, never from model output), **T14**
+(tool args reach a user-configured remote HTTP endpoint — endpoint trust
+is the user's choice, consistent with network-out-of-scope), and **T15**
+(MCP tool output re-enters model context — a new prompt-injection vector
+analogous to T08, unsanitised today). All three reference the new
+constraint **SC9** in `docs/architecture.md` `## Security surface`
+(servers config-launched only; per-call timeout; output untrusted). Two
+do-NOT-protect entries added: **sandboxing MCP subprocesses** (residual —
+a separate hardening plan) and **trust of a user-configured remote MCP
+endpoint**. T15's content-sanitisation gap is shared with T08's open
+`[?]`. No new asset or adversary (A-INJECT and A-LLM already cover the
+injection and untrusted-tool-call vectors).
