@@ -62,12 +62,17 @@ jobs:
             --collect-data jsonschema_specifications \
             --collect-data code_scalpel \
             code_scalpel/__main__.py
-          # `--version` runs the frozen binary end-to-end; the four mcp/pydantic
-          # --collect-all flags above are the spike-verified recipe that lands
-          # mcp + pydantic_core + jsonschema_specifications data in the bundle
-          # (the known PyInstaller hazard — ModuleNotFoundError pydantic_core
-          # ._pydantic_core / jsonschema spec-not-found at runtime otherwise).
           ./dist/code-scalpel --version
+
+      - name: Frozen-bundle smoke (mcp + TUI imports)
+        run: |
+          # `--version` returns before the TUI / MCP imports load, so it does
+          # NOT prove the bundle is complete. `--selfcheck` imports the
+          # bundle-sensitive chain (mcp → pydantic_core / jsonschema_specifications,
+          # plus the TUI app) inside the frozen binary and exits non-zero if a
+          # `--collect-*` flag above is missing — the real regression guard for
+          # the spike-verified recipe.
+          ./dist/code-scalpel --selfcheck
 
       - name: Install nfpm
         run: |
