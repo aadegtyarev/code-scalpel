@@ -16,6 +16,8 @@ import re
 
 import httpx
 
+from code_scalpel.untrusted import wrap_untrusted
+
 _USER_AGENT = "code-scalpel/agent (+https://github.com/aadegtyarev/code-scalpel)"
 _TIMEOUT = 15.0
 _MAX_RESULTS = 6
@@ -88,7 +90,12 @@ async def web_search(query: str, max_results: int = _MAX_RESULTS) -> str:
     if resp.status_code >= 400:
         raise RuntimeError(f"web_search: HTTP {resp.status_code}")
 
-    return _parse_ddg_lite(resp.text, max_results=max_results)
+    # Search results are external content (threat-model T08/T15) — a
+    # result snippet can carry an injection payload. Wrap the formatted
+    # result so the model treats it as data, not instructions.
+    return wrap_untrusted(
+        _parse_ddg_lite(resp.text, max_results=max_results), source=f"web-search:{query}"
+    )
 
 
 def _parse_ddg_lite(html_text: str, max_results: int = _MAX_RESULTS) -> str:
