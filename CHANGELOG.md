@@ -5,6 +5,28 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.14.0] — 2026-06-17
+
+### Added
+- MCP (Model Context Protocol) support in the TUI. Servers declared in
+  `.code-scalpel/mcp.json` are launched on startup, their tools are attached to
+  the live agent, and a load notice is shown in the chat; subprocesses are torn
+  down cleanly on exit. This surfaces the MCP client (browser automation and
+  more) that previously existed in the backend but was unreachable from the TUI.
+
+### Changed
+- Launching from any directory now anchors the whole process there:
+  `code-scalpel` (and `code-scalpel --path <dir>`) `chdir`s into the target and
+  loads that project's `config.yaml` / `.env`, so config, edits, and shell all
+  resolve against the working tree the user expects.
+- Install documentation reworked around the canonical `.deb` package and
+  standalone binary from GitHub Releases; PyPI is marked as not-yet-published.
+
+### Fixed
+- `mcp.example.json` updated to stdio transport (the SSE / `--port` path was
+  removed earlier and the example was stale).
+- Two pre-existing strict-mypy `no-any-return` errors in `mcp_client.py`.
+
 ## [0.13.0] — 2026-06-16
 
 ### Added
