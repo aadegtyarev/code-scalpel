@@ -79,6 +79,7 @@ _SLASH_COMMANDS: list[tuple[str, str]] = [
     ("/go", "run plan: next task / full plan / manual retry loop — picks mode via card"),
     ("/commit-msg", "draft an imperative commit message from the staged or unstaged diff"),
     ("/escalate", "flush pending forks through the upstream model (when configured)"),
+    ("/mcp", "show MCP server status + tools; /mcp reload reconnects from config"),
     (
         "/learn",
         "generate a recipe markdown (.code-scalpel/recipes/<name>.md); /learn skill <name> for a skill",
@@ -229,33 +230,89 @@ class ScalpelApp(App[None]):
         self.run_worker(self._init_mcp(), exclusive=False)
 
     async def _init_mcp(self) -> None:
-        """Spin up the MCP servers from .code-scalpel/mcp.json and attach
-        their tools to the live agent.
+        """Spin up the MCP servers from .code-scalpel/mcp.json and attach the
+        manager to the live agent.
 
-        No-op when there's no config or no servers — `McpManager` returns
-        an empty tool list and we stay quiet. Each server is started in a
-        subprocess; a flaky server is swallowed inside the manager so one
-        bad entry never blocks the others or the TUI. We only surface the
-        outcome to the user when at least one tool actually loaded.
+        No-op when there's no config or no servers — `status()` is empty and we
+        stay quiet. Each server connects in its own task; a flaky server is
+        captured inside the manager (failed-with-reason) so one bad entry never
+        blocks the others or the TUI. The startup notice reports both the
+        loaded tool count and any server that failed, with its reason.
         """
         if self._agent is None:
             return
         output = self.query_one(OutputLog)
         try:
-            manager = McpManager(self.cwd)
+            manager = McpManager(
+                self.cwd,
+                tool_timeout=self.config.agent.mcp_tool_timeout,
+                native_tool_names=self._agent.native_tool_names(),
+            )
             with self.jobs.track("mcp", "Starting MCP servers"):
-                tools = await manager.start()
+                statuses = await manager.start()
         except Exception as e:  # never let MCP take down startup
             output.print_error(f"MCP startup failed: {e}")
             return
-        if not tools:
+        if not statuses:
             return
         self._mcp_manager = manager
         # Agent reads `self._mcp` at tool-dispatch time, so attaching after
         # construction is enough — no Runtime rebuild needed.
         self._agent._mcp = manager
-        names = ", ".join(sorted({t.name for t in tools}))
-        output.print_status(f"● MCP: {len(tools)} tool(s) loaded — {names}")
+        output.print_status(self._mcp_startup_notice(manager, statuses))
+
+    @staticmethod
+    def _mcp_startup_notice(manager: McpManager, statuses: list[Any]) -> str:
+        """One-line-per-section startup summary: total tools loaded, plus a
+        line per failed server with its reason so a bad config is visible
+        without running /mcp."""
+        connected = [s for s in statuses if s.connected]
+        failed = [s for s in statuses if not s.connected]
+        total = len(manager.tool_names)
+        head = f"● MCP: {total} tool(s) loaded from {len(connected)} server(s)"
+        lines = [head]
+        for s in failed:
+            lines.append(f"  ✗ {s.name}: {s.reason or 'failed'}")
+        return "\n".join(lines)
+
+    def _do_mcp_status(self) -> None:
+        """Render per-server MCP status + the tools each exposes for `/mcp`."""
+        output = self.query_one(OutputLog)
+        if self._mcp_manager is None:
+            output.print_status("MCP: no servers configured.")
+            return
+        statuses = self._mcp_manager.status()
+        if not statuses:
+            output.print_status("MCP: no servers configured.")
+            return
+        lines: list[str] = ["MCP servers:"]
+        for s in statuses:
+            if s.connected:
+                lines.append(f"  ● {s.name} ({s.transport}) — {s.tool_count} tool(s)")
+                for name in s.tools:
+                    lines.append(f"      {name}")
+            else:
+                lines.append(f"  ✗ {s.name} ({s.transport or 'invalid'}) — {s.reason or 'failed'}")
+        output.print_status("\n".join(lines))
+
+    async def _do_mcp_reload(self) -> None:
+        """Tear down and reconnect the MCP manager from the current config
+        without restarting the TUI, then re-report status."""
+        output = self.query_one(OutputLog)
+        if self._mcp_manager is None:
+            # No manager yet (no config at startup, or it produced no servers):
+            # try a fresh init so a newly-added config takes effect.
+            await self._init_mcp()
+            if self._mcp_manager is None:
+                output.print_status("MCP: no servers configured.")
+            return
+        with self.jobs.track("mcp", "Reloading MCP servers"):
+            await self._mcp_manager.reload()
+        # Re-attach is a no-op (same manager object) but keep the agent pointer
+        # current in case it was cleared.
+        if self._agent is not None:
+            self._agent._mcp = self._mcp_manager
+        self._do_mcp_status()
 
     async def on_unmount(self) -> None:
         """Capture a session summary for stdout on exit — printed by main().
@@ -1283,6 +1340,17 @@ class ScalpelApp(App[None]):
             return
         if cmd == "/escalate":
             self._do_escalate()
+            return
+        if cmd == "/mcp" or cmd.startswith("/mcp "):
+            arg = cmd.removeprefix("/mcp").strip()
+            if arg == "reload":
+                # Teardown + reconnect runs off-loop so a slow server connect
+                # doesn't freeze the input while reconnecting.
+                self.run_worker(self._do_mcp_reload(), exclusive=False, group="mcp")
+            elif arg:
+                output.print_status("Usage: /mcp  |  /mcp reload")
+            else:
+                self._do_mcp_status()
             return
         output.print_status(f"Unknown command: {cmd}")
 
