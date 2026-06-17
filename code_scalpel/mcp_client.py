@@ -44,6 +44,15 @@ _NS = "."
 # in AgentConfig.mcp_tool_timeout and is passed in by callers.
 _DEFAULT_TOOL_TIMEOUT = 30.0
 
+# The per-call timeout is enforced by our own wall-clock `asyncio.wait_for`
+# (authoritative — it yields a single, consistent "tool call timed out"
+# message). The SDK's own `read_timeout_seconds` is kept only as a slower
+# backstop: set deliberately ABOVE the wall-clock by this margin so the
+# wall-clock always fires first. Equal timers race — and the SDK timer won
+# nondeterministically on some interpreters, surfacing its own McpError text
+# instead of ours (CI 3.11 vs 3.12 diverged on exactly this).
+_SDK_TIMEOUT_BACKSTOP_MARGIN = 5.0
+
 # Default connect/handshake timeout if the manager is built without an explicit
 # one. The real default lives in AgentConfig.mcp_connect_timeout. Bounds the
 # subprocess spawn / HTTP open + `initialize` + first `tools/list` so a
@@ -388,7 +397,12 @@ class _ServerConnection:
                 session.call_tool(
                     req.bare_name,
                     req.arguments,
-                    read_timeout_seconds=timedelta(seconds=req.timeout),
+                    # Backstop only — kept above the wall-clock below so our
+                    # `asyncio.wait_for` deterministically fires first and the
+                    # timeout message stays consistent (see the margin const).
+                    read_timeout_seconds=timedelta(
+                        seconds=req.timeout + _SDK_TIMEOUT_BACKSTOP_MARGIN
+                    ),
                 ),
                 timeout=req.timeout,
             )
