@@ -1,11 +1,10 @@
 {
-  "_doc": "MCP servers for code-scalpel. Copy to mcp.json to enable.",
+  "_doc": "MCP servers for code-scalpel. Copy to .code-scalpel/mcp.json to enable. Transport is stdio only — each server is launched as a subprocess and spoken to over stdin/stdout via JSON-RPC.",
   "servers": {
     "playwright": {
       "command": "npx",
-      "args": ["-y", "@playwright/mcp", "--port", "0"],
-      "transport": "sse",
-      "_note": "Port 0 = random. Transport SSE required for @playwright/mcp."
+      "args": ["-y", "@playwright/mcp@latest"],
+      "_note": "Stdio transport (the @playwright/mcp default). Do NOT pass --port; that switches the server to SSE, which code-scalpel no longer supports."
     }
   }
 }

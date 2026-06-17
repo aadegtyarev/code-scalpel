@@ -13,6 +13,7 @@ from pydantic import BaseModel, Field, field_validator, model_validator
 SYSTEM_CONFIG = Path.home() / ".config" / "code-scalpel" / "config.yaml"
 PROJECT_CONFIG = Path(".code-scalpel") / "config.yaml"
 
+
 @dataclass(frozen=True)
 class ProviderCapabilities:
     """What a provider supports — single home for per-provider behaviour.
@@ -553,10 +554,34 @@ def _deep_merge(base: dict[str, Any], override: dict[str, Any]) -> dict[str, Any
     return result
 
 
-def load_config() -> AppConfig:
-    load_dotenv()
+def load_config(cwd: Path | None = None) -> AppConfig:
+    """Load system + project config, deep-merged (project wins).
+
+    `cwd` anchors the project-level lookup. When omitted we fall back to
+    the process working directory — but every real entry point should
+    pass the resolved working directory explicitly so that launching from
+    (or `--path`-ing into) another folder reads *that* folder's
+    `.code-scalpel/config.yaml` and `.env`, not whatever directory the
+    binary happened to be invoked from.
+    """
+    if cwd is not None:
+        base = cwd.resolve()
+        # Load .env from the target project dir first, then let dotenv
+        # walk up from the process cwd as a fallback. Project-local
+        # secrets win.
+        project_env = base / ".env"
+        if project_env.exists():
+            load_dotenv(project_env)
+        else:
+            load_dotenv()
+        project_config = base / ".code-scalpel" / "config.yaml"
+    else:
+        # Legacy / headless path: resolve relative to the process cwd via
+        # the module-level constant (kept patchable for tests).
+        load_dotenv()
+        project_config = PROJECT_CONFIG
     data: dict[str, Any] = {}
-    for path in [SYSTEM_CONFIG, PROJECT_CONFIG]:
+    for path in [SYSTEM_CONFIG, project_config]:
         if path.exists():
             with open(path) as f:
                 chunk: dict[str, Any] = yaml.safe_load(f) or {}

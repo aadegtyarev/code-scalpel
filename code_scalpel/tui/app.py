@@ -29,6 +29,7 @@ from code_scalpel.config import (
 )
 from code_scalpel.diagrams import extract_mermaid_blocks
 from code_scalpel.jobs import JobRegistry
+from code_scalpel.mcp_client import McpManager
 from code_scalpel.memory import MemoryStore
 from code_scalpel.patch.edit_block import Edit, apply_edits, edits_to_diff, extract_edits
 from code_scalpel.runtime import Runtime
@@ -163,6 +164,11 @@ class ScalpelApp(App[None]):
         # Project-scoped persistent memory. Materialised by the Runtime;
         # legacy code reads through this bridge field.
         self._memory: MemoryStore | None = None
+        # MCP servers declared in .code-scalpel/mcp.json. Started in a
+        # worker after the agent is built (subprocess spawn is async and
+        # must not block the first paint), then attached to the agent so
+        # their tools join the schema list. Closed on unmount.
+        self._mcp_manager: McpManager | None = None
         # In-session registry of background jobs (map build, LLM step,
         # /compact, pytest retry, …). The JobsBar widget subscribes; any
         # worker that wants to be visible wraps itself in
@@ -220,6 +226,36 @@ class ScalpelApp(App[None]):
         self._show_startup_context()
         self._show_resume_notice()
         self.run_worker(self._detect_context(), exclusive=False)
+        self.run_worker(self._init_mcp(), exclusive=False)
+
+    async def _init_mcp(self) -> None:
+        """Spin up the MCP servers from .code-scalpel/mcp.json and attach
+        their tools to the live agent.
+
+        No-op when there's no config or no servers — `McpManager` returns
+        an empty tool list and we stay quiet. Each server is started in a
+        subprocess; a flaky server is swallowed inside the manager so one
+        bad entry never blocks the others or the TUI. We only surface the
+        outcome to the user when at least one tool actually loaded.
+        """
+        if self._agent is None:
+            return
+        output = self.query_one(OutputLog)
+        try:
+            manager = McpManager(self.cwd)
+            with self.jobs.track("mcp", "Starting MCP servers"):
+                tools = await manager.start()
+        except Exception as e:  # never let MCP take down startup
+            output.print_error(f"MCP startup failed: {e}")
+            return
+        if not tools:
+            return
+        self._mcp_manager = manager
+        # Agent reads `self._mcp` at tool-dispatch time, so attaching after
+        # construction is enough — no Runtime rebuild needed.
+        self._agent._mcp = manager
+        names = ", ".join(sorted({t.name for t in tools}))
+        output.print_status(f"● MCP: {len(tools)} tool(s) loaded — {names}")
 
     async def on_unmount(self) -> None:
         """Capture a session summary for stdout on exit — printed by main().
@@ -229,6 +265,13 @@ class ScalpelApp(App[None]):
         what a session cost. We still pass through if anything throws —
         a broken summary must never block exit."""
         from contextlib import suppress
+
+        # Tear down MCP subprocesses first so we don't leave orphaned
+        # server processes after the TUI exits.
+        if self._mcp_manager is not None:
+            with suppress(Exception):
+                await self._mcp_manager.close()
+            self._mcp_manager = None
 
         try:
             mode = self._AGENT_MODES[self._mode_index]

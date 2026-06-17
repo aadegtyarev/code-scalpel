@@ -31,13 +31,35 @@ Use `/learn <url>` to fetch docs or paste text — the agent writes a recipe fil
 
 ## Install
 
-Requires Python 3.11+ and an OpenAI-compatible LLM server.
+Each tagged release ships a self-contained Linux build on the
+[Releases page](https://github.com/aadegtyarev/code-scalpel/releases) — a
+`.deb` package and a standalone binary. Both bundle their own Python, so
+**no Python install is required** to run them. You still need an
+OpenAI-compatible LLM server (see below).
+
+### Debian / Ubuntu (`.deb`) — recommended
 
 ```bash
-pip install code-scalpel
+# Replace X.Y.Z with the latest release version.
+curl -LO https://github.com/aadegtyarev/code-scalpel/releases/download/vX.Y.Z/code-scalpel_X.Y.Z_amd64.deb
+sudo apt install ./code-scalpel_X.Y.Z_amd64.deb
+code-scalpel --version
 ```
 
-Or from source:
+Installs `code-scalpel` to `/usr/bin`. Uninstall with `sudo apt remove code-scalpel`.
+
+### Standalone binary (any x86-64 Linux)
+
+```bash
+curl -L -o code-scalpel https://github.com/aadegtyarev/code-scalpel/releases/download/vX.Y.Z/code-scalpel
+chmod +x code-scalpel
+sudo mv code-scalpel /usr/local/bin/
+code-scalpel --version
+```
+
+### From source (development / other platforms)
+
+Requires Python 3.11+.
 
 ```bash
 git clone https://github.com/aadegtyarev/code-scalpel
@@ -45,6 +67,14 @@ cd code-scalpel
 python -m venv .venv && source .venv/bin/activate
 pip install -e .
 ```
+
+> PyPI (`pip install code-scalpel`) is planned but not yet published — use
+> one of the methods above for now.
+
+Run `code-scalpel` from any project directory and that directory becomes the
+working tree the agent operates on — config, `.env`, edits, and the shell all
+resolve there. Use `code-scalpel --path /some/project` to target another
+directory without `cd`-ing into it first.
 
 ### LLM backend
 
