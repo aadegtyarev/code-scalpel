@@ -122,6 +122,6 @@ All tunables live in `config.py` (pydantic v2); no magic numbers.
 
 **Tech stack:** Python 3.11+/asyncio, Textual TUI, typer CLI, pydantic v2 + pyyaml config, openai SDK (OpenAI-compatible transport), lmstudio SDK (native model management), tree-sitter Python index (+ ast fallback), sqlite3+FTS5 memory, bwrap sandbox, hatchling build. Dependencies tracked in `pyproject.toml`; component idioms in `docs/stack-notes.md`.
 
-**Integration:** `pip install code-scalpel` or Linux binary/`.deb`. Entry points: `code-scalpel` (TUI), `code-scalpel init`, `python -m code_scalpel`. Config: `~/.config/code-scalpel/config.yaml` → `.code-scalpel/config.yaml` → env/`.env`. On-disk state: `.code-scalpel/` (STATE.json, TASKS.json/md, INDEX.json, memory.db, recipes/, chat.jsonl).
+**Integration:** Linux standalone binary / `.deb` from GitHub Releases (`pip install code-scalpel` is planned, not yet published). Entry points: `code-scalpel` (TUI), `code-scalpel init`, `python -m code_scalpel`. Config: `~/.config/code-scalpel/config.yaml` → `.code-scalpel/config.yaml` → env/`.env`. On-disk state: `.code-scalpel/` (STATE.json, TASKS.json/md, INDEX.json, memory.db, recipes/, chat.jsonl).
 
 **Release:** versions in `pyproject.toml` only, resolved via `importlib.metadata`. Branches: `feat/` `fix/` `chore/` `docs/`; `main` protected, PR-only. CI: ruff + mypy + pytest (3.11, 3.12). Release CI: PyInstaller binary + `.deb` on `v*` tag. The `notes_cli` N≥3 outcome probe is run manually before ship — not an automated CI gate.

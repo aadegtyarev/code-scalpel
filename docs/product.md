@@ -80,10 +80,12 @@ all driven through one local LLM:
 
 ## How people find it
 
-code-scalpel is distributed in the open: the **GitHub repository** and
-**PyPI** (`pip install code-scalpel`) are how people get it. The main way
-they hear about it is the **technical article** being written alongside the
-tool, which walks through how the system was designed — that write-up is the
+code-scalpel is distributed in the open. The main way to get it is the
+**GitHub Releases** page — a Linux `.deb` package and a standalone binary —
+with the source itself in the **GitHub repository**. **PyPI** (`pip install
+code-scalpel`) is planned but not yet published. The main way people hear
+about it is the **technical article** being written alongside the tool,
+which walks through how the system was designed — that write-up is the
 primary discovery channel that brings people to the repo.
 
 ## Out of scope (for now)
