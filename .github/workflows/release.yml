@@ -56,8 +56,17 @@ jobs:
             --collect-all textual \
             --collect-all textual_autocomplete \
             --collect-all tree_sitter_python \
+            --collect-all mcp \
+            --collect-all pydantic \
+            --collect-all pydantic_core \
+            --collect-data jsonschema_specifications \
             --collect-data code_scalpel \
             code_scalpel/__main__.py
+          # `--version` runs the frozen binary end-to-end; the four mcp/pydantic
+          # --collect-all flags above are the spike-verified recipe that lands
+          # mcp + pydantic_core + jsonschema_specifications data in the bundle
+          # (the known PyInstaller hazard — ModuleNotFoundError pydantic_core
+          # ._pydantic_core / jsonschema spec-not-found at runtime otherwise).
           ./dist/code-scalpel --version
 
       - name: Install nfpm

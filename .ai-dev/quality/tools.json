@@ -34,6 +34,14 @@
       "init": "pip install pytest pytest-asyncio pytest-cov; config in pyproject.toml [tool.pytest.ini_options]"
     },
     {
+      "id": "mcp-import-smoke",
+      "checks": "MCP client API surface imports in the dev/runtime env (catches a broken or 2.x mcp resolve before runtime — 2.x renamed streamablehttp_client and retyped read_timeout_seconds)",
+      "config": "pyproject.toml",
+      "run": "python -c \"import mcp; from mcp import ClientSession, StdioServerParameters; from mcp.client.stdio import stdio_client; from mcp.client.streamable_http import streamablehttp_client\"",
+      "beat": "build",
+      "init": "pip install -e . (mcp is a runtime dep, capped >=1.0,<2 in pyproject.toml)"
+    },
+    {
       "id": "bandit",
       "checks": "Python security SAST — Medium+ severity (config: bandit.yaml)",
       "config": ".ai-dev/quality/bandit.yaml",
