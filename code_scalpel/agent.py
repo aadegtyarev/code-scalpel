@@ -1765,15 +1765,20 @@ class StepAgent:
             return self._tool_unload_skill(call)
         if tc.name == "web_learn":
             return await self._tool_web_learn(call)
-        # MCP tools — dispatched to external server, not scalpel's own tools.
-        if self._mcp is not None:
+        # MCP tools — dispatched to the owning external server before native
+        # execute. Membership in `tool_names` (namespaced) is the only routing
+        # signal: a name that isn't an MCP tool falls straight through to
+        # native dispatch with no MCP round-trip and no result-string sniffing.
+        # Native tools always win on a name collision — colliding MCP tools are
+        # already excluded from `tool_names` by the manager, so a native name
+        # never reaches this branch.
+        if self._mcp is not None and tc.name in self._mcp.tool_names:
             try:
                 args = json.loads(tc.arguments) if tc.arguments else {}
             except json.JSONDecodeError:
                 args = {}
-            mcp_result = await self._mcp.call_tool(tc.name, args)
-            if mcp_result and not mcp_result.startswith("error:"):
-                return ToolResult(call=call, output=mcp_result, ok=True)
+            outcome = await self._mcp.call_tool(tc.name, args)
+            return ToolResult(call=call, output=outcome.output, ok=outcome.ok)
         result = await execute(
             call,
             self._cwd,
@@ -1837,6 +1842,21 @@ class StepAgent:
             output=f"Recipe saved: {path.name}\nSource: {url}\nTitle: {title}",
             ok=True,
         )
+
+    @staticmethod
+    def native_tool_names() -> set[str]:
+        """Every built-in tool name the agent dispatches natively. Used by the
+        MCP manager to drop colliding MCP tools — native always wins, so a name
+        here is never exposed as an MCP tool. Covers the schema-listed tools
+        plus the state-aware ones handled ahead of the stateless dispatcher
+        (load_skill / unload_skill / web_learn)."""
+        names: set[str] = set()
+        for schema in (*TOOL_SCHEMAS, SHELL_EXEC_SCHEMA, LOAD_SKILL_SCHEMA, UNLOAD_SKILL_SCHEMA):
+            name = schema.get("function", {}).get("name")
+            if name:
+                names.add(name)
+        names.update({"load_skill", "unload_skill", "web_learn"})
+        return names
 
     def _tool_schemas(self) -> list[dict[str, Any]]:
         """Build the tool list per request. `shell_exec` now ships at
