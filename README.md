@@ -134,6 +134,7 @@ Switch with `Ctrl+T` or `/mode <name>`.
 | `/stats` | Session summary: tokens, cost, timing. |
 | `/new` | Clear session and start fresh. |
 | `/mode <name>` | Switch mode. |
+| `/mcp` | Show MCP server status + tools; `/mcp reload` reconnects from config. |
 
 ---
 
@@ -223,6 +224,21 @@ OPENROUTER_API_KEY=sk-or-...
 ```
 
 ---
+
+## MCP servers
+
+The agent can call tools from external [MCP](https://modelcontextprotocol.io)
+servers. Copy `mcp.example.json` to `.code-scalpel/mcp.json` and declare your
+servers under the standard `mcpServers` key (the same block format other MCP
+clients use — paste one in and it works). A `command` entry runs a local
+subprocess; a `url` entry connects to a remote endpoint over HTTP.
+
+Servers connect on startup and a notice reports what loaded. Run `/mcp` to see
+per-server status and tools, and `/mcp reload` to reconnect after editing the
+config.
+
+> MCP servers run outside the shell sandbox and are launched only from this
+> config — declare only servers you trust.
 
 ## Contributing
 

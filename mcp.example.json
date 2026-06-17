@@ -1,10 +1,18 @@
 {
-  "_doc": "MCP servers for code-scalpel. Copy to .code-scalpel/mcp.json to enable. Transport is stdio only — each server is launched as a subprocess and spoken to over stdin/stdout via JSON-RPC.",
-  "servers": {
+  "_doc": "MCP servers for code-scalpel. Copy to .code-scalpel/mcp.json to enable. The top-level key is `mcpServers` (Claude-Desktop-compatible — paste a server block from any client config and it works). The legacy `servers` key is still read for back-compat; if both are present, `mcpServers` wins. Transport is chosen by fields: `command` → stdio (subprocess), `url` → Streamable HTTP (remote). SSE is not supported.",
+  "mcpServers": {
     "playwright": {
       "command": "npx",
       "args": ["-y", "@playwright/mcp@latest"],
-      "_note": "Stdio transport (the @playwright/mcp default). Do NOT pass --port; that switches the server to SSE, which code-scalpel no longer supports."
+      "env": {},
+      "_note": "stdio transport (the @playwright/mcp default). Do NOT pass --port; that switches the server to SSE, which code-scalpel does not support."
+    },
+    "remote-example": {
+      "url": "https://mcp.example.com/mcp",
+      "headers": {
+        "Authorization": "Bearer ${YOUR_TOKEN}"
+      },
+      "_note": "Streamable HTTP transport. `headers` is optional (static auth only — no interactive OAuth this iteration). Tool args are sent to this external endpoint, so only point it at a server you trust."
     }
   }
 }
