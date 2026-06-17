@@ -645,9 +645,16 @@ async def test_derivation_uses_json_schema_structured_output(tmp_path: Path) -> 
     # Use openai provider for json_schema assertion — lmstudio skips it.
     cfg = AppConfig(
         profiles={"local": ModelProfile(provider="openai", model="gpt-4o", temperature=0.1)},
-        agent=AgentConfig(max_files=2, max_file_lines=50, auto_git=False, sandbox="off",
-                          auto_annotate_plan=False, auto_derive_acceptance=True,
-                          shell_exec_timeout=_SHELL_TIMEOUT, trust="yolo"),
+        agent=AgentConfig(
+            max_files=2,
+            max_file_lines=50,
+            auto_git=False,
+            sandbox="off",
+            auto_annotate_plan=False,
+            auto_derive_acceptance=True,
+            shell_exec_timeout=_SHELL_TIMEOUT,
+            trust="yolo",
+        ),
     )
     agent = StepAgent(llm=llm, cwd=project, config=cfg, shell_runner=MockShellRunner([]))
     task = Task(id="T001", title="t", body="", done=False, goal="g")

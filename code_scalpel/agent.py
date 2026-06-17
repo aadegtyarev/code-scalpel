@@ -72,7 +72,9 @@ def _sanitize_tool_sequence(messages: list[dict[str, Any]]) -> list[dict[str, An
         elif role == "assistant" and msg.get("tool_calls"):
             tcs = msg["tool_calls"]
             if isinstance(tcs, list):
-                ids = {tc["id"] for tc in tcs if isinstance(tc, dict) and isinstance(tc.get("id"), str)}
+                ids = {
+                    tc["id"] for tc in tcs if isinstance(tc, dict) and isinstance(tc.get("id"), str)
+                }
                 if ids and ids.issubset(pending):
                     # All tool_calls answered — consume them, they're no longer orphans.
                     for tid in ids:
@@ -96,12 +98,14 @@ def _sanitize_tool_sequence(messages: list[dict[str, Any]]) -> list[dict[str, An
         return messages[:cut_at]
     return messages
 
+
 def _plan_response_format(provider: str) -> str:
     """Return the best response_format type for the given provider.
     Delegates to ProviderCapabilities — the single home (config.py)."""
     from code_scalpel.config import get_provider_capabilities
 
     return get_provider_capabilities(provider).response_format_type()
+
 
 # Prompt aliases — kept as module attributes for the moment so existing
 # code (and tests that import these names) keeps working. The source of
@@ -2866,9 +2870,7 @@ class StepAgent:
         # underscore-prefixed keys before handing the list to the LLM —
         # OpenAI-compat backends reject unknown fields on `tool` role.
         for entry in self._history:
-            msgs.append(
-                {k: v for k, v in entry.items() if not k.startswith("_") and v is not None}
-            )
+            msgs.append({k: v for k, v in entry.items() if not k.startswith("_") and v is not None})
         # Safety net: strip trailing assistant(tool_calls) messages that lack
         # matching tool responses. A broken turn (crash / timeout / early exit)
         # can leave an unmatched tool_calls in history; strict providers

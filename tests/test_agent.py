@@ -3156,7 +3156,13 @@ class TestSanitizeToolSequence:
 
         msgs = [
             {"role": "user", "content": "hi"},
-            {"role": "assistant", "content": "", "tool_calls": [{"id": "1", "type": "function", "function": {"name": "f", "arguments": "{}"}}]},
+            {
+                "role": "assistant",
+                "content": "",
+                "tool_calls": [
+                    {"id": "1", "type": "function", "function": {"name": "f", "arguments": "{}"}}
+                ],
+            },
             {"role": "tool", "tool_call_id": "1", "content": "result"},
             {"role": "assistant", "content": "done"},
         ]
@@ -3168,7 +3174,13 @@ class TestSanitizeToolSequence:
 
         msgs = [
             {"role": "user", "content": "hi"},
-            {"role": "assistant", "content": "", "tool_calls": [{"id": "1", "type": "function", "function": {"name": "f", "arguments": "{}"}}]},
+            {
+                "role": "assistant",
+                "content": "",
+                "tool_calls": [
+                    {"id": "1", "type": "function", "function": {"name": "f", "arguments": "{}"}}
+                ],
+            },
             # No tool response for id=1 → orphaned
             {"role": "user", "content": "next turn"},
         ]
@@ -3197,11 +3209,23 @@ class TestSanitizeToolSequence:
 
         msgs = [
             {"role": "user", "content": "t1"},
-            {"role": "assistant", "content": "", "tool_calls": [{"id": "a", "type": "function", "function": {"name": "f", "arguments": "{}"}}]},
+            {
+                "role": "assistant",
+                "content": "",
+                "tool_calls": [
+                    {"id": "a", "type": "function", "function": {"name": "f", "arguments": "{}"}}
+                ],
+            },
             {"role": "tool", "tool_call_id": "a", "content": "r1"},
             {"role": "assistant", "content": "done1"},
             {"role": "user", "content": "t2"},
-            {"role": "assistant", "content": "", "tool_calls": [{"id": "b", "type": "function", "function": {"name": "g", "arguments": "{}"}}]},
+            {
+                "role": "assistant",
+                "content": "",
+                "tool_calls": [
+                    {"id": "b", "type": "function", "function": {"name": "g", "arguments": "{}"}}
+                ],
+            },
             {"role": "tool", "tool_call_id": "b", "content": "r2"},
             {"role": "assistant", "content": "done2"},
         ]

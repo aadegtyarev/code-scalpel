@@ -365,9 +365,7 @@ class PlanRunner:
         # reply + any tool errors are the failure signal.
         failure_context = sr.reply or ""
         if sr.edits:
-            failure_context += "\n\nFiles modified: " + ", ".join(
-                e.path for e in sr.edits
-            )
+            failure_context += "\n\nFiles modified: " + ", ".join(e.path for e in sr.edits)
         retry_prompt = (
             f"{prompt}\n\n"
             f"The previous attempt failed. Here is the output:\n"
@@ -383,7 +381,11 @@ class PlanRunner:
             assert step_result is not None
             new_outcome = _classify_outcome(task, step_result)
             new_outcome = await verify_task(
-                agent, task, new_outcome, head_before, on_tool_executed,
+                agent,
+                task,
+                new_outcome,
+                head_before,
+                on_tool_executed,
                 should_run_now=False,
             )
             if new_outcome.status == "done":
@@ -391,7 +393,11 @@ class PlanRunner:
             # Anti-loop: if the model produces byte-identical output two
             # attempts in a row, stop — it's stuck (mirrors acceptance self-fix).
             new_reply = (step_result.reply or "")[:3000]
-            prev_reply = retry_prompt.split("Latest output:\n")[-1].split("\n\nFix")[0] if "Latest output" in retry_prompt else ""
+            prev_reply = (
+                retry_prompt.split("Latest output:\n")[-1].split("\n\nFix")[0]
+                if "Latest output" in retry_prompt
+                else ""
+            )
             if new_reply == prev_reply:
                 return new_outcome
             retry_prompt = (
