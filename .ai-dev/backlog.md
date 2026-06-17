@@ -1,24 +1,15 @@
 # Backlog
 
-## MCP frozen-import smoke in CI
-**Priority:** medium
-The release binary bundles `mcp` (spike-verified recipe in `release.yml`), but
-the CI smoke `./dist/code-scalpel --version` returns before the TUI / MCP import
-chain loads, so it does **not** actually prove `mcp` got bundled. A broken
-`--collect-*` set would ship undetected.
-- Add a hidden `code-scalpel --selfcheck` (or `--version` path) that imports
-  `code_scalpel.mcp_client` so the frozen binary exercises the mcp +
-  pydantic_core + jsonschema_specifications bundle.
-- Wire it into `release.yml` after the binary build.
-
-## Prompt-injection sanitization for untrusted tool output
-**Priority:** medium (product decision — threat-model `[?]`)
-MCP tool output (T15) and fetched web/`/learn` content (T08) re-enter the model
-context unsanitized. Threat model records this as an open `[?]` for scoping.
-- Decide the policy: strip/escape "ignore previous instructions"-style
-  payloads, wrap untrusted output in a delimiter the model is told not to obey,
-  size-cap, or accept-as-is with a documented residual.
-- Applies uniformly to MCP results, web fetch, and recipe ingestion.
+## Source-aware recipe-injection wrapping (`/learn --url` vector)
+**Priority:** medium (follow-up to v0.16 untrusted-content framing)
+v0.16 frames the two direct-to-model external vectors (MCP tool output,
+web-search results) as untrusted (SC10). The remaining open residual is the
+`/learn --url` → recipe path (threat T08): fetched page content is written
+verbatim into a recipe file and reaches the model later via recipe injection.
+- Wrap recipe **bodies** at injection time, but only for `source: url`-derived
+  recipes — hand-written recipes must stay un-framed (not treated as untrusted).
+- Needs a `source` marker in recipe frontmatter to distinguish the two.
+- Closes the T08 residual recorded in `docs/threat-model.md`.
 
 ## MCP resources & prompts
 **Priority:** low

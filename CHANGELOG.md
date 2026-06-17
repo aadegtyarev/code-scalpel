@@ -5,6 +5,27 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.16.0] — 2026-06-17
+
+### Security
+- External tool/web output is now framed as untrusted before it reaches the
+  model. MCP tool results and web-search results are wrapped in a delimited
+  `⟦UNTRUSTED⟧` block tagged with their source, and the system prompt carries a
+  rule that content inside such a block is data — never instructions. Framing
+  only (no active pattern-stripping); the wrapper neutralizes any inner
+  delimiter so a payload can't break out, and the framing survives context
+  compression. Resolves the threat-model T08/T15 open questions (SC10);
+  residual: the `/learn --url` → recipe path is deferred to a source-aware
+  recipe-injection follow-up.
+
+### Changed
+- `code-scalpel --selfcheck` (hidden): imports and exercises the
+  bundle-sensitive runtime (mcp client, a pydantic_core model, the
+  jsonschema_specifications packaged data, and the TUI/manager chain), exiting
+  non-zero on any gap. The release build runs it after the binary build so a
+  broken PyInstaller `--collect-*` recipe fails CI instead of shipping — the
+  gap `--version` could not catch.
+
 ## [0.15.0] — 2026-06-17
 
 ### Changed
