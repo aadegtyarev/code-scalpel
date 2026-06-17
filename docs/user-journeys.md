@@ -204,7 +204,7 @@ tool endpoint) alongside the built-in tools.
 |---|---|---|---|
 | 1. | Writes `.code-scalpel/mcp.json` declaring one or more servers under the standard `mcpServers` key (a `command` entry runs a local subprocess; a `url` entry connects to a remote endpoint) | Copy a server block from another client's config and it works unchanged; the legacy `servers` key is still read for back-compat | A server entry has neither `command` nor `url` (or both) — it is reported as a per-server config error, not a crash |
 | 2. | Launches `code-scalpel` | On startup the declared servers connect in the background and a notice reports which connected and how many tools each loaded | A server's command isn't installed / a URL is unreachable — that server is reported failed with the reason; the others still load and the session is unaffected |
-| 3. | Gives a task in any mode | The agent uses the MCP tools transparently alongside native tools; a built-in tool name always wins over a same-named MCP tool | A tool hangs — the per-call timeout fires and the turn continues rather than deadlocking; a failed MCP call is reported to the model as a failed tool call, not silently swallowed |
+| 3. | Gives a task in any mode | The agent uses the MCP tools transparently alongside native tools; a built-in tool name always wins over a same-named MCP tool; output from an external tool enters the conversation framed as untrusted (data, not instructions — see the `## Behavioral contract` untrusted-content framing) | A tool hangs — the per-call timeout fires and the turn continues rather than deadlocking; a failed MCP call is reported to the model as a failed tool call, not silently swallowed |
 | 4. | Runs `/mcp` | A per-server status list (connected / failed-with-reason) and the tools each server exposes | A server dropped after startup — its status is shown; reconnection is manual via `/mcp reload` |
 | 5. | Edits `mcp.json`, then runs `/mcp reload` | The manager tears down and reconnects from the current config without restarting the TUI | A reload during an in-flight MCP call — the manager handles it without corrupting the call |
 
@@ -215,9 +215,10 @@ unclear; confusion about which transport a given entry uses.
 never from model output, and run outside the shell sandbox — see
 `docs/architecture.md` `## Security surface` (SC9) and
 `docs/threat-model.md`. Native tools always take precedence over MCP tools
-on a name collision; MCP tool output is treated as untrusted content. The
-config schema (`mcpServers`/legacy `servers`, stdio vs HTTP transport
-selection), tool namespacing, and the per-call timeout — see
+on a name collision; MCP tool output is treated as untrusted content,
+framed before it reaches the model (SC10). The config schema
+(`mcpServers`/legacy `servers`, stdio vs HTTP transport selection), tool
+namespacing, the per-call timeout, and the untrusted-content framing — see
 `docs/architecture.md` `## Behavioral contract`.
 
 ---
