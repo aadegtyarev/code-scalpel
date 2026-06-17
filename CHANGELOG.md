@@ -5,6 +5,22 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.16.1] — 2026-06-17
+
+### Fixed
+- MCP per-call timeout produced an inconsistent message and a CI failure on
+  Python 3.11: our wall-clock `asyncio.wait_for` and the SDK's
+  `read_timeout_seconds` were both set to the same value and raced, so the
+  timeout surfaced either our "tool call timed out" text or the SDK's
+  `McpError` text depending on the interpreter. The SDK timer is now a
+  backstop set above the wall-clock, so the wall-clock always wins and the
+  message is deterministic.
+
+### Docs
+- Install claims aligned with reality across `README`, `docs/product.md`, and
+  `docs/architecture.md`: GitHub Releases (`.deb` + standalone binary) is the
+  canonical channel; PyPI is marked planned/not-yet-published.
+
 ## [0.16.0] — 2026-06-17
 
 ### Security
