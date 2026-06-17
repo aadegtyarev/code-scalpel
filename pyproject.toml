@@ -24,6 +24,11 @@ dependencies = [
     "tree-sitter-python~=0.25",
     "html2text>=2024.2.26",
     "lmstudio>=1.5",
+    # MCP client SDK — runtime dep (the TUI starts MCP servers on launch).
+    # Capped <2: the 2.x line already broke the client API we depend on
+    # (streamablehttp_client rename, read_timeout_seconds retype,
+    # ClientSession streams made optional). See docs/stack-notes.md `### mcp`.
+    "mcp>=1.0,<2",
 ]
 
 [project.scripts]
@@ -37,7 +42,6 @@ dev = [
     "pytest-asyncio>=0.23",
     "pytest-cov>=5.0",
     "types-PyYAML",
-    "mcp>=1.0",
 ]
 # Inline rendering of ```mermaid``` blocks the model emits. Requires the
 # Mermaid CLI (`npm i -g @mermaid-js/mermaid-cli`) on PATH for the PNG

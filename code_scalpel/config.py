@@ -146,6 +146,11 @@ class AgentConfig(BaseModel):
     # Hard cap on each shell_exec call. Independent of trust level —
     # a hung command must not block the agent indefinitely.
     shell_exec_timeout: int = 30
+    # Hard cap (seconds) on each MCP tool call. An external MCP server can
+    # hang on a subprocess read or a network round-trip; this bounds the
+    # call so a stuck server returns a failed ToolResult to the model
+    # instead of freezing the turn. Threaded into McpManager at construction.
+    mcp_tool_timeout: int = 30
     # Filesystem sandbox for shell_exec. `auto` uses bwrap if installed,
     # falls back to bare subprocess otherwise. `on` requires bwrap (refuses
     # to run shell_exec without it). `off` disables sandboxing entirely.
