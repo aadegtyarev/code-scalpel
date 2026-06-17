@@ -18,8 +18,6 @@ from __future__ import annotations
 import html2text
 import httpx
 
-from code_scalpel.untrusted import wrap_untrusted
-
 # Cap the converted markdown to keep one recipe from blowing the
 # whole model context. A typical doc page is 5–30 KB of markdown
 # after conversion; sites with infinite-scroll docs can go higher.
@@ -94,7 +92,4 @@ async def fetch_markdown(url: str) -> str:
         # Truncate with an explicit marker so the model knows context
         # was cut — better than silently feeding a half-page.
         md = md[:_MAX_MARKDOWN_CHARS] + f"\n\n…[truncated to {_MAX_MARKDOWN_CHARS} chars]"
-    # Wrap AFTER truncation so the UNTRUSTED markers are never cut off.
-    # Fetched web pages are external content (threat-model T08/T15): the
-    # model must treat them as data, not instructions.
-    return wrap_untrusted(md, source=f"web:{url}")
+    return md

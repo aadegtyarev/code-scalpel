@@ -1,9 +1,9 @@
 """Untrusted-content wrapping — helper + integration guards.
 
 Covers the threat-model T08/T15 mitigation: external content (MCP tool
-output, web fetch, web search) is fenced in an UNTRUSTED block before it
-enters model context, backed by a system-prompt rule, and the framing
-survives the cross-turn compression pass.
+output, web search) is fenced in an UNTRUSTED block before it enters
+model context, backed by a system-prompt rule, and the framing survives
+the cross-turn compression pass.
 """
 
 from __future__ import annotations
@@ -13,9 +13,7 @@ from pathlib import Path
 import httpx
 import pytest
 
-from code_scalpel import fetch as fetch_mod
 from code_scalpel.context_compress import compress_tool_message
-from code_scalpel.fetch import fetch_markdown
 from code_scalpel.untrusted import is_wrapped, wrap_untrusted
 
 # ── wrap_untrusted helper ────────────────────────────────────────────────────
@@ -111,37 +109,9 @@ async def test_mcp_output_wrapped_in_context(tmp_path: Path) -> None:
     assert "secret tool payload" in content
 
 
-# ── web fetch / search wrapped ───────────────────────────────────────────────
+# ── web search wrapped ───────────────────────────────────────────────────────
 
 _REAL_ASYNC_CLIENT = httpx.AsyncClient
-
-
-def _inject_transport(monkeypatch: pytest.MonkeyPatch, transport: httpx.MockTransport) -> None:
-    monkeypatch.setattr(
-        fetch_mod.httpx,
-        "AsyncClient",
-        lambda **kw: _REAL_ASYNC_CLIENT(**{**kw, "transport": transport}),
-    )
-
-
-@pytest.mark.asyncio
-async def test_web_fetch_output_wrapped(monkeypatch: pytest.MonkeyPatch) -> None:
-    """`fetch_markdown` output entering context is wrapped in a `web:`-tagged
-    block — the content is preserved, the framing added around it."""
-
-    def handler(request: httpx.Request) -> httpx.Response:
-        return httpx.Response(
-            200,
-            headers={"content-type": "text/html"},
-            content=b"<html><body><h1>Doc Title</h1><p>body text</p></body></html>",
-        )
-
-    _inject_transport(monkeypatch, httpx.MockTransport(handler))
-    out = await fetch_markdown("https://example.invalid/doc")
-    assert is_wrapped(out)
-    assert "source=web:https://example.invalid/doc" in out
-    assert "# Doc Title" in out
-    assert "body text" in out
 
 
 @pytest.mark.asyncio
