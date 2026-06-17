@@ -5,6 +5,40 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.15.0] — 2026-06-17
+
+### Changed
+- MCP rewritten on the official `mcp` SDK (was a hand-rolled JSON-RPC client).
+  Correct handshake, interleaved notifications, typed results, and two
+  transports: stdio (local subprocess) and streamable-HTTP (remote). `mcp` is
+  now a runtime dependency, capped `>=1.0,<2`.
+- Config accepts the standard `mcpServers` key (Claude-Desktop-compatible);
+  the legacy `servers` key still works. Transport is chosen by `command` vs
+  `url`. `mcp.example.json` updated with stdio + HTTP examples.
+- Tool dispatch is clean: MCP tools are routed by namespaced name
+  (`server.tool`) before native dispatch; native tools always win on a name
+  collision. The previous `"error:"`-string sniffing is gone.
+
+### Added
+- `/mcp` (per-server status + tools) and `/mcp reload` (reconnect without
+  restarting the TUI). Startup notice reports loaded tool count and any
+  failed server with its reason.
+- Per-call tool timeout (`agent.mcp_tool_timeout`) and connect/handshake
+  timeout (`agent.mcp_connect_timeout`) so a slow or wedged server never
+  hangs a turn, startup, or quit.
+
+### Security
+- New trust-boundary coverage for MCP in the threat model (T13–T15) and a new
+  rule SC9 in the architecture: MCP servers are launched only from
+  user-authored config (never model-derived), tool calls are bounded by a
+  per-call timeout, and MCP tool output is treated as untrusted content.
+
+### Fixed
+- Robust config parsing: a malformed server entry (bad `env`/`headers`/`args`
+  type, both/neither transport fields) becomes a per-server error instead of
+  disabling all MCP. A broken project `mcp.json` no longer masks a valid
+  user-level config.
+
 ## [0.14.0] — 2026-06-17
 
 ### Added
