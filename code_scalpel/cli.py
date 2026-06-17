@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 from pathlib import Path
 from typing import Annotated
 
@@ -63,7 +64,15 @@ def _root(
     from code_scalpel.tui.app import ScalpelApp
 
     cwd = (path_opt or Path(".")).resolve()
-    config = load_config()
+    # Make the target directory the real working directory for the whole
+    # process. The TUI threads `cwd` explicitly everywhere it can, but
+    # some seams still read the process cwd (dotenv discovery, the JS
+    # skill's package-manager probe via Path.cwd(), any relative path a
+    # tool or MCP server resolves). chdir-ing once here keeps all of them
+    # consistent with `--path`, so launching scalpel from anywhere
+    # behaves as if it were started inside the target project.
+    os.chdir(cwd)
+    config = load_config(cwd)
     scalpel = ScalpelApp(config=config, cwd=cwd)
     scalpel.run()
     summary = getattr(scalpel, "_exit_summary", None)

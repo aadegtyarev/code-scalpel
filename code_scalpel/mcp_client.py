@@ -58,7 +58,8 @@ class McpServer:
         self._proc.stdin.write(line)
         await self._proc.stdin.drain()
         resp_line = await self._proc.stdout.readline()
-        return json.loads(resp_line.decode().strip())
+        resp: dict[str, Any] = json.loads(resp_line.decode().strip())
+        return resp
 
     async def start(self) -> None:
         env = os.environ.copy()
@@ -128,7 +129,8 @@ class McpManager:
         ]:
             if loc.exists():
                 try:
-                    return json.loads(loc.read_text())
+                    data: dict[str, Any] = json.loads(loc.read_text())
+                    return data
                 except (json.JSONDecodeError, OSError):
                     pass
         return {}
