@@ -28,6 +28,58 @@ def _version_callback(value: bool) -> None:
         raise typer.Exit()
 
 
+def _selfcheck_callback(value: bool) -> None:
+    """Exercise the bundle-sensitive runtime, then exit.
+
+    `--version` returns before the TUI / MCP imports load, so it does NOT
+    prove the PyInstaller binary bundled them. Plain imports aren't enough
+    either: PyInstaller's static graph already pulls the `mcp`/`pydantic`
+    *modules*, so an `import` succeeds even when the `--collect-*` recipe
+    drops the pieces that only load at runtime — `pydantic_core`'s compiled
+    extension and `jsonschema_specifications`' packaged JSON data. So each
+    check below *uses* the fragile piece (constructs a pydantic model,
+    resolves a packaged schema), not just imports it. The release build
+    runs `./dist/code-scalpel --selfcheck` and fails loudly if any
+    `--collect-*` flag is missing. Exit 0 = the bundle is complete."""
+    if not value:
+        return
+    checks: list[str] = []
+    try:
+        # 1. mcp client submodules (the `--collect-all mcp` surface).
+        import mcp.client.stdio  # noqa: F401
+        import mcp.client.streamable_http  # noqa: F401
+        from mcp import ClientSession  # noqa: F401
+
+        checks.append("mcp client")
+
+        # 2. pydantic_core compiled extension — construct, don't just import.
+        from mcp.types import CallToolResult, TextContent
+
+        CallToolResult(content=[TextContent(type="text", text="ok")], isError=False)
+        checks.append("pydantic_core")
+
+        # 3. jsonschema_specifications packaged data (`--collect-data`).
+        import jsonschema_specifications
+
+        resolved = jsonschema_specifications.REGISTRY.get_or_retrieve(
+            "https://json-schema.org/draft/2020-12/schema"
+        )
+        _ = resolved.value.contents  # forces the packaged JSON data to load
+        checks.append("jsonschema data")
+
+        # 4. The runtime entry chain (textual, tree-sitter, our manager).
+        import code_scalpel.mcp_client  # noqa: F401
+        import code_scalpel.tui.app  # noqa: F401
+
+        checks.append("tui+manager")
+    except Exception as e:  # noqa: BLE001 — a missing bundle piece fails the build
+        ok = ", ".join(checks) or "(none)"
+        typer.echo(f"selfcheck FAILED after [{ok}]: {e!r}", err=True)
+        raise typer.Exit(code=1) from e
+    typer.echo(f"selfcheck OK: {', '.join(checks)} (code-scalpel {__version__})")
+    raise typer.Exit()
+
+
 @app.callback()
 def _root(
     ctx: typer.Context,
@@ -50,6 +102,16 @@ def _root(
             callback=_version_callback,
             is_eager=True,
             help="Show version and exit.",
+        ),
+    ] = False,
+    selfcheck: Annotated[  # noqa: ARG001 — callback consumes the flag
+        bool,
+        typer.Option(
+            "--selfcheck",
+            callback=_selfcheck_callback,
+            is_eager=True,
+            hidden=True,
+            help="Import the runtime/MCP modules and exit (frozen-bundle smoke).",
         ),
     ] = False,
 ) -> None:

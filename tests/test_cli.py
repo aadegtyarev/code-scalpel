@@ -28,3 +28,16 @@ def test_version_string_is_resolved_not_placeholder() -> None:
     assert __version__ != "0.0.0+local", (
         "package metadata didn't resolve — did you forget `pip install -e .`?"
     )
+
+
+def test_selfcheck_flag_imports_and_exits() -> None:
+    """`--selfcheck` is the frozen-bundle smoke: it must import the
+    bundle-sensitive runtime chain (mcp + TUI) and exit 0 when they load.
+    Wiring regression guard — the release build relies on this exit code."""
+    runner = CliRunner()
+    result = runner.invoke(app, ["--selfcheck"])
+    assert result.exit_code == 0
+    assert "selfcheck OK" in result.stdout
+    # Exercises (not just imports) the fragile frozen pieces.
+    assert "jsonschema data" in result.stdout
+    assert "pydantic_core" in result.stdout
