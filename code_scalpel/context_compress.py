@@ -28,6 +28,8 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
+from code_scalpel.untrusted import UNTRUSTED_MARKER, is_wrapped
+
 if TYPE_CHECKING:
     from code_scalpel.llm.adapter import LLMAdapter
 
@@ -101,7 +103,11 @@ def compress_tool_message(
     resolved_hint = hint if hint is not None else _first_nonempty_line(content)
     if resolved_hint and len(resolved_hint) > _HINT_MAX_CHARS:
         resolved_hint = resolved_hint[: _HINT_MAX_CHARS - 1] + "…"
-    base = f"[compressed: {tool_name}({args_summary}) → {line_count} lines / {char_count} chars, see turn {turn}"
+    # If the original was an UNTRUSTED-wrapped external result, the marker
+    # must survive compression — otherwise a later turn sees only a plain
+    # `[compressed: …]` and silently re-trusts content that was untrusted.
+    flag = f" {UNTRUSTED_MARKER}" if is_wrapped(content) else ""
+    base = f"[compressed:{flag} {tool_name}({args_summary}) → {line_count} lines / {char_count} chars, see turn {turn}"
     if resolved_hint:
         return f"{base} | {resolved_hint}]"
     return f"{base}]"
